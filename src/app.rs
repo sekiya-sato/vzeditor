@@ -3778,27 +3778,8 @@ impl VzEditorApp {
         opacity: u8,
         text_opacity: u8,
         always_on_top: bool,
-        key_scheme: KeyScheme,
     ) -> Option<MenuAction> {
         let mut cmd = None;
-        let scheme_resp = ui
-            .add(
-                egui::Button::new(
-                    egui::RichText::new(match key_scheme {
-                        KeyScheme::Sakura => "サクラ",
-                        KeyScheme::Vz => "VZ",
-                    })
-                    .font(FontId::monospace(12.5))
-                    .strong()
-                    .color(TEXT_CYAN),
-                )
-                .fill(BG_TAB_INACTIVE)
-                .stroke(Stroke::new(1.0_f32, BORDER_BLUE)),
-            )
-            .on_hover_text("キー割り当ての切替（サクラ互換 / VZ互換）");
-        if scheme_resp.clicked() {
-            cmd = Some(MenuAction::ToggleKeyScheme);
-        }
         let top_resp = ui
             .add(
                 egui::Button::new(
@@ -4151,7 +4132,6 @@ impl VzEditorApp {
                                 self.bg_opacity,
                                 self.text_opacity,
                                 self.always_on_top,
-                                self.key_scheme,
                             ) {
                                 win_cmd = Some(cmd);
                             }
@@ -4272,7 +4252,6 @@ impl VzEditorApp {
                                 self.bg_opacity,
                                 self.text_opacity,
                                 self.always_on_top,
-                                self.key_scheme,
                             ) {
                                 win_cmd = Some(cmd);
                             }
