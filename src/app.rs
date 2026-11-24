@@ -3809,15 +3809,17 @@ impl VzEditorApp {
                 .fill(BG_TAB_INACTIVE)
                 .stroke(Stroke::new(1.0_f32, BORDER_BLUE)),
             )
-            .on_hover_text("背景の不透明度: クリックで薄く / 右クリックで濃く (Alt+↓ / Alt+↑ / Alt+0)");
-        if op_resp.clicked() {
+            .on_hover_text("背景の不透明度: クリックで薄く / 右クリック・Shift+クリックで濃く (Alt+↓ / Alt+↑ / Alt+0)");
+        // Shift+クリックは右クリックと同じく濃くする
+        let shift = ui.input(|i| i.modifiers.shift);
+        if op_resp.secondary_clicked() || (shift && op_resp.clicked()) {
+            cmd = Some(MenuAction::OpacityUp);
+        } else if op_resp.clicked() {
             cmd = Some(if opacity <= window_style::MIN_OPACITY {
                 MenuAction::OpacityReset
             } else {
                 MenuAction::OpacityDown
             });
-        } else if op_resp.secondary_clicked() {
-            cmd = Some(MenuAction::OpacityUp);
         }
         let text_resp = ui
             .add(
@@ -3834,16 +3836,16 @@ impl VzEditorApp {
                 .stroke(Stroke::new(1.0_f32, BORDER_BLUE)),
             )
             .on_hover_text(
-                "文字の不透明度: クリックで薄く / 右クリックで濃く (Alt+Shift+- / Alt+Shift++ / Alt+Shift+0)",
+                "文字の不透明度: クリックで薄く / 右クリック・Shift+クリックで濃く (Alt+Shift+- / Alt+Shift++ / Alt+Shift+0)",
             );
-        if text_resp.clicked() {
+        if text_resp.secondary_clicked() || (shift && text_resp.clicked()) {
+            cmd = Some(MenuAction::TextOpacityUp);
+        } else if text_resp.clicked() {
             cmd = Some(if text_opacity <= window_style::MIN_OPACITY {
                 MenuAction::TextOpacityReset
             } else {
                 MenuAction::TextOpacityDown
             });
-        } else if text_resp.secondary_clicked() {
-            cmd = Some(MenuAction::TextOpacityUp);
         }
         cmd
     }
