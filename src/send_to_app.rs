@@ -3,7 +3,8 @@
 //! どちらのアプリにも外部から入力欄へ文字を渡す API が無いため、次の手順で送る。
 //! 1. 修飾キー（Alt など）が離されるのを待つ（押したままだと Ctrl+V が Ctrl+Alt+V になる）
 //! 2. 対象アプリのウィンドウを探して前面にする
-//! 3. クリップボードに本文を入れて貼り付け（Ctrl+V / Cmd+V）、Enter で送信する
+//! 3. クリップボードに本文を入れて貼り付け（Ctrl+V / Cmd+V）、送信キーを押す
+//!    （Claude Code は Enter、Codex は Ctrl+Enter。macOS の Codex は Cmd+Enter）
 //! 4. 元のクリップボードを戻し、vz を前面に戻す
 //!
 //! アプリ内のフォーカスが入力欄にあることが前提（Electron は前面化時に直前のフォーカスへ戻る）。
@@ -27,6 +28,11 @@ impl SendTarget {
             SendTarget::ClaudeCode => "Claude Code",
             SendTarget::Codex => "Codex",
         }
+    }
+
+    /// 送信に修飾キーが要るか。Claude Code は Enter、Codex は Ctrl+Enter（macOS は Cmd+Enter）で送信する。
+    pub fn submit_needs_modifier(self) -> bool {
+        matches!(self, SendTarget::Codex)
     }
 
     /// Windows で対象ウィンドウを持つ実行ファイルか（ファイル名と配置先で判定）。
@@ -258,7 +264,17 @@ mod platform {
         sleep_ms(400);
         let ok_enter = ok_paste
             && unsafe { GetForegroundWindow() } == hwnd
-            && send_keys(&[key_input(VK_RETURN, false), key_input(VK_RETURN, true)]);
+            && if target.submit_needs_modifier() {
+                // Codex: Ctrl+Enter
+                send_keys(&[
+                    key_input(VK_CONTROL, false),
+                    key_input(VK_RETURN, false),
+                    key_input(VK_RETURN, true),
+                    key_input(VK_CONTROL, true),
+                ])
+            } else {
+                send_keys(&[key_input(VK_RETURN, false), key_input(VK_RETURN, true)])
+            };
         sleep_ms(300);
 
         restore(&mut clipboard);
@@ -317,14 +333,19 @@ mod platform {
             .set_text(text.to_string())
             .map_err(|e| format!("クリップボードに書き込めません: {e}"))?;
 
-        // 貼り付けと Enter には「アクセシビリティ」の許可が必要
+        // 貼り付けと Enter には「アクセシビリティ」の許可が必要。Codex は Cmd+Enter で送信する
+        let submit = if target.submit_needs_modifier() {
+            "key code 36 using command down"
+        } else {
+            "key code 36"
+        };
         let script = format!(
             "tell application \"{app}\" to activate\n\
              delay 0.3\n\
              tell application \"System Events\"\n\
              keystroke \"v\" using command down\n\
              delay 0.4\n\
-             key code 36\n\
+             {submit}\n\
              end tell"
         );
         let result = osascript(&script);
@@ -409,7 +430,12 @@ mod platform {
         sleep_ms(250);
         run("xdotool", &["key", "--clearmodifiers", "ctrl+v"])?;
         sleep_ms(400);
-        run("xdotool", &["key", "--clearmodifiers", "Return"])?;
+        let submit = if target.submit_needs_modifier() {
+            "ctrl+Return" // Codex
+        } else {
+            "Return"
+        };
+        run("xdotool", &["key", "--clearmodifiers", submit])?;
         sleep_ms(300);
         if let Some(old) = saved {
             let _ = set_clipboard(&old);
@@ -436,6 +462,9 @@ mod tests {
         assert!(!SendTarget::Codex.matches_exe_path(claude));
         // 同名の ChatGPT デスクトップアプリには送らない
         assert!(!SendTarget::Codex.matches_exe_path(chatgpt));
+        // 送信キー: Claude Code は Enter、Codex は Ctrl+Enter
+        assert!(!SendTarget::ClaudeCode.submit_needs_modifier());
+        assert!(SendTarget::Codex.submit_needs_modifier());
     }
 
     #[test]
