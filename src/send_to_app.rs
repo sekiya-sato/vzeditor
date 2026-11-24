@@ -1,4 +1,5 @@
 //! 編集中のテキストを Claude Code / Codex のデスクトップアプリへ送る（Alt+C → C / X）。
+//! GitHub Desktop には、表示中（カレント）のリポジトリの Push を指示する（Alt+C → P。Ctrl+P / Cmd+P を押す）。
 //!
 //! どちらのアプリにも外部から入力欄へ文字を渡す API が無いため、次の手順で送る。
 //! 1. 修飾キー（Alt など）が離されるのを待つ（押したままだと Ctrl+V が Ctrl+Alt+V になる）
@@ -20,6 +21,8 @@ pub enum SendTarget {
     ClaudeCode,
     /// Codex デスクトップアプリ
     Codex,
+    /// GitHub Desktop（本文は送らず、カレントリポジトリを Push する）
+    GitHubDesktop,
 }
 
 impl SendTarget {
@@ -27,7 +30,13 @@ impl SendTarget {
         match self {
             SendTarget::ClaudeCode => "Claude Code",
             SendTarget::Codex => "Codex",
+            SendTarget::GitHubDesktop => "GitHub Desktop",
         }
+    }
+
+    /// 本文を貼り付けて送る相手か（GitHub Desktop は Push のキーを押すだけ）。
+    pub fn sends_text(self) -> bool {
+        !matches!(self, SendTarget::GitHubDesktop)
     }
 
     /// 送信に修飾キーが要るか。Claude Code は Enter、Codex は Ctrl+Enter（macOS は Cmd+Enter）で送信する。
@@ -47,6 +56,8 @@ impl SendTarget {
             SendTarget::Codex => {
                 file == "codex.exe" || (file == "chatgpt.exe" && lower.contains("openai.codex"))
             }
+            // %LOCALAPPDATA%\GitHubDesktop\app-x.y.z\GitHubDesktop.exe
+            SendTarget::GitHubDesktop => file == "githubdesktop.exe",
         }
     }
 }
@@ -90,7 +101,7 @@ mod platform {
     };
     use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
         GetAsyncKeyState, SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP,
-        VIRTUAL_KEY, VK_CONTROL, VK_LWIN, VK_MENU, VK_RETURN, VK_RWIN, VK_SHIFT, VK_V,
+        VIRTUAL_KEY, VK_CONTROL, VK_LWIN, VK_MENU, VK_P, VK_RETURN, VK_RWIN, VK_SHIFT, VK_V,
     };
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         BringWindowToTop, EnumWindows, GetForegroundWindow, GetWindow, GetWindowTextLengthW,
@@ -222,7 +233,42 @@ mod platform {
         false
     }
 
+    /// GitHub Desktop を前面にして Ctrl+P（Repository → Push）を押す。
+    fn push(target: SendTarget) -> SendResult {
+        let label = target.label();
+        let vz_hwnd = unsafe { GetForegroundWindow() };
+        if !wait_modifiers_released() {
+            return Err("Alt などのキーが押されたままのため中止しました".to_string());
+        }
+        let Some(hwnd) = find_window(target) else {
+            return Err(format!("{label} が見つかりません（起動しているか確認してください）"));
+        };
+        if !activate(hwnd) {
+            return Err(format!("{label} のウィンドウを前面にできませんでした"));
+        }
+        sleep_ms(250);
+        let ok = unsafe { GetForegroundWindow() } == hwnd
+            && send_keys(&[
+                key_input(VK_CONTROL, false),
+                key_input(VK_P, false),
+                key_input(VK_P, true),
+                key_input(VK_CONTROL, true),
+            ]);
+        sleep_ms(300);
+        if !vz_hwnd.is_null() {
+            activate(vz_hwnd);
+        }
+        if ok {
+            Ok(format!("{label} へ Push を指示しました（結果は {label} で確認してください）"))
+        } else {
+            Err(format!("{label} へ Push のキーを送れませんでした"))
+        }
+    }
+
     pub fn send(target: SendTarget, text: &str) -> SendResult {
+        if !target.sends_text() {
+            return push(target);
+        }
         let label = target.label();
         let vz_hwnd = unsafe { GetForegroundWindow() };
 
@@ -305,6 +351,7 @@ mod platform {
         match target {
             SendTarget::ClaudeCode => "Claude",
             SendTarget::Codex => "Codex",
+            SendTarget::GitHubDesktop => "GitHub Desktop",
         }
     }
 
@@ -325,6 +372,26 @@ mod platform {
         let app = app_name(target);
         // Option キーなどが離されるのを少し待つ
         sleep_ms(300);
+
+        if !target.sends_text() {
+            // GitHub Desktop: Cmd+P（Repository → Push）
+            let result = osascript(&format!(
+                "tell application \"{app}\" to activate\n\
+                 delay 0.3\n\
+                 tell application \"System Events\" to keystroke \"p\" using command down"
+            ));
+            sleep_ms(300);
+            let pid = std::process::id();
+            let _ = osascript(&format!(
+                "tell application \"System Events\" to set frontmost of (first process whose unix id is {pid}) to true"
+            ));
+            return match result {
+                Ok(()) => Ok(format!("{label} へ Push を指示しました（結果は {label} で確認してください）")),
+                Err(e) => Err(format!(
+                    "{label} へ Push を指示できませんでした（アプリの起動と、アクセシビリティ許可を確認してください）: {e}"
+                )),
+            };
+        }
 
         let mut clipboard =
             arboard::Clipboard::new().map_err(|e| format!("クリップボードを開けません: {e}"))?;
@@ -378,6 +445,7 @@ mod platform {
         match target {
             SendTarget::ClaudeCode => "Claude",
             SendTarget::Codex => "Codex",
+            SendTarget::GitHubDesktop => "GitHub Desktop",
         }
     }
 
@@ -424,6 +492,18 @@ mod platform {
         .and_then(|s| s.lines().next().map(str::to_string))
         .ok_or_else(|| format!("{label} のウィンドウが見つかりません（xdotool が必要です）"))?;
 
+        if !target.sends_text() {
+            // GitHub Desktop: Ctrl+P（Repository → Push）
+            run("xdotool", &["windowactivate", "--sync", &win])?;
+            sleep_ms(250);
+            run("xdotool", &["key", "--clearmodifiers", "ctrl+p"])?;
+            sleep_ms(300);
+            if let Some(me) = me {
+                let _ = run("xdotool", &["windowactivate", &me]);
+            }
+            return Ok(format!("{label} へ Push を指示しました（結果は {label} で確認してください）"));
+        }
+
         let saved = run("xclip", &["-o", "-selection", "clipboard"]).ok();
         set_clipboard(text)?;
         run("xdotool", &["windowactivate", "--sync", &win])?;
@@ -462,6 +542,12 @@ mod tests {
         assert!(!SendTarget::Codex.matches_exe_path(claude));
         // 同名の ChatGPT デスクトップアプリには送らない
         assert!(!SendTarget::Codex.matches_exe_path(chatgpt));
+        let ghd = r"C:\Users\u\AppData\Local\GitHubDesktop\app-3.5.4\GitHubDesktop.exe";
+        assert!(SendTarget::GitHubDesktop.matches_exe_path(ghd));
+        assert!(!SendTarget::GitHubDesktop.matches_exe_path(claude));
+        assert!(!SendTarget::ClaudeCode.matches_exe_path(ghd));
+        assert!(!SendTarget::GitHubDesktop.sends_text());
+        assert!(SendTarget::ClaudeCode.sends_text() && SendTarget::Codex.sends_text());
         // 送信キー: Claude Code は Enter、Codex は Ctrl+Enter
         assert!(!SendTarget::ClaudeCode.submit_needs_modifier());
         assert!(SendTarget::Codex.submit_needs_modifier());

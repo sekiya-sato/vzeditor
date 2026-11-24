@@ -225,6 +225,7 @@ enum MenuAction {
     TextOpacityReset,
     SendToClaudeCode,
     SendToCodex,
+    PushGitHubDesktop,
     ToggleKeyScheme,
     SelectAll,
     // About
@@ -713,6 +714,13 @@ impl VzEditorApp {
             self.status_message = "送信中です。完了までお待ちください".to_string();
             return;
         }
+        if !target.sends_text() {
+            // GitHub Desktop: 本文は送らず、カレントリポジトリの Push（Ctrl+P）を押す
+            self.status_message =
+                format!("{} へ Push を指示中... (Alt などのキーを離してください)", target.label());
+            self.pending_send = Some(spawn_send(target, String::new()));
+            return;
+        }
         let Some(text) = prepare_text(&self.cur_buf().lines) else {
             self.status_message = format!("{} へ送る文字がありません", target.label());
             return;
@@ -765,18 +773,14 @@ impl VzEditorApp {
                 if prefix {
                     if !*pressed {
                         // 2打目の離し
-                        if matches!(key, Key::C | Key::X) {
+                        if matches!(key, Key::C | Key::X | Key::P) {
                             consumed = true;
                             return false;
                         }
                         return true;
                     }
                     if action.is_none() {
-                        action = Some(match (key, ctrl) {
-                            (Key::C, false) => Some(SendTarget::ClaudeCode),
-                            (Key::X, false) => Some(SendTarget::Codex),
-                            _ => None,
-                        });
+                        action = Some(send_target_for_key(*key, ctrl));
                         prefix = false;
                         consumed = true;
                         return false;
@@ -800,7 +804,8 @@ impl VzEditorApp {
         self.send_prefix = prefix;
         if started_prefix {
             self.status_message =
-                "Alt+C: 続けて C で Claude Code へ / X で Codex へ送信（他のキーで取り消し）".to_string();
+                "Alt+C: 続けて C で Claude Code へ / X で Codex へ送信、P で GitHub Desktop の Push（他のキーで取り消し）"
+                    .to_string();
         }
         match action {
             Some(Some(target)) => self.start_send(target),
@@ -2505,6 +2510,12 @@ impl VzEditorApp {
                     action: MenuAction::SendToCodex,
                     enabled: self.pending_send.is_none(),
                 },
+                MenuEntry::Item {
+                    label: "GitHub Desktop で Push",
+                    shortcut: "Alt+C → P",
+                    action: MenuAction::PushGitHubDesktop,
+                    enabled: self.pending_send.is_none(),
+                },
             ],
             TopMenu::About => vec![
                 MenuEntry::Item {
@@ -2605,6 +2616,7 @@ impl VzEditorApp {
             MenuAction::TextOpacityReset => self.set_text_opacity(window_style::MAX_OPACITY),
             MenuAction::SendToClaudeCode => self.start_send(SendTarget::ClaudeCode),
             MenuAction::SendToCodex => self.start_send(SendTarget::Codex),
+            MenuAction::PushGitHubDesktop => self.start_send(SendTarget::GitHubDesktop),
             MenuAction::ToggleKeyScheme => self.toggle_key_scheme(),
             MenuAction::ToggleWordWrap => self.toggle_word_wrap(),
             MenuAction::SelectAll => {
@@ -5685,6 +5697,7 @@ impl VzEditorApp {
                         ("Alt+W", "長い行の折り返し表示の切替"),
                         ("Alt+Shift+「+」「-」「0」", "文字の濃さ"),
                         ("Alt+C → C / Alt+C → X", "バッファ全体を Claude Code / Codex へ送信"),
+                        ("Alt+C → P", "GitHub Desktop のカレントリポジトリを Push"),
                         ("ツール→キー割り当て", "VZ 互換へ切替"),
                     ],
                     AppMode::Editor => &[
@@ -5705,6 +5718,7 @@ impl VzEditorApp {
                         ("Alt+W", "長い行の折り返し表示の切替"),
                         ("ファイルをドロップ", "複数ファイルをまとめてバッファで開く"),
                         ("Alt+C → C / Alt+C → X", "バッファ全体を Claude Code / Codex へ送信"),
+                        ("Alt+C → P", "GitHub Desktop のカレントリポジトリを Push"),
                         ("Alt+↑ / Alt+↓ / Alt+0", "背景を濃く / 薄く / 透過解除"),
                         ("Alt+Shift+「+」「-」「0」", "文字を濃く / 薄く / 透過解除"),
                     ],
@@ -6475,6 +6489,16 @@ impl VzEditorApp {
 }
 
 /// ウィンドウスタイル用ショートカットの判定。該当しなければ None。
+/// Alt+C の2打目 → 送信先。C: Claude Code、X: Codex、P: GitHub Desktop の Push。Ctrl 付きは取り消し。
+fn send_target_for_key(key: Key, ctrl: bool) -> Option<SendTarget> {
+    match (key, ctrl) {
+        (Key::C, false) => Some(SendTarget::ClaudeCode),
+        (Key::X, false) => Some(SendTarget::Codex),
+        (Key::P, false) => Some(SendTarget::GitHubDesktop),
+        _ => None,
+    }
+}
+
 fn window_style_key_action(
     key: Key,
     physical_key: Option<Key>,
@@ -7422,6 +7446,15 @@ mod tests {
         assert!(!app.send_prefix);
         assert!(app.pending_send.is_none());
         assert!(app.status_message.contains("Codex へ送る文字がありません"));
+
+        // 2打目の割り当て（P は GitHub Desktop の Push。実際の送信はテストで起こさない）
+        assert_eq!(send_target_for_key(Key::C, false), Some(SendTarget::ClaudeCode));
+        assert_eq!(send_target_for_key(Key::X, false), Some(SendTarget::Codex));
+        assert_eq!(send_target_for_key(Key::P, false), Some(SendTarget::GitHubDesktop));
+        assert_eq!(send_target_for_key(Key::P, true), None);
+        assert_eq!(send_target_for_key(Key::D, false), None);
+        // Alt+P（VZ 互換の Markdown 切替）は Alt+C の後でなければ奪わない
+        assert_eq!(window_style_key_action(Key::P, Some(Key::P), egui::Modifiers { alt: true, ..Default::default() }), None);
     }
 
     fn mods(ctrl: bool, shift: bool) -> egui::Modifiers {

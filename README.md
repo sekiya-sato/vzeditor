@@ -49,6 +49,7 @@ git merge upstream/main
 | `Alt+Shift+「+」` / `Alt+Shift+「-」` | 文字を濃く / 薄く（20〜100%、10% 刻み） |
 | `Alt+Shift+0` | 文字透過を解除（100%） |
 | `Alt+C` → `C` / `Alt+C` → `X` | バッファ全体を Claude Code / Codex のデスクトップアプリへ送信 |
+| `Alt+C` → `P` | GitHub Desktop で表示中のリポジトリを Push（GitHub Desktop を前面にして Ctrl+P を押す） |
 
 ステータスバー右端の `TOP`・`透過 n%`・`文字 n%`、メニュー「ツール」からも操作できます。背景と文字の濃さは別々に変えられます。設定は次回起動時に復元されます。
 
