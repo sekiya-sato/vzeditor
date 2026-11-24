@@ -191,6 +191,9 @@ enum MenuAction {
     OpacityUp,
     OpacityDown,
     OpacityReset,
+    TextOpacityUp,
+    TextOpacityDown,
+    TextOpacityReset,
     // About
     ShowHelp,
     ShowAbout,
@@ -321,6 +324,7 @@ pub struct VzEditorApp {
 
     // Window style: background-only transparency & always-on-top
     bg_opacity: u8,
+    text_opacity: u8,
     always_on_top: bool,
     /// false in tests so that user settings are never overwritten.
     persist_settings: bool,
@@ -373,6 +377,7 @@ impl VzEditorApp {
 
         let font_size = settings.font_size.clamp(MIN_FONT_SIZE, MAX_FONT_SIZE);
         let bg_opacity = window_style::set_opacity_percent(settings.opacity);
+        let text_opacity = window_style::set_text_opacity_percent(settings.text_opacity);
 
         let mut app = Self {
             mode: AppMode::Editor,
@@ -398,6 +403,7 @@ impl VzEditorApp {
             inline_prompt: None,
             filer_modal: None,
             bg_opacity,
+            text_opacity,
             always_on_top: settings.always_on_top,
             persist_settings: true,
         };
@@ -460,6 +466,7 @@ impl VzEditorApp {
         }
         let settings = Settings {
             opacity: self.bg_opacity,
+            text_opacity: self.text_opacity,
             always_on_top: self.always_on_top,
             font_size: self.font_size,
         };
@@ -491,6 +498,30 @@ impl VzEditorApp {
         self.set_bg_opacity(next);
     }
 
+    fn set_text_opacity(&mut self, percent: u8) {
+        let p = window_style::clamp_opacity(percent);
+        if self.persist_settings {
+            window_style::set_text_opacity_percent(p);
+        }
+        if p == self.text_opacity {
+            self.status_message = format!(
+                "文字の不透明度は {p}% です ({}〜{}%)",
+                window_style::MIN_OPACITY,
+                window_style::MAX_OPACITY
+            );
+            return;
+        }
+        self.text_opacity = p;
+        self.status_message =
+            format!("文字の不透明度: {p}% (Alt+Shift++ 濃く / Alt+Shift+- 薄く / Alt+Shift+0 戻す)");
+        self.save_settings();
+    }
+
+    fn change_text_opacity(&mut self, delta: i16) {
+        let next = (self.text_opacity as i16 + delta).clamp(0, 100) as u8;
+        self.set_text_opacity(next);
+    }
+
     fn toggle_always_on_top(&mut self, ctx: &egui::Context) {
         self.always_on_top = !self.always_on_top;
         let level = if self.always_on_top {
@@ -507,24 +538,29 @@ impl VzEditorApp {
         self.save_settings();
     }
 
-    /// Alt+T / Alt+↑ / Alt+↓ / Alt+0 をモードに関係なく処理し、処理したキーは入力から取り除く。
+    /// ウィンドウスタイルのキーをモードに関係なく処理し、処理したキーは入力から取り除く。
+    ///
+    /// - Alt+T / Alt+↑ / Alt+↓ / Alt+0: 最前面固定・背景の不透明度
+    /// - Alt+Shift+「+」 / Alt+Shift+「-」 / Alt+Shift+0: 文字の不透明度
+    ///
+    /// 「+」「-」は配列差（US: `=+` / JIS: `;+`、Shift+「-」が `=` になる JIS）を吸収するため
+    /// 物理キーを優先して判定する。既存の Ctrl+± / Ctrl+0（フォントサイズ）は Alt 併用時に
+    /// 反応しないため重複しない。
     fn handle_window_style_keys(&mut self, ctx: &egui::Context) {
-        let mut commands: Vec<Key> = Vec::new();
+        let mut commands: Vec<MenuAction> = Vec::new();
         ctx.input_mut(|i| {
             i.events.retain(|ev| {
                 if let Event::Key {
                     key,
+                    physical_key,
                     pressed,
                     modifiers,
                     ..
                 } = ev
                 {
-                    let only_alt = modifiers.alt && !modifiers.ctrl && !modifiers.command;
-                    if only_alt
-                        && matches!(key, Key::T | Key::ArrowUp | Key::ArrowDown | Key::Num0)
-                    {
+                    if let Some(action) = window_style_key_action(*key, *physical_key, *modifiers) {
                         if *pressed {
-                            commands.push(*key);
+                            commands.push(action);
                         }
                         return false;
                     }
@@ -536,14 +572,8 @@ impl VzEditorApp {
                 i.events.retain(|ev| !matches!(ev, Event::Text(_)));
             }
         });
-        for key in commands {
-            match key {
-                Key::T => self.toggle_always_on_top(ctx),
-                Key::ArrowUp => self.change_bg_opacity(window_style::OPACITY_STEP as i16),
-                Key::ArrowDown => self.change_bg_opacity(-(window_style::OPACITY_STEP as i16)),
-                Key::Num0 => self.set_bg_opacity(window_style::MAX_OPACITY),
-                _ => {}
-            }
+        for action in commands {
+            self.execute_menu_action(ctx, action);
         }
     }
 
@@ -1225,6 +1255,25 @@ impl VzEditorApp {
                     action: MenuAction::OpacityReset,
                     enabled: self.bg_opacity < window_style::MAX_OPACITY,
                 },
+                MenuEntry::Separator,
+                MenuEntry::Item {
+                    label: "文字を濃くする (+10%)",
+                    shortcut: "Alt+Shift++",
+                    action: MenuAction::TextOpacityUp,
+                    enabled: self.text_opacity < window_style::MAX_OPACITY,
+                },
+                MenuEntry::Item {
+                    label: "文字を透過する (-10%)",
+                    shortcut: "Alt+Shift+-",
+                    action: MenuAction::TextOpacityDown,
+                    enabled: self.text_opacity > window_style::MIN_OPACITY,
+                },
+                MenuEntry::Item {
+                    label: "文字透過を解除 (100%)",
+                    shortcut: "Alt+Shift+0",
+                    action: MenuAction::TextOpacityReset,
+                    enabled: self.text_opacity < window_style::MAX_OPACITY,
+                },
             ],
             TopMenu::About => vec![
                 MenuEntry::Item {
@@ -1316,6 +1365,13 @@ impl VzEditorApp {
                 self.change_bg_opacity(-(window_style::OPACITY_STEP as i16))
             }
             MenuAction::OpacityReset => self.set_bg_opacity(window_style::MAX_OPACITY),
+            MenuAction::TextOpacityUp => {
+                self.change_text_opacity(window_style::OPACITY_STEP as i16)
+            }
+            MenuAction::TextOpacityDown => {
+                self.change_text_opacity(-(window_style::OPACITY_STEP as i16))
+            }
+            MenuAction::TextOpacityReset => self.set_text_opacity(window_style::MAX_OPACITY),
             MenuAction::ShowHelp => {
                 self.show_help = !self.show_help;
             }
@@ -2197,6 +2253,7 @@ impl VzEditorApp {
                     .stroke(Stroke::new(1.0_f32, GUTTER_SEP)),
             )
             .show(ctx, |ui| {
+                ui.multiply_opacity(window_style::text_alpha());
                 bar_rect = ui.max_rect();
                 ui.horizontal_centered(|ui| {
                     ui.spacing_mut().item_spacing.x = 2.0;
@@ -2400,6 +2457,7 @@ impl VzEditorApp {
     fn paint_window_style_controls(
         ui: &mut egui::Ui,
         opacity: u8,
+        text_opacity: u8,
         always_on_top: bool,
     ) -> Option<MenuAction> {
         let mut cmd = None;
@@ -2441,6 +2499,32 @@ impl VzEditorApp {
             });
         } else if op_resp.secondary_clicked() {
             cmd = Some(MenuAction::OpacityUp);
+        }
+        let text_resp = ui
+            .add(
+                egui::Button::new(
+                    egui::RichText::new(format!("文字{:>3}%", text_opacity))
+                        .font(FontId::monospace(12.5))
+                        .color(if text_opacity < window_style::MAX_OPACITY {
+                            TEXT_AMBER
+                        } else {
+                            TEXT_DIM_CYAN
+                        }),
+                )
+                .fill(BG_TAB_INACTIVE)
+                .stroke(Stroke::new(1.0_f32, BORDER_BLUE)),
+            )
+            .on_hover_text(
+                "文字の不透明度: クリックで薄く / 右クリックで濃く (Alt+Shift+- / Alt+Shift++ / Alt+Shift+0)",
+            );
+        if text_resp.clicked() {
+            cmd = Some(if text_opacity <= window_style::MIN_OPACITY {
+                MenuAction::TextOpacityReset
+            } else {
+                MenuAction::TextOpacityDown
+            });
+        } else if text_resp.secondary_clicked() {
+            cmd = Some(MenuAction::TextOpacityUp);
         }
         cmd
     }
@@ -2535,6 +2619,7 @@ impl VzEditorApp {
                     .stroke(Stroke::new(1.0_f32, BORDER_BLUE)),
             )
             .show(ctx, |ui| {
+                ui.multiply_opacity(window_style::text_alpha());
                 ui.horizontal_centered(|ui| match self.mode {
                     AppMode::Editor => {
                         // LZ badge
@@ -2726,6 +2811,7 @@ impl VzEditorApp {
                             if let Some(cmd) = Self::paint_window_style_controls(
                                 ui,
                                 self.bg_opacity,
+                                self.text_opacity,
                                 self.always_on_top,
                             ) {
                                 win_cmd = Some(cmd);
@@ -2845,6 +2931,7 @@ impl VzEditorApp {
                             if let Some(cmd) = Self::paint_window_style_controls(
                                 ui,
                                 self.bg_opacity,
+                                self.text_opacity,
                                 self.always_on_top,
                             ) {
                                 win_cmd = Some(cmd);
@@ -2888,6 +2975,7 @@ impl VzEditorApp {
                     .stroke(Stroke::new(1.0_f32, GUTTER_SEP)),
             )
             .show(ctx, |ui| {
+                ui.multiply_opacity(window_style::text_alpha());
                 ui.horizontal_centered(|ui| {
                     ui.label(
                         egui::RichText::new("^W バッファ:")
@@ -2997,6 +3085,7 @@ impl VzEditorApp {
                     .stroke(Stroke::new(1.0_f32, BORDER_BLUE)),
             )
             .show(ctx, |ui| {
+                ui.multiply_opacity(window_style::text_alpha());
                 let avail_w = ui.available_width();
                 let block_gap = 18.0_f32;
                 let key_gap = 4.0_f32;
@@ -3066,6 +3155,7 @@ impl VzEditorApp {
                     .stroke(Stroke::new(1.0_f32, BORDER_BLUE)),
             )
             .show(ctx, |ui| {
+                ui.multiply_opacity(window_style::text_alpha());
                 let avail_w = ui.available_width();
                 let block_gap = 18.0_f32;
                 let key_gap = 4.0_f32;
@@ -3175,6 +3265,7 @@ impl VzEditorApp {
         egui::CentralPanel::default()
             .frame(egui::Frame::NONE)
             .show(ctx, |ui| {
+                ui.multiply_opacity(window_style::text_alpha());
                 let slot = &mut self.buffers[active_idx];
                 let apply_offset = slot.md_scroll_dirty;
                 let out = render_markdown_view(
@@ -3202,6 +3293,7 @@ impl VzEditorApp {
         egui::CentralPanel::default()
             .frame(egui::Frame::NONE)
             .show(ctx, |ui| {
+                ui.multiply_opacity(window_style::text_alpha());
                 let avail_rect = ui.available_rect_before_wrap();
                 let response = ui.allocate_rect(avail_rect, Sense::click_and_drag());
 
@@ -3360,13 +3452,13 @@ impl VzEditorApp {
 
                 // Paint background & gutter
                 let painter = ui.painter_at(avail_rect);
-                painter.rect_filled(avail_rect, CornerRadius::ZERO, bg(BG_NAVY));
+                window_style::bg_painter(&painter).rect_filled(avail_rect, CornerRadius::ZERO, bg(BG_NAVY));
 
                 let gutter_rect = Rect::from_min_max(
                     avail_rect.min,
                     Pos2::new(avail_rect.min.x + gutter_w, avail_rect.max.y),
                 );
-                painter.rect_filled(gutter_rect, CornerRadius::ZERO, bg(BG_GUTTER));
+                window_style::bg_painter(&painter).rect_filled(gutter_rect, CornerRadius::ZERO, bg(BG_GUTTER));
                 painter.line_segment(
                     [
                         Pos2::new(gutter_rect.max.x, avail_rect.min.y),
@@ -3395,7 +3487,7 @@ impl VzEditorApp {
                             Pos2::new(editor_rect.min.x, y),
                             Vec2::new(editor_rect.width(), self.line_height),
                         );
-                        editor_painter.rect_filled(
+                        window_style::bg_painter(&editor_painter).rect_filled(
                             line_bg_rect,
                             CornerRadius::ZERO,
                             bg(BG_ACTIVE_LINE),
@@ -3566,7 +3658,7 @@ impl VzEditorApp {
                     Pos2::new(avail_rect.max.x - scrollbar_w, avail_rect.min.y),
                     avail_rect.max,
                 );
-                painter.rect_filled(sb_rect, CornerRadius::ZERO, bg(BG_GUTTER));
+                window_style::bg_painter(&painter).rect_filled(sb_rect, CornerRadius::ZERO, bg(BG_GUTTER));
                 if max_scroll_y > 0.0 {
                     let ratio = (viewport_h / total_content_h).clamp(0.06, 1.0);
                     let thumb_h = (sb_rect.height() * ratio).max(24.0);
@@ -3612,6 +3704,7 @@ impl VzEditorApp {
                     .inner_margin(egui::Margin::same(6)),
             )
             .show(ctx, |ui| {
+                ui.multiply_opacity(window_style::text_alpha());
                 let avail = ui.available_rect_before_wrap();
                 let gap = 6.0_f32;
                 let half_w = ((avail.width() - gap) * 0.5).max(200.0);
@@ -3993,7 +4086,7 @@ impl VzEditorApp {
             Pos2::new(rect.max.x - sb_w - 1.0, col_rect.max.y + 1.0),
             Pos2::new(rect.max.x - 1.0, rect.max.y - 1.0),
         );
-        painter.rect_filled(sb_rect, CornerRadius::ZERO, bg(BG_GUTTER));
+        window_style::bg_painter(&painter).rect_filled(sb_rect, CornerRadius::ZERO, bg(BG_GUTTER));
         if max_scroll > 0.0 {
             let ratio = (list_rect.height() / total_h).clamp(0.08, 1.0);
             let thumb_h = (sb_rect.height() * ratio).max(20.0);
@@ -4054,6 +4147,7 @@ impl VzEditorApp {
                         ("ESC / Ctrl+K+Q / F9", "2画面ファイラーへ切替"),
                         ("Alt+T", "最前面固定の切替"),
                         ("Alt+↑ / Alt+↓ / Alt+0", "背景を濃く / 薄く / 透過解除"),
+                        ("Alt+Shift+「+」「-」「0」", "文字を濃く / 薄く / 透過解除"),
                     ],
                     AppMode::Filer => &[
                         ("Ctrl+E / X (↑ / ↓)", "ファイルカーソル移動"),
@@ -4068,6 +4162,7 @@ impl VzEditorApp {
                         ("ESC / F9", "エディタ画面へ戻る"),
                         ("F10", "アプリケーション終了"),
                         ("Alt+T / Alt+↑ / Alt+↓", "最前面固定 / 背景の濃さ変更"),
+                        ("Alt+Shift+「+」「-」「0」", "文字の濃さ変更 / 透過解除"),
                     ],
                 };
                 egui::Grid::new("vz_help_grid")
@@ -4761,6 +4856,38 @@ impl VzEditorApp {
 }
 
 /// Attempt to read UTF-8 text from the Linux system clipboard (Wayland `wl-paste`, X11 `xclip`/`xsel`).
+/// ウィンドウスタイル用ショートカットの判定。該当しなければ None。
+fn window_style_key_action(
+    key: Key,
+    physical_key: Option<Key>,
+    modifiers: egui::Modifiers,
+) -> Option<MenuAction> {
+    if !modifiers.alt || modifiers.ctrl || modifiers.command {
+        return None;
+    }
+    if modifiers.shift {
+        // 文字の不透明度: 物理キーで判定（無ければ論理キー）
+        let phys = physical_key.unwrap_or(key);
+        if phys == Key::Minus {
+            return Some(MenuAction::TextOpacityDown);
+        }
+        if matches!(phys, Key::Plus | Key::Equals | Key::Semicolon) || key == Key::Plus {
+            return Some(MenuAction::TextOpacityUp);
+        }
+        if phys == Key::Num0 {
+            return Some(MenuAction::TextOpacityReset);
+        }
+        return None;
+    }
+    match key {
+        Key::T => Some(MenuAction::ToggleAlwaysOnTop),
+        Key::ArrowUp => Some(MenuAction::OpacityUp),
+        Key::ArrowDown => Some(MenuAction::OpacityDown),
+        Key::Num0 => Some(MenuAction::OpacityReset),
+        _ => None,
+    }
+}
+
 #[cfg(any(windows, target_os = "macos"))]
 fn read_system_clipboard() -> Option<String> {
     arboard::Clipboard::new().ok()?.get_text().ok()
@@ -4847,6 +4974,7 @@ impl eframe::App for VzEditorApp {
 
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         window_style::set_opacity_percent(self.bg_opacity);
+        window_style::set_text_opacity_percent(self.text_opacity);
         self.poll_dialog();
         self.handle_events(ctx);
 
@@ -4912,6 +5040,7 @@ mod tests {
             inline_prompt: None,
             filer_modal: None,
             bg_opacity: 100,
+            text_opacity: 100,
             always_on_top: false,
             persist_settings: false,
         }
@@ -5234,5 +5363,86 @@ mod tests {
         assert!(has(&app, "最前面に固定"));
         app.always_on_top = true;
         assert!(has(&app, "最前面固定を解除"));
+    }
+
+    #[test]
+    fn test_window_style_keys_do_not_overlap() {
+        let m = |alt: bool, shift: bool, ctrl: bool| egui::Modifiers {
+            alt,
+            shift,
+            ctrl,
+            command: ctrl,
+            ..Default::default()
+        };
+        let alt = m(true, false, false);
+        let alt_shift = m(true, true, false);
+        let ctrl = m(false, false, true);
+
+        // Alt: 背景・最前面
+        assert_eq!(
+            window_style_key_action(Key::T, Some(Key::T), alt),
+            Some(MenuAction::ToggleAlwaysOnTop)
+        );
+        assert_eq!(
+            window_style_key_action(Key::ArrowUp, None, alt),
+            Some(MenuAction::OpacityUp)
+        );
+        assert_eq!(
+            window_style_key_action(Key::Num0, Some(Key::Num0), alt),
+            Some(MenuAction::OpacityReset)
+        );
+        // Alt+P（Markdown 切替）と Alt+±は奪わない
+        assert_eq!(window_style_key_action(Key::P, Some(Key::P), alt), None);
+        assert_eq!(
+            window_style_key_action(Key::Minus, Some(Key::Minus), alt),
+            None
+        );
+
+        // Alt+Shift: 文字（US 配列 / JIS 配列）
+        assert_eq!(
+            window_style_key_action(Key::Plus, Some(Key::Equals), alt_shift),
+            Some(MenuAction::TextOpacityUp)
+        );
+        assert_eq!(
+            window_style_key_action(Key::Plus, Some(Key::Semicolon), alt_shift),
+            Some(MenuAction::TextOpacityUp)
+        );
+        assert_eq!(
+            window_style_key_action(Key::Minus, Some(Key::Minus), alt_shift),
+            Some(MenuAction::TextOpacityDown)
+        );
+        // JIS: Shift+「-」は論理キー '=' になるが物理キーで「-」と判定
+        assert_eq!(
+            window_style_key_action(Key::Equals, Some(Key::Minus), alt_shift),
+            Some(MenuAction::TextOpacityDown)
+        );
+        assert_eq!(
+            window_style_key_action(Key::Num0, Some(Key::Num0), alt_shift),
+            Some(MenuAction::TextOpacityReset)
+        );
+        // Alt+Shift+↑/T は背景・最前面に流れない
+        assert_eq!(window_style_key_action(Key::ArrowUp, None, alt_shift), None);
+        assert_eq!(
+            window_style_key_action(Key::T, Some(Key::T), alt_shift),
+            None
+        );
+
+        // Ctrl 系（VZ キー・フォントサイズ）は対象外、フォントズームは Alt 併用で反応しない
+        assert_eq!(
+            window_style_key_action(Key::Plus, Some(Key::Equals), ctrl),
+            None
+        );
+        assert_eq!(
+            window_style_key_action(Key::Num0, Some(Key::Num0), m(true, true, true)),
+            None
+        );
+        let mut app = make_test_app();
+        assert!(!app.handle_font_zoom_key(Key::Plus, alt_shift));
+        assert!(!app.handle_font_zoom_key(Key::Minus, alt_shift));
+
+        app.change_text_opacity(-10);
+        assert_eq!(app.text_opacity, 90);
+        app.set_text_opacity(0);
+        assert_eq!(app.text_opacity, window_style::MIN_OPACITY);
     }
 }

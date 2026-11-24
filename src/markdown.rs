@@ -997,7 +997,11 @@ pub fn render_markdown_view(
     apply_scroll_offset: bool,
 ) -> MdRenderOutput {
     let avail = ui.available_rect_before_wrap();
-    ui.painter().rect_filled(avail, CornerRadius::ZERO, crate::window_style::bg(MD_BG_NAVY));
+    crate::window_style::bg_painter(ui.painter()).rect_filled(
+        avail,
+        CornerRadius::ZERO,
+        crate::window_style::bg(MD_BG_NAVY),
+    );
 
     let mut clicked_url: Option<String> = None;
 

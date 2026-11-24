@@ -1,4 +1,4 @@
-//! ウィンドウ設定（背景不透明度・最前面固定・フォントサイズ）の保存と読み込み。
+//! ウィンドウ設定（背景・文字の不透明度、最前面固定、フォントサイズ）の保存と読み込み。
 //!
 //! 保存先:
 //! - Windows: `%APPDATA%\vzeditor\settings.ini`
@@ -10,6 +10,7 @@ use std::path::PathBuf;
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Settings {
     pub opacity: u8,
+    pub text_opacity: u8,
     pub always_on_top: bool,
     pub font_size: f32,
 }
@@ -18,6 +19,7 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             opacity: 100,
+            text_opacity: 100,
             always_on_top: false,
             font_size: 16.0,
         }
@@ -38,6 +40,11 @@ impl Settings {
                         s.opacity = v;
                     }
                 }
+                "text_opacity" => {
+                    if let Ok(v) = value.parse::<u8>() {
+                        s.text_opacity = v;
+                    }
+                }
                 "always_on_top" => s.always_on_top = value == "true",
                 "font_size" => {
                     if let Ok(v) = value.parse::<f32>() {
@@ -54,8 +61,8 @@ impl Settings {
 
     pub fn serialize(&self) -> String {
         format!(
-            "opacity={}\nalways_on_top={}\nfont_size={}\n",
-            self.opacity, self.always_on_top, self.font_size
+            "opacity={}\ntext_opacity={}\nalways_on_top={}\nfont_size={}\n",
+            self.opacity, self.text_opacity, self.always_on_top, self.font_size
         )
     }
 
@@ -108,6 +115,7 @@ mod tests {
     fn test_settings_roundtrip() {
         let s = Settings {
             opacity: 70,
+            text_opacity: 60,
             always_on_top: true,
             font_size: 20.0,
         };
@@ -118,6 +126,7 @@ mod tests {
     fn test_settings_parse_ignores_garbage() {
         let s = Settings::parse("opacity=abc\nfoo=bar\nalways_on_top=true\n");
         assert_eq!(s.opacity, 100);
+        assert_eq!(s.text_opacity, 100);
         assert!(s.always_on_top);
         assert_eq!(s.font_size, 16.0);
     }

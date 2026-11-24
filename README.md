@@ -9,8 +9,10 @@ Rust 製の高速ネイティブ GUI テキストエディター。[LZ Editor](h
 | `Alt+T` | 最前面固定の切替 |
 | `Alt+↑` / `Alt+↓` | 背景を濃く / 薄く（20〜100%、10% 刻み） |
 | `Alt+0` | 背景透過を解除（100%） |
+| `Alt+Shift+「+」` / `Alt+Shift+「-」` | 文字を濃く / 薄く（20〜100%、10% 刻み） |
+| `Alt+Shift+0` | 文字透過を解除（100%） |
 
-ステータスバー右端の `TOP` と `透過 n%`、メニュー「ツール」からも操作できます。透過するのは背景だけで、文字は不透明のままです。設定は次回起動時に復元されます。
+ステータスバー右端の `TOP`・`透過 n%`・`文字 n%`、メニュー「ツール」からも操作できます。背景と文字の濃さは別々に変えられます。設定は次回起動時に復元されます。
 
 VZ 互換キー（`Ctrl+E/S/D/X`、`Ctrl+Q`/`Ctrl+K` 系、`ESC` で2画面ファイラー など）は原作と同じです。一覧は `F1` で表示できます。
 
@@ -20,7 +22,7 @@ VZ 互換キー（`Ctrl+E/S/D/X`、`Ctrl+Q`/`Ctrl+K` 系、`ESC` で2画面フ�
 cargo build --release
 ```
 
-- Windows: MSVC ツールチェーン（Visual Studio の「C++ によるデスクトップ開発」と Windows SDK）が必要です。ビルド後、`target\release\vz.exe` を `Release\` に置きます。
+- Windows: MSVC ツールチェーン（Visual Studio の「C++ によるデスクトップ開発」と Windows SDK）が必要です。配布用の `Release\vz.exe` の作り方は [AGENTS.md](AGENTS.md) の「Release 手順」を参照してください。
 - Linux: 日本語フォント（`fonts-noto-cjk` など）と、ファイルダイアログ用に `zenity` を推奨。
 - macOS: 追加の依存はありません。
 
