@@ -26,7 +26,7 @@ VZ 互換キー（`Ctrl+E/S/D/X`、`Ctrl+Q`/`Ctrl+K` 系、`ESC` で2画面フ�
 cargo build --release
 ```
 
-- Windows: MSVC ツールチェーン（Visual Studio の「C++ によるデスクトップ開発」と Windows SDK）が必要です。配布用の `Release\vz.exe` の作り方は [AGENTS.md](AGENTS.md) の「Release 手順」を参照してください。
+- Windows: MSVC ツールチェーン（Visual Studio の「C++ によるデスクトップ開発」と Windows SDK）が必要です。配布用の `vz.exe`（出力先 `C:\gitroot\ut\vzeditor\`）の作り方は [AGENTS.md](AGENTS.md) の「Release 手順」を参照してください。
 - Linux: 日本語フォント（`fonts-noto-cjk` など）と、ファイルダイアログ用に `zenity` を推奨。
 - macOS: 追加の依存はありません。
 
