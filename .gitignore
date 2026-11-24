@@ -1,5 +1,13 @@
+bin/
+obj/
+.vs/
+.omo/
+.claude/
+launchSettings.json
+appsettings.*.json
+App_Data/
+*.sqlite
+lz-editor/
+Release/
+
 /target/
-/lz
-*.swp
-*~
-.DS_Store

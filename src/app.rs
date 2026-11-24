@@ -6,6 +6,8 @@ use crate::filer::{
 };
 use crate::fonts::configure_japanese_fonts;
 use crate::markdown::{parse_markdown, render_markdown_view, MdBlock};
+use crate::settings::Settings;
+use crate::window_style::{self, bg};
 use eframe::egui::{
     self, Align2, Color32, CornerRadius, Event, FontId, ImeEvent, Key, Pos2, Rect, Sense, Stroke,
     StrokeKind, Vec2,
@@ -112,7 +114,8 @@ enum FilerAction {
 }
 
 const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
-const APP_REPO_URL: &str = "https://github.com/TouryuTamane/lz-editor";
+/// 原作 LZ Editor (MIT License)
+const BASE_REPO_URL: &str = "https://github.com/TouryuTamane/lz-editor";
 
 const MENU_BAR_BG: Color32 = Color32::from_rgb(7, 21, 50);
 const MENU_BAR_HOVER: Color32 = Color32::from_rgb(20, 56, 114);
@@ -184,6 +187,10 @@ enum MenuAction {
     FontZoomOut,
     FontReset,
     NextBuffer,
+    ToggleAlwaysOnTop,
+    OpacityUp,
+    OpacityDown,
+    OpacityReset,
     // About
     ShowHelp,
     ShowAbout,
@@ -283,7 +290,7 @@ impl BufferSlot {
     }
 }
 
-pub struct LzEditorApp {
+pub struct VzEditorApp {
     mode: AppMode,
     buffers: Vec<BufferSlot>,
     active_buf: usize,
@@ -311,13 +318,23 @@ pub struct LzEditorApp {
     pending_dialog: Option<Receiver<DialogResult>>,
     inline_prompt: Option<InlinePathPrompt>,
     filer_modal: Option<FilerModal>,
+
+    // Window style: background-only transparency & always-on-top
+    bg_opacity: u8,
+    always_on_top: bool,
+    /// false in tests so that user settings are never overwritten.
+    persist_settings: bool,
 }
 
-impl LzEditorApp {
-    pub fn new(cc: &eframe::CreationContext<'_>, initial_file: Option<PathBuf>) -> Self {
+impl VzEditorApp {
+    pub fn new(
+        cc: &eframe::CreationContext<'_>,
+        initial_file: Option<PathBuf>,
+        settings: Settings,
+    ) -> Self {
         configure_japanese_fonts(&cc.egui_ctx);
         Self::configure_visuals(&cc.egui_ctx);
-        // Disable egui's built-in Ctrl++/-/0 UI zoom so LZ Editor controls font scaling directly
+        // Disable egui's built-in Ctrl++/-/0 UI zoom so VZ Editor controls font scaling directly
         // without double-scaling or breaking IME candidate window coordinates.
         cc.egui_ctx.options_mut(|o| {
             o.zoom_with_keyboard = false;
@@ -354,6 +371,9 @@ impl LzEditorApp {
             TextBuffer::new()
         };
 
+        let font_size = settings.font_size.clamp(MIN_FONT_SIZE, MAX_FONT_SIZE);
+        let bg_opacity = window_style::set_opacity_percent(settings.opacity);
+
         let mut app = Self {
             mode: AppMode::Editor,
             buffers: vec![BufferSlot::new(initial_buffer)],
@@ -365,8 +385,8 @@ impl LzEditorApp {
             ime_active: false,
             last_window_title: String::new(),
             internal_clipboard: String::new(),
-            font_size: DEFAULT_FONT_SIZE,
-            line_height: calc_line_height(DEFAULT_FONT_SIZE),
+            font_size,
+            line_height: calc_line_height(font_size),
             need_scroll_to_cursor: false,
             last_visible_lines: 24,
             last_filer_visible_rows: 20,
@@ -377,6 +397,9 @@ impl LzEditorApp {
             pending_dialog: None,
             inline_prompt: None,
             filer_modal: None,
+            bg_opacity,
+            always_on_top: settings.always_on_top,
+            persist_settings: true,
         };
         app.sync_window_title(&cc.egui_ctx);
         app
@@ -384,7 +407,7 @@ impl LzEditorApp {
 
     fn configure_visuals(ctx: &egui::Context) {
         let mut visuals = egui::Visuals::dark();
-        visuals.panel_fill = BG_NAVY;
+        visuals.panel_fill = Color32::TRANSPARENT;
         visuals.window_fill = STATUS_BG;
         visuals.override_text_color = Some(TEXT_WHITE);
         visuals.widgets.noninteractive.bg_fill = BG_NAVY;
@@ -426,6 +449,102 @@ impl LzEditorApp {
         self.filer.left.need_scroll_to_cursor = true;
         self.filer.right.need_scroll_to_cursor = true;
         self.status_message = format!("フォントサイズ: {}pt", clamped as i32);
+        self.save_settings();
+    }
+
+    // --- Window style (背面透過・最前面固定) ---
+
+    fn save_settings(&mut self) {
+        if !self.persist_settings {
+            return;
+        }
+        let settings = Settings {
+            opacity: self.bg_opacity,
+            always_on_top: self.always_on_top,
+            font_size: self.font_size,
+        };
+        if let Err(e) = settings.save() {
+            self.status_message = format!("設定の保存に失敗しました: {e}");
+        }
+    }
+
+    fn set_bg_opacity(&mut self, percent: u8) {
+        let p = window_style::clamp_opacity(percent);
+        if self.persist_settings {
+            window_style::set_opacity_percent(p);
+        }
+        if p == self.bg_opacity {
+            self.status_message = format!(
+                "背景の不透明度は {p}% です ({}〜{}%)",
+                window_style::MIN_OPACITY,
+                window_style::MAX_OPACITY
+            );
+            return;
+        }
+        self.bg_opacity = p;
+        self.status_message = format!("背景の不透明度: {p}% (Alt+↑ 濃く / Alt+↓ 薄く / Alt+0 戻す)");
+        self.save_settings();
+    }
+
+    fn change_bg_opacity(&mut self, delta: i16) {
+        let next = (self.bg_opacity as i16 + delta).clamp(0, 100) as u8;
+        self.set_bg_opacity(next);
+    }
+
+    fn toggle_always_on_top(&mut self, ctx: &egui::Context) {
+        self.always_on_top = !self.always_on_top;
+        let level = if self.always_on_top {
+            egui::WindowLevel::AlwaysOnTop
+        } else {
+            egui::WindowLevel::Normal
+        };
+        ctx.send_viewport_cmd(egui::ViewportCommand::WindowLevel(level));
+        self.status_message = if self.always_on_top {
+            "最前面に固定しました (Alt+T で解除)".to_string()
+        } else {
+            "最前面固定を解除しました (Alt+T で固定)".to_string()
+        };
+        self.save_settings();
+    }
+
+    /// Alt+T / Alt+↑ / Alt+↓ / Alt+0 をモードに関係なく処理し、処理したキーは入力から取り除く。
+    fn handle_window_style_keys(&mut self, ctx: &egui::Context) {
+        let mut commands: Vec<Key> = Vec::new();
+        ctx.input_mut(|i| {
+            i.events.retain(|ev| {
+                if let Event::Key {
+                    key,
+                    pressed,
+                    modifiers,
+                    ..
+                } = ev
+                {
+                    let only_alt = modifiers.alt && !modifiers.ctrl && !modifiers.command;
+                    if only_alt
+                        && matches!(key, Key::T | Key::ArrowUp | Key::ArrowDown | Key::Num0)
+                    {
+                        if *pressed {
+                            commands.push(*key);
+                        }
+                        return false;
+                    }
+                }
+                true
+            });
+            // Option/Alt+キーで生じる文字（macOS の Option+T → † など）を本文に入れない
+            if !commands.is_empty() {
+                i.events.retain(|ev| !matches!(ev, Event::Text(_)));
+            }
+        });
+        for key in commands {
+            match key {
+                Key::T => self.toggle_always_on_top(ctx),
+                Key::ArrowUp => self.change_bg_opacity(window_style::OPACITY_STEP as i16),
+                Key::ArrowDown => self.change_bg_opacity(-(window_style::OPACITY_STEP as i16)),
+                Key::Num0 => self.set_bg_opacity(window_style::MAX_OPACITY),
+                _ => {}
+            }
+        }
     }
 
     fn zoom_in_font(&mut self) {
@@ -732,11 +851,11 @@ impl LzEditorApp {
             AppMode::Editor => {
                 let buf = self.cur_buf();
                 let dirty_prefix = if buf.dirty { "*" } else { "" };
-                format!("{}{} - LZ Editor", dirty_prefix, buf.display_name())
+                format!("{}{} - VZ Editor", dirty_prefix, buf.display_name())
             }
             AppMode::Filer => {
                 let dir = self.filer.active_pane().current_dir.display();
-                format!("[2画面ファイラー] {} - LZ Editor", dir)
+                format!("[2画面ファイラー] {} - VZ Editor", dir)
             }
         }
     }
@@ -1077,6 +1196,35 @@ impl LzEditorApp {
                     action: MenuAction::NextBuffer,
                     enabled: self.buffers.len() > 1,
                 },
+                MenuEntry::Separator,
+                MenuEntry::Item {
+                    label: if self.always_on_top {
+                        "最前面固定を解除"
+                    } else {
+                        "最前面に固定"
+                    },
+                    shortcut: "Alt+T",
+                    action: MenuAction::ToggleAlwaysOnTop,
+                    enabled: true,
+                },
+                MenuEntry::Item {
+                    label: "背景を濃くする (+10%)",
+                    shortcut: "Alt+↑",
+                    action: MenuAction::OpacityUp,
+                    enabled: self.bg_opacity < window_style::MAX_OPACITY,
+                },
+                MenuEntry::Item {
+                    label: "背景を透過する (-10%)",
+                    shortcut: "Alt+↓",
+                    action: MenuAction::OpacityDown,
+                    enabled: self.bg_opacity > window_style::MIN_OPACITY,
+                },
+                MenuEntry::Item {
+                    label: "背景透過を解除 (100%)",
+                    shortcut: "Alt+0",
+                    action: MenuAction::OpacityReset,
+                    enabled: self.bg_opacity < window_style::MAX_OPACITY,
+                },
             ],
             TopMenu::About => vec![
                 MenuEntry::Item {
@@ -1162,6 +1310,12 @@ impl LzEditorApp {
                 }
                 self.switch_buffer_step(1);
             }
+            MenuAction::ToggleAlwaysOnTop => self.toggle_always_on_top(ctx),
+            MenuAction::OpacityUp => self.change_bg_opacity(window_style::OPACITY_STEP as i16),
+            MenuAction::OpacityDown => {
+                self.change_bg_opacity(-(window_style::OPACITY_STEP as i16))
+            }
+            MenuAction::OpacityReset => self.set_bg_opacity(window_style::MAX_OPACITY),
             MenuAction::ShowHelp => {
                 self.show_help = !self.show_help;
             }
@@ -1404,6 +1558,7 @@ impl LzEditorApp {
         if self.inline_prompt.is_some() || self.filer_modal.is_some() || self.show_about {
             return;
         }
+        self.handle_window_style_keys(ctx);
         if self.open_menu.is_some() {
             self.handle_menu_events(ctx);
             return;
@@ -2037,7 +2192,7 @@ impl LzEditorApp {
             .exact_height(24.0)
             .frame(
                 egui::Frame::NONE
-                    .fill(MENU_BAR_BG)
+                    .fill(bg(MENU_BAR_BG))
                     .inner_margin(egui::Margin::symmetric(6, 1))
                     .stroke(Stroke::new(1.0_f32, GUTTER_SEP)),
             )
@@ -2241,6 +2396,55 @@ impl LzEditorApp {
 
     // --- Status Bar & Multi-Buffer Strip ---
 
+    /// ステータスバー右端の [最前面] [透過 n%] 表示。クリックで切替、透過表示は右クリックで濃くする。
+    fn paint_window_style_controls(
+        ui: &mut egui::Ui,
+        opacity: u8,
+        always_on_top: bool,
+    ) -> Option<MenuAction> {
+        let mut cmd = None;
+        let top_resp = ui
+            .add(
+                egui::Button::new(
+                    egui::RichText::new(if always_on_top { "TOP" } else { "top" })
+                        .font(FontId::monospace(12.5))
+                        .strong()
+                        .color(if always_on_top { TEXT_AMBER } else { TEXT_DIM_CYAN }),
+                )
+                .fill(BG_TAB_INACTIVE)
+                .stroke(Stroke::new(1.0_f32, BORDER_BLUE)),
+            )
+            .on_hover_text("最前面固定の切替 (Alt+T)");
+        if top_resp.clicked() {
+            cmd = Some(MenuAction::ToggleAlwaysOnTop);
+        }
+        let op_resp = ui
+            .add(
+                egui::Button::new(
+                    egui::RichText::new(format!("透過{:>3}%", opacity))
+                        .font(FontId::monospace(12.5))
+                        .color(if opacity < window_style::MAX_OPACITY {
+                            TEXT_AMBER
+                        } else {
+                            TEXT_DIM_CYAN
+                        }),
+                )
+                .fill(BG_TAB_INACTIVE)
+                .stroke(Stroke::new(1.0_f32, BORDER_BLUE)),
+            )
+            .on_hover_text("背景の不透明度: クリックで薄く / 右クリックで濃く (Alt+↓ / Alt+↑ / Alt+0)");
+        if op_resp.clicked() {
+            cmd = Some(if opacity <= window_style::MIN_OPACITY {
+                MenuAction::OpacityReset
+            } else {
+                MenuAction::OpacityDown
+            });
+        } else if op_resp.secondary_clicked() {
+            cmd = Some(MenuAction::OpacityUp);
+        }
+        cmd
+    }
+
     fn paint_font_size_controls(ui: &mut egui::Ui, font_size: f32) -> Option<i8> {
         // Returns Some(-1) for shrink, Some(0) for reset, Some(1) for enlarge.
         // Rendered inside a right_to_left layout: add '+', then '16pt', then '-' so visually: [-] 16pt [+]
@@ -2320,12 +2524,13 @@ impl LzEditorApp {
         let mut switch_next_clicked = false;
         let mut toggle_md_clicked = false;
         let mut font_cmd: Option<i8> = None;
+        let mut win_cmd: Option<MenuAction> = None;
 
         egui::TopBottomPanel::top("status_bar")
             .exact_height(30.0)
             .frame(
                 egui::Frame::NONE
-                    .fill(STATUS_BG)
+                    .fill(bg(STATUS_BG))
                     .inner_margin(egui::Margin::symmetric(10, 4))
                     .stroke(Stroke::new(1.0_f32, BORDER_BLUE)),
             )
@@ -2339,7 +2544,7 @@ impl LzEditorApp {
                             .inner_margin(egui::Margin::symmetric(6, 1))
                             .show(ui, |ui| {
                                 ui.label(
-                                    egui::RichText::new("LZ")
+                                    egui::RichText::new("VZ")
                                         .font(FontId::monospace(13.0))
                                         .strong()
                                         .color(STATUS_BADGE_FG),
@@ -2517,6 +2722,14 @@ impl LzEditorApp {
                             if let Some(cmd) = Self::paint_font_size_controls(ui, self.font_size) {
                                 font_cmd = Some(cmd);
                             }
+                            ui.add_space(6.0);
+                            if let Some(cmd) = Self::paint_window_style_controls(
+                                ui,
+                                self.bg_opacity,
+                                self.always_on_top,
+                            ) {
+                                win_cmd = Some(cmd);
+                            }
 
                             if !self.cur_slot().markdown_view
                                 && (self.ime_active || !self.ime_preedit.is_empty())
@@ -2628,11 +2841,22 @@ impl LzEditorApp {
                             if let Some(cmd) = Self::paint_font_size_controls(ui, self.font_size) {
                                 font_cmd = Some(cmd);
                             }
+                            ui.add_space(6.0);
+                            if let Some(cmd) = Self::paint_window_style_controls(
+                                ui,
+                                self.bg_opacity,
+                                self.always_on_top,
+                            ) {
+                                win_cmd = Some(cmd);
+                            }
                         });
                     }
                 });
             });
 
+        if let Some(action) = win_cmd {
+            self.execute_menu_action(ctx, action);
+        }
         if switch_next_clicked {
             self.switch_buffer_step(1);
         }
@@ -2659,7 +2883,7 @@ impl LzEditorApp {
             .exact_height(24.0)
             .frame(
                 egui::Frame::NONE
-                    .fill(BG_TAB_BAR)
+                    .fill(bg(BG_TAB_BAR))
                     .inner_margin(egui::Margin::symmetric(8, 2))
                     .stroke(Stroke::new(1.0_f32, GUTTER_SEP)),
             )
@@ -2768,7 +2992,7 @@ impl LzEditorApp {
             .exact_height(34.0)
             .frame(
                 egui::Frame::NONE
-                    .fill(FKEY_BAR_BG)
+                    .fill(bg(FKEY_BAR_BG))
                     .inner_margin(egui::Margin::symmetric(8, 4))
                     .stroke(Stroke::new(1.0_f32, BORDER_BLUE)),
             )
@@ -2837,7 +3061,7 @@ impl LzEditorApp {
             .exact_height(34.0)
             .frame(
                 egui::Frame::NONE
-                    .fill(FKEY_BAR_BG)
+                    .fill(bg(FKEY_BAR_BG))
                     .inner_margin(egui::Margin::symmetric(8, 4))
                     .stroke(Stroke::new(1.0_f32, BORDER_BLUE)),
             )
@@ -2949,7 +3173,7 @@ impl LzEditorApp {
         let mut clicked_url: Option<String> = None;
 
         egui::CentralPanel::default()
-            .frame(egui::Frame::NONE.fill(BG_NAVY))
+            .frame(egui::Frame::NONE)
             .show(ctx, |ui| {
                 let slot = &mut self.buffers[active_idx];
                 let apply_offset = slot.md_scroll_dirty;
@@ -2976,7 +3200,7 @@ impl LzEditorApp {
 
     fn render_editor_canvas(&mut self, ctx: &egui::Context) {
         egui::CentralPanel::default()
-            .frame(egui::Frame::NONE.fill(BG_NAVY))
+            .frame(egui::Frame::NONE)
             .show(ctx, |ui| {
                 let avail_rect = ui.available_rect_before_wrap();
                 let response = ui.allocate_rect(avail_rect, Sense::click_and_drag());
@@ -3136,13 +3360,13 @@ impl LzEditorApp {
 
                 // Paint background & gutter
                 let painter = ui.painter_at(avail_rect);
-                painter.rect_filled(avail_rect, CornerRadius::ZERO, BG_NAVY);
+                painter.rect_filled(avail_rect, CornerRadius::ZERO, bg(BG_NAVY));
 
                 let gutter_rect = Rect::from_min_max(
                     avail_rect.min,
                     Pos2::new(avail_rect.min.x + gutter_w, avail_rect.max.y),
                 );
-                painter.rect_filled(gutter_rect, CornerRadius::ZERO, BG_GUTTER);
+                painter.rect_filled(gutter_rect, CornerRadius::ZERO, bg(BG_GUTTER));
                 painter.line_segment(
                     [
                         Pos2::new(gutter_rect.max.x, avail_rect.min.y),
@@ -3174,7 +3398,7 @@ impl LzEditorApp {
                         editor_painter.rect_filled(
                             line_bg_rect,
                             CornerRadius::ZERO,
-                            BG_ACTIVE_LINE,
+                            bg(BG_ACTIVE_LINE),
                         );
                     }
 
@@ -3342,7 +3566,7 @@ impl LzEditorApp {
                     Pos2::new(avail_rect.max.x - scrollbar_w, avail_rect.min.y),
                     avail_rect.max,
                 );
-                painter.rect_filled(sb_rect, CornerRadius::ZERO, BG_GUTTER);
+                painter.rect_filled(sb_rect, CornerRadius::ZERO, bg(BG_GUTTER));
                 if max_scroll_y > 0.0 {
                     let ratio = (viewport_h / total_content_h).clamp(0.06, 1.0);
                     let thumb_h = (sb_rect.height() * ratio).max(24.0);
@@ -3384,7 +3608,7 @@ impl LzEditorApp {
         egui::CentralPanel::default()
             .frame(
                 egui::Frame::NONE
-                    .fill(BG_NAVY)
+                    .fill(bg(BG_NAVY))
                     .inner_margin(egui::Margin::same(6)),
             )
             .show(ctx, |ui| {
@@ -3483,7 +3707,7 @@ impl LzEditorApp {
         painter.rect(
             rect,
             CornerRadius::same(2),
-            BG_NAVY,
+            Color32::TRANSPARENT,
             Stroke::new(if is_active { 1.5_f32 } else { 1.0_f32 }, border_color),
             StrokeKind::Inside,
         );
@@ -3769,7 +3993,7 @@ impl LzEditorApp {
             Pos2::new(rect.max.x - sb_w - 1.0, col_rect.max.y + 1.0),
             Pos2::new(rect.max.x - 1.0, rect.max.y - 1.0),
         );
-        painter.rect_filled(sb_rect, CornerRadius::ZERO, BG_GUTTER);
+        painter.rect_filled(sb_rect, CornerRadius::ZERO, bg(BG_GUTTER));
         if max_scroll > 0.0 {
             let ratio = (list_rect.height() / total_h).clamp(0.08, 1.0);
             let thumb_h = (sb_rect.height() * ratio).max(20.0);
@@ -3800,8 +4024,8 @@ impl LzEditorApp {
         }
         let mut open = self.show_help;
         let title = match self.mode {
-            AppMode::Editor => "LZ Editor - エディタ キーバインド (F1 / ESC で閉じる)",
-            AppMode::Filer => "LZ Filer - 2画面ファイラー操作 (F1 / ESC で閉じる)",
+            AppMode::Editor => "VZ Editor - エディタ キーバインド (F1 / ESC で閉じる)",
+            AppMode::Filer => "VZ Filer - 2画面ファイラー操作 (F1 / ESC で閉じる)",
         };
         egui::Window::new(title)
             .open(&mut open)
@@ -3828,6 +4052,8 @@ impl LzEditorApp {
                         ("Ctrl++ / Ctrl+- / Ctrl+0", "フォントサイズ拡大 / 縮小 / リセット"),
                         ("Ctrl+K+D / F10", "上書き保存 / 保存ダイアログ"),
                         ("ESC / Ctrl+K+Q / F9", "2画面ファイラーへ切替"),
+                        ("Alt+T", "最前面固定の切替"),
+                        ("Alt+↑ / Alt+↓ / Alt+0", "背景を濃く / 薄く / 透過解除"),
                     ],
                     AppMode::Filer => &[
                         ("Ctrl+E / X (↑ / ↓)", "ファイルカーソル移動"),
@@ -3841,6 +4067,7 @@ impl LzEditorApp {
                         ("F8", "ソート順切替（名前/更新/サイズ/拡張子）"),
                         ("ESC / F9", "エディタ画面へ戻る"),
                         ("F10", "アプリケーション終了"),
+                        ("Alt+T / Alt+↑ / Alt+↓", "最前面固定 / 背景の濃さ変更"),
                     ],
                 };
                 egui::Grid::new("vz_help_grid")
@@ -3877,7 +4104,7 @@ impl LzEditorApp {
         let mut open = self.show_about;
         let mut close_clicked = false;
 
-        egui::Window::new("LZ Editor について (バージョン情報)")
+        egui::Window::new("VZ Editor について (バージョン情報)")
             .open(&mut open)
             .collapsible(false)
             .resizable(false)
@@ -3899,7 +4126,7 @@ impl LzEditorApp {
                         .inner_margin(egui::Margin::symmetric(12, 6))
                         .show(ui, |ui| {
                             ui.label(
-                                egui::RichText::new("LZ")
+                                egui::RichText::new("VZ")
                                     .font(FontId::monospace(22.0))
                                     .strong()
                                     .color(STATUS_BADGE_FG),
@@ -3908,7 +4135,7 @@ impl LzEditorApp {
                     ui.add_space(10.0);
                     ui.vertical(|ui| {
                         ui.label(
-                            egui::RichText::new("LZ Editor")
+                            egui::RichText::new("VZ Editor")
                                 .font(FontId::monospace(20.0))
                                 .strong()
                                 .color(TEXT_CYAN),
@@ -3928,7 +4155,7 @@ impl LzEditorApp {
 
                 ui.label(
                     egui::RichText::new(
-                        "Rust + egui 製の超軽量ネイティブ GUI VZ Editor クローン & 2画面ファイラー",
+                        "Rust + egui 製の高速ネイティブ GUI VZ 風エディター & 2画面ファイラー",
                     )
                     .font(FontId::monospace(13.0))
                     .color(TEXT_WHITE),
@@ -3936,7 +4163,7 @@ impl LzEditorApp {
                 ui.add_space(4.0);
                 ui.label(
                     egui::RichText::new(
-                        "PC-98 / VZ 風デザイン・ダイヤモンドカーソル・ESC 2画面ファイラー・Fcitx5 IME・Markdown ビュー対応",
+                        "背面透過・最前面固定・ダイヤモンドカーソル・ESC 2画面ファイラー・IME・Markdown ビュー対応",
                     )
                     .font(FontId::monospace(12.0))
                     .color(TEXT_DIM_CYAN),
@@ -3960,15 +4187,15 @@ impl LzEditorApp {
                         ui.end_row();
 
                         ui.label(
-                            egui::RichText::new("GitHub:")
+                            egui::RichText::new("Based on:")
                                 .font(FontId::monospace(12.5))
                                 .color(TEXT_DIM_CYAN),
                         );
                         ui.hyperlink_to(
-                            egui::RichText::new(APP_REPO_URL)
+                            egui::RichText::new(format!("LZ Editor  {BASE_REPO_URL}"))
                                 .font(FontId::monospace(12.5))
                                 .color(TEXT_CYAN),
-                            APP_REPO_URL,
+                            BASE_REPO_URL,
                         );
                         ui.end_row();
                     });
@@ -4534,6 +4761,12 @@ impl LzEditorApp {
 }
 
 /// Attempt to read UTF-8 text from the Linux system clipboard (Wayland `wl-paste`, X11 `xclip`/`xsel`).
+#[cfg(any(windows, target_os = "macos"))]
+fn read_system_clipboard() -> Option<String> {
+    arboard::Clipboard::new().ok()?.get_text().ok()
+}
+
+#[cfg(not(any(windows, target_os = "macos")))]
 fn read_system_clipboard() -> Option<String> {
     use std::process::Command;
 
@@ -4606,8 +4839,14 @@ fn truncate_display_right(s: &str, max_cols: usize) -> String {
     out
 }
 
-impl eframe::App for LzEditorApp {
+impl eframe::App for VzEditorApp {
+    fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
+        // 背面透過: ウィンドウ自体は透明にし、背景色のアルファで濃さを決める
+        [0.0, 0.0, 0.0, 0.0]
+    }
+
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        window_style::set_opacity_percent(self.bg_opacity);
         self.poll_dialog();
         self.handle_events(ctx);
 
@@ -4645,11 +4884,11 @@ impl eframe::App for LzEditorApp {
 mod tests {
     use super::*;
 
-    fn make_test_app() -> LzEditorApp {
+    fn make_test_app() -> VzEditorApp {
         let mut buf = TextBuffer::new();
         buf.file_path = Some(PathBuf::from("notes.md"));
         buf.insert_text("# Title\n\n**Bold** and `code`\n");
-        LzEditorApp {
+        VzEditorApp {
             mode: AppMode::Editor,
             buffers: vec![BufferSlot::new(buf)],
             active_buf: 0,
@@ -4672,6 +4911,9 @@ mod tests {
             pending_dialog: None,
             inline_prompt: None,
             filer_modal: None,
+            bg_opacity: 100,
+            always_on_top: false,
+            persist_settings: false,
         }
     }
 
@@ -4757,30 +4999,30 @@ mod tests {
     fn test_dynamic_window_title_formats() {
         let mut app = make_test_app();
         // Dirty named file
-        assert_eq!(app.compute_window_title(), "*notes.md - LZ Editor");
+        assert_eq!(app.compute_window_title(), "*notes.md - VZ Editor");
 
         // Clean named file
         app.cur_buf_mut().dirty = false;
-        assert_eq!(app.compute_window_title(), "notes.md - LZ Editor");
+        assert_eq!(app.compute_window_title(), "notes.md - VZ Editor");
 
         // Untitled new buffer
         app.new_empty_buffer();
-        assert_eq!(app.compute_window_title(), "[無題] - LZ Editor");
+        assert_eq!(app.compute_window_title(), "[無題] - VZ Editor");
 
         // Dirty untitled buffer
         app.cur_buf_mut().insert_text("draft");
-        assert_eq!(app.compute_window_title(), "*[無題] - LZ Editor");
+        assert_eq!(app.compute_window_title(), "*[無題] - VZ Editor");
 
         // Buffer switch updates title immediately
         app.switch_buffer_step(1);
-        assert_eq!(app.compute_window_title(), "notes.md - LZ Editor");
+        assert_eq!(app.compute_window_title(), "notes.md - VZ Editor");
 
         // 2-pane filer title reflects active pane directory
         app.enter_filer();
         let expected_dir = app.filer.active_pane().current_dir.display().to_string();
         assert_eq!(
             app.compute_window_title(),
-            format!("[2画面ファイラー] {expected_dir} - LZ Editor")
+            format!("[2画面ファイラー] {expected_dir} - VZ Editor")
         );
     }
 
@@ -4879,7 +5121,7 @@ mod tests {
     fn test_headless_render_all_modes_and_font_sizes() {
         let mut app = make_test_app();
         // Load real README.md content into the buffer
-        let readme = include_str!("../README.md");
+        let readme = include_str!("../tests/fixtures/markdown_sample.md");
         app.cur_buf_mut().lines = readme.lines().map(String::from).collect();
         app.cur_buf_mut().revision += 1;
         app.ime_preedit = "にほんご".to_string();
@@ -4970,6 +5212,27 @@ mod tests {
             app.render_about_dialog(ctx);
         });
     }
+
+    #[test]
+    fn test_window_style_opacity_and_menu() {
+        let mut app = make_test_app();
+        assert_eq!(app.bg_opacity, 100);
+        app.change_bg_opacity(-10);
+        assert_eq!(app.bg_opacity, 90);
+        for _ in 0..20 {
+            app.change_bg_opacity(-10);
+        }
+        assert_eq!(app.bg_opacity, window_style::MIN_OPACITY);
+        app.set_bg_opacity(window_style::MAX_OPACITY);
+        assert_eq!(app.bg_opacity, 100);
+
+        let has = |app: &VzEditorApp, label: &str| {
+            app.build_menu_entries(TopMenu::Tools)
+                .iter()
+                .any(|e| matches!(e, MenuEntry::Item { label: l, .. } if *l == label))
+        };
+        assert!(has(&app, "最前面に固定"));
+        app.always_on_top = true;
+        assert!(has(&app, "最前面固定を解除"));
+    }
 }
-
-

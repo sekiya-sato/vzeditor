@@ -997,7 +997,7 @@ pub fn render_markdown_view(
     apply_scroll_offset: bool,
 ) -> MdRenderOutput {
     let avail = ui.available_rect_before_wrap();
-    ui.painter().rect_filled(avail, CornerRadius::ZERO, MD_BG_NAVY);
+    ui.painter().rect_filled(avail, CornerRadius::ZERO, crate::window_style::bg(MD_BG_NAVY));
 
     let mut clicked_url: Option<String> = None;
 
@@ -1471,7 +1471,7 @@ fn render_markdown_table(
         let bg = if r_idx % 2 == 1 {
             MD_TABLE_ROW_ALT_BG
         } else {
-            MD_BG_NAVY
+            Color32::TRANSPARENT
         };
         paint_row(ui, row, bg, false, clicked_url);
     }
@@ -1630,7 +1630,7 @@ fn main() {
 
     #[test]
     fn test_parse_readme_document() {
-        let readme = include_str!("../README.md");
+        let readme = include_str!("../tests/fixtures/markdown_sample.md");
         let lines: Vec<String> = readme.lines().map(String::from).collect();
         let blocks = parse_markdown(&lines);
         assert!(blocks

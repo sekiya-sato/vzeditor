@@ -1,6 +1,5 @@
 use eframe::egui::{self, FontData, FontDefinitions, FontFamily};
 use std::path::Path;
-use std::process::Command;
 use std::sync::Arc;
 
 struct FontCandidate {
@@ -9,8 +8,9 @@ struct FontCandidate {
 }
 
 /// Query fontconfig via `fc-match` to get the exact file path and TTC face index.
+#[cfg(not(any(windows, target_os = "macos")))]
 fn query_fc_match(pattern: &str) -> Option<FontCandidate> {
-    let output = Command::new("fc-match")
+    let output = std::process::Command::new("fc-match")
         .args(["-f", "%{file}\n%{index}\n", pattern])
         .output()
         .ok()?;
@@ -35,6 +35,7 @@ pub fn configure_japanese_fonts(ctx: &egui::Context) -> Option<String> {
 
     // Priority 1: Query fontconfig for Japanese monospace fonts (works on Ubuntu, Debian, Raspberry Pi OS).
     // Prefer TrueType Japanese monospace fonts and Noto Sans Mono CJK JP.
+    #[cfg(not(any(windows, target_os = "macos")))]
     let fc_patterns = [
         "Noto Sans Mono CJK JP",
         "IPAGothic",
@@ -46,6 +47,7 @@ pub fn configure_japanese_fonts(ctx: &egui::Context) -> Option<String> {
     ];
 
     let mut candidates: Vec<FontCandidate> = Vec::new();
+    #[cfg(not(any(windows, target_os = "macos")))]
     for pattern in fc_patterns {
         if let Some(cand) = query_fc_match(pattern) {
             // Skip non-Japanese fallback fonts returned when pattern doesn't match a CJK font.
@@ -71,24 +73,10 @@ pub fn configure_japanese_fonts(ctx: &egui::Context) -> Option<String> {
         }
     }
 
-    // Priority 2: Direct filesystem fallbacks for Ubuntu & Raspberry Pi OS.
-    let static_fallbacks: &[(&str, u32)] = &[
-        ("/usr/share/fonts/opentype/ipafont-gothic/ipag.ttf", 0),
-        ("/usr/share/fonts/truetype/vlgothic/VL-Gothic-Regular.ttf", 0),
-        ("/usr/share/fonts/truetype/takao-gothic/TakaoGothic.ttf", 0),
-        ("/usr/share/fonts/truetype/fonts-japanese-gothic.ttf", 0),
-        ("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc", 5),
-        ("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc", 0),
-        ("/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc", 5),
-        ("/usr/share/fonts/truetype/droid/DroidSansFallbackFull.ttf", 0),
-    ];
-
-    for &(path, index) in static_fallbacks {
-        if Path::new(path).exists() {
-            candidates.push(FontCandidate {
-                path: path.to_string(),
-                index,
-            });
+    // Priority 2: Direct filesystem fallbacks per OS.
+    for (path, index) in static_font_fallbacks() {
+        if Path::new(&path).exists() {
+            candidates.push(FontCandidate { path, index });
         }
     }
 
@@ -132,4 +120,62 @@ pub fn configure_japanese_fonts(ctx: &egui::Context) -> Option<String> {
 
     ctx.set_fonts(fonts);
     primary_loaded_path
+}
+
+/// OS ごとの日本語フォント候補（優先順）。等幅フォントを先に並べる。
+fn static_font_fallbacks() -> Vec<(String, u32)> {
+    #[cfg(windows)]
+    {
+        use std::path::PathBuf;
+        let windir = std::env::var_os("WINDIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("C:/Windows"));
+        let mut v: Vec<(String, u32)> = Vec::new();
+        let mut dirs = vec![windir.join("Fonts")];
+        if let Some(local) = std::env::var_os("LOCALAPPDATA") {
+            dirs.push(PathBuf::from(local).join("Microsoft").join("Windows").join("Fonts"));
+        }
+        for dir in &dirs {
+            for (file, index) in [
+                ("BIZ-UDGothicR.ttc", 0),  // BIZ UDゴシック（等幅）
+                ("HackGen-Regular.ttf", 0),
+                ("PlemolJP-Regular.ttf", 0),
+                ("msgothic.ttc", 0),       // MS ゴシック（等幅）
+                ("YuGothM.ttc", 0),
+                ("meiryo.ttc", 0),
+            ] {
+                v.push((dir.join(file).to_string_lossy().into_owned(), index));
+            }
+        }
+        v
+    }
+    #[cfg(target_os = "macos")]
+    {
+        [
+            ("/Library/Fonts/Osaka.ttf", 0),
+            ("/System/Library/Fonts/Supplemental/Osaka.ttf", 0),
+            ("/System/Library/Fonts/ヒラギノ角ゴシック W3.ttc", 0),
+            ("/System/Library/Fonts/Hiragino Sans GB.ttc", 0),
+            ("/System/Library/Fonts/Supplemental/Arial Unicode.ttf", 0),
+        ]
+        .iter()
+        .map(|&(p, i)| (p.to_string(), i))
+        .collect()
+    }
+    #[cfg(not(any(windows, target_os = "macos")))]
+    {
+        [
+            ("/usr/share/fonts/opentype/ipafont-gothic/ipag.ttf", 0),
+            ("/usr/share/fonts/truetype/vlgothic/VL-Gothic-Regular.ttf", 0),
+            ("/usr/share/fonts/truetype/takao-gothic/TakaoGothic.ttf", 0),
+            ("/usr/share/fonts/truetype/fonts-japanese-gothic.ttf", 0),
+            ("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc", 5),
+            ("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc", 0),
+            ("/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc", 5),
+            ("/usr/share/fonts/truetype/droid/DroidSansFallbackFull.ttf", 0),
+        ]
+        .iter()
+        .map(|&(p, i)| (p.to_string(), i))
+        .collect()
+    }
 }

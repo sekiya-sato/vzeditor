@@ -1,0 +1,124 @@
+//! ウィンドウ設定（背景不透明度・最前面固定・フォントサイズ）の保存と読み込み。
+//!
+//! 保存先:
+//! - Windows: `%APPDATA%\vzeditor\settings.ini`
+//! - macOS:   `~/Library/Application Support/vzeditor/settings.ini`
+//! - Linux:   `$XDG_CONFIG_HOME/vzeditor/settings.ini`（未設定時 `~/.config`）
+
+use std::path::PathBuf;
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Settings {
+    pub opacity: u8,
+    pub always_on_top: bool,
+    pub font_size: f32,
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        Self {
+            opacity: 100,
+            always_on_top: false,
+            font_size: 16.0,
+        }
+    }
+}
+
+impl Settings {
+    pub fn parse(text: &str) -> Self {
+        let mut s = Self::default();
+        for line in text.lines() {
+            let Some((key, value)) = line.split_once('=') else {
+                continue;
+            };
+            let value = value.trim();
+            match key.trim() {
+                "opacity" => {
+                    if let Ok(v) = value.parse::<u8>() {
+                        s.opacity = v;
+                    }
+                }
+                "always_on_top" => s.always_on_top = value == "true",
+                "font_size" => {
+                    if let Ok(v) = value.parse::<f32>() {
+                        if v.is_finite() {
+                            s.font_size = v;
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        s
+    }
+
+    pub fn serialize(&self) -> String {
+        format!(
+            "opacity={}\nalways_on_top={}\nfont_size={}\n",
+            self.opacity, self.always_on_top, self.font_size
+        )
+    }
+
+    pub fn load() -> Self {
+        config_path()
+            .and_then(|p| std::fs::read_to_string(p).ok())
+            .map(|t| Self::parse(&t))
+            .unwrap_or_default()
+    }
+
+    pub fn save(&self) -> std::io::Result<()> {
+        let Some(path) = config_path() else {
+            return Ok(());
+        };
+        if let Some(dir) = path.parent() {
+            std::fs::create_dir_all(dir)?;
+        }
+        std::fs::write(path, self.serialize())
+    }
+}
+
+fn config_dir() -> Option<PathBuf> {
+    #[cfg(windows)]
+    {
+        std::env::var_os("APPDATA").map(PathBuf::from)
+    }
+    #[cfg(target_os = "macos")]
+    {
+        std::env::var_os("HOME")
+            .map(|h| PathBuf::from(h).join("Library").join("Application Support"))
+    }
+    #[cfg(not(any(windows, target_os = "macos")))]
+    {
+        std::env::var_os("XDG_CONFIG_HOME")
+            .filter(|v| !v.is_empty())
+            .map(PathBuf::from)
+            .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))
+    }
+}
+
+pub fn config_path() -> Option<PathBuf> {
+    config_dir().map(|d| d.join("vzeditor").join("settings.ini"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_settings_roundtrip() {
+        let s = Settings {
+            opacity: 70,
+            always_on_top: true,
+            font_size: 20.0,
+        };
+        assert_eq!(Settings::parse(&s.serialize()), s);
+    }
+
+    #[test]
+    fn test_settings_parse_ignores_garbage() {
+        let s = Settings::parse("opacity=abc\nfoo=bar\nalways_on_top=true\n");
+        assert_eq!(s.opacity, 100);
+        assert!(s.always_on_top);
+        assert_eq!(s.font_size, 16.0);
+    }
+}
