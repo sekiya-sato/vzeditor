@@ -141,8 +141,13 @@ fn config_dir() -> Option<PathBuf> {
     }
 }
 
+/// vz の設定フォルダ（`settings.ini` を置く場所）。
+pub fn app_dir() -> Option<PathBuf> {
+    config_dir().map(|d| d.join("vzeditor"))
+}
+
 pub fn config_path() -> Option<PathBuf> {
-    config_dir().map(|d| d.join("vzeditor").join("settings.ini"))
+    app_dir().map(|d| d.join("settings.ini"))
 }
 
 #[cfg(test)]

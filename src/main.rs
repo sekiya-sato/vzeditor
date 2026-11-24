@@ -9,6 +9,7 @@ mod fonts;
 mod icon;
 mod markdown;
 mod send_to_app;
+mod session;
 mod settings;
 mod window_style;
 
@@ -20,7 +21,23 @@ use std::sync::Arc;
 
 fn main() -> eframe::Result<()> {
     // 複数ファイル・フォルダを引数で受け取る（エクスプローラーで exe へ複数ドロップした場合も同じ）
-    let initial_paths: Vec<PathBuf> = std::env::args_os().skip(1).map(PathBuf::from).collect();
+    let mut restore = false;
+    let mut initial_paths: Vec<PathBuf> = Vec::new();
+    for arg in std::env::args_os().skip(1) {
+        match arg.to_str() {
+            // 起動中の vz に「保存して終了」を要求する（更新用。ウィンドウは開かない）
+            Some("--save-and-quit") => {
+                let handled = session::session_dir()
+                    .map(|d| session::request_save_and_quit(&d).unwrap_or(0))
+                    .unwrap_or(0);
+                // 終了コード: 受け取った vz の数（0 なら起動中の vz なし）
+                std::process::exit(handled.min(100) as i32);
+            }
+            // --save-and-quit で保存した状態を復元して起動する
+            Some("--restore") => restore = true,
+            _ => initial_paths.push(PathBuf::from(arg)),
+        }
+    }
     let settings = Settings::load();
 
     let mut viewport = egui::ViewportBuilder::default()
@@ -45,6 +62,6 @@ fn main() -> eframe::Result<()> {
     eframe::run_native(
         "VZ Editor",
         native_options,
-        Box::new(move |cc| Ok(Box::new(VzEditorApp::new(cc, initial_paths, settings)))),
+        Box::new(move |cc| Ok(Box::new(VzEditorApp::new(cc, initial_paths, settings, restore)))),
     )
 }

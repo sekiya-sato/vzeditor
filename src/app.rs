@@ -7,6 +7,7 @@ use crate::filer::{
 use crate::fonts::configure_japanese_fonts;
 use crate::markdown::{parse_markdown, render_markdown_view, MdBlock};
 use crate::send_to_app::{prepare_text, spawn_send, SendResult, SendTarget};
+use crate::session::{self, EntryKind, SessionEntry};
 use crate::settings::{KeyScheme, Settings};
 use crate::window_style::{self, bg};
 use eframe::egui::{
@@ -15,7 +16,9 @@ use eframe::egui::{
 };
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Receiver;
+use std::sync::Arc;
 
 // --- Font Size Scaling Constants ---
 const DEFAULT_FONT_SIZE: f32 = 16.0;
@@ -379,6 +382,9 @@ pub struct VzEditorApp {
     select_mode: bool,
     /// フレームの最後にクリップボードへ書き出す文字列（ctx を持たない処理から使う）
     clipboard_out: Option<String>,
+
+    /// `vz --save-and-quit` からの終了要求（監視スレッドが true にする）。テストでは None
+    quit_request: Option<Arc<AtomicBool>>,
 }
 
 impl VzEditorApp {
@@ -386,6 +392,7 @@ impl VzEditorApp {
         cc: &eframe::CreationContext<'_>,
         initial_paths: Vec<PathBuf>,
         settings: Settings,
+        restore: bool,
     ) -> Self {
         configure_japanese_fonts(&cc.egui_ctx);
         Self::configure_visuals(&cc.egui_ctx);
@@ -458,10 +465,21 @@ impl VzEditorApp {
             key_scheme: settings.key_scheme,
             select_mode: false,
             clipboard_out: None,
+            quit_request: None,
         };
+        let session_dir = session::session_dir();
+        if restore {
+            if let Some(dir) = &session_dir {
+                app.restore_session_from(dir);
+            }
+        }
         if !initial_paths.is_empty() {
             // 存在しないパスは新規ファイルとして開く（従来の `vz 新規.txt` と同じ）
             app.open_paths(initial_paths, true);
+        }
+        if let Some(dir) = session_dir {
+            let ctx = cc.egui_ctx.clone();
+            app.quit_request = Some(session::start_watcher(dir, move || ctx.request_repaint()));
         }
         app.sync_window_title(&cc.egui_ctx);
         app
@@ -1813,6 +1831,128 @@ impl VzEditorApp {
                 self.quit_after_save = false;
             }
         }
+    }
+
+    // --- 更新時の保存して終了 / 状態の復元（vz --save-and-quit / --restore） ---
+
+    /// 外部からの終了要求を受け取っていれば、状態を保存して終了する。
+    fn poll_quit_request(&mut self, ctx: &egui::Context) {
+        let requested = self
+            .quit_request
+            .as_ref()
+            .is_some_and(|f| f.swap(false, Ordering::SeqCst));
+        if !requested {
+            return;
+        }
+        let Some(dir) = session::session_dir() else {
+            return;
+        };
+        if let Err(e) = self.save_session_to(&dir) {
+            // 保存できなければ終了しない（要求側には完了として返す）
+            session::finish_request(&dir);
+            self.status_message = format!("終了要求: 状態を保存できないため終了を中止しました: {e}");
+            return;
+        }
+        session::finish_request(&dir);
+        self.close_now(ctx);
+    }
+
+    /// 未保存のファイルを保存し、無題・保存できなかったバッファは `dir` に一時保存して、
+    /// 開いているバッファの一覧を `dir/session.ini` に追記する。
+    fn save_session_to(&mut self, dir: &Path) -> std::io::Result<()> {
+        fs::create_dir_all(dir)?;
+        let mut entries = Vec::new();
+        for idx in 0..self.buffers.len() {
+            if self.buffers[idx].is_untouched_untitled() {
+                continue;
+            }
+            let active = idx == self.active_buf;
+            let slot = &mut self.buffers[idx];
+            let buf = &mut slot.buffer;
+            let mut saved = !buf.dirty;
+            if buf.dirty {
+                if let Some(path) = buf.file_path.clone() {
+                    saved = buf.save_to_path(&path).is_ok();
+                }
+            }
+            let mut entry = SessionEntry {
+                kind: EntryKind::File,
+                line: buf.cursor_line,
+                col: buf.cursor_col,
+                markdown_view: slot.markdown_view,
+                active,
+                crlf: buf.line_ending == "\r\n",
+                temp: None,
+                path: buf.file_path.clone(),
+            };
+            if !saved || buf.file_path.is_none() {
+                let temp = session::temp_path(dir, idx);
+                fs::write(&temp, buf.lines.join("\n"))?;
+                entry.kind = EntryKind::Unsaved;
+                entry.temp = Some(temp);
+            }
+            entries.push(entry);
+        }
+        session::append_session(dir, &entries)
+    }
+
+    /// `dir/session.ini` のバッファを開き直す。読み終えた一時保存ファイルは削除する。
+    fn restore_session_from(&mut self, dir: &Path) {
+        let entries = session::take_session(dir);
+        if entries.is_empty() {
+            return;
+        }
+        let mut active: Option<usize> = None;
+        let mut restored = 0usize;
+        for e in &entries {
+            let ok = match e.kind {
+                EntryKind::File => {
+                    let path = e.path.clone().unwrap_or_default();
+                    let before = self.buffers.len();
+                    self.open_paths(vec![path.clone()], true);
+                    // 開けた（または既に開いていた）ときだけ active_buf がそのファイルを指す
+                    self.cur_buf().file_path.as_deref() == Some(path.as_path())
+                        || self.buffers.len() > before
+                }
+                EntryKind::Unsaved => {
+                    let temp = e.temp.clone().unwrap_or_default();
+                    match fs::read_to_string(&temp) {
+                        Ok(text) => {
+                            let mut buf = TextBuffer::new();
+                            buf.lines = text.split('\n').map(String::from).collect();
+                            buf.file_path = e.path.clone();
+                            buf.line_ending = if e.crlf { "\r\n" } else { "\n" };
+                            buf.dirty = true;
+                            buf.revision = 1;
+                            self.add_buffer(buf);
+                            let _ = fs::remove_file(&temp);
+                            true
+                        }
+                        Err(_) => false,
+                    }
+                }
+            };
+            if !ok {
+                continue;
+            }
+            restored += 1;
+            let slot = self.cur_slot_mut();
+            slot.buffer.set_cursor(e.line, e.col);
+            slot.markdown_view = e.markdown_view && slot.buffer.is_markdown();
+            slot.md_scroll_dirty = true;
+            if e.active {
+                active = Some(self.active_buf);
+            }
+        }
+        if let Some(idx) = active {
+            self.switch_buffer_to(idx);
+        }
+        self.mode = AppMode::Editor;
+        self.need_scroll_to_cursor = true;
+        self.status_message = format!(
+            "前回の状態を復元しました: {restored} / {} 個のバッファ",
+            entries.len()
+        );
     }
 
     // --- Clipboard & Edit Menu Helpers ---
@@ -6157,6 +6297,7 @@ impl eframe::App for VzEditorApp {
         window_style::set_opacity_percent(self.bg_opacity);
         window_style::set_text_opacity_percent(self.text_opacity);
         self.handle_close_request(ctx);
+        self.poll_quit_request(ctx);
         self.handle_dropped_files(ctx);
         self.poll_dialog();
         self.poll_send(ctx);
@@ -6243,7 +6384,58 @@ mod tests {
             key_scheme: KeyScheme::Vz,
             select_mode: false,
             clipboard_out: None,
+            quit_request: None,
         }
+    }
+
+    #[test]
+    fn test_save_session_and_restore() {
+        let dir = std::env::temp_dir().join(format!("vz_session_app_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let saved_path = dir.join("a.txt");
+        let dirty_path = dir.join("b.md");
+        fs::write(&saved_path, "one\ntwo\nthree").unwrap();
+        fs::write(&dirty_path, "# old").unwrap();
+        let session_dir = dir.join("session");
+
+        let mut app = make_test_app();
+        app.buffers.clear();
+        app.buffers.push(BufferSlot::new(TextBuffer::from_file(&saved_path).unwrap()));
+        app.buffers[0].buffer.set_cursor(2, 3);
+        let mut b = TextBuffer::from_file(&dirty_path).unwrap();
+        b.set_cursor(0, 5);
+        b.insert_text(" new");
+        app.buffers.push(BufferSlot::new(b));
+        app.buffers[1].markdown_view = true;
+        let mut u = TextBuffer::new();
+        u.insert_text("無題の内容\n2行目");
+        app.buffers.push(BufferSlot::new(u));
+        app.buffers.push(BufferSlot::new(TextBuffer::new())); // 未編集の無題は残さない
+        app.active_buf = 2;
+
+        app.save_session_to(&session_dir).unwrap();
+        // パスのある未保存バッファは保存される
+        assert_eq!(fs::read_to_string(&dirty_path).unwrap(), "# old new");
+        assert!(!app.buffers[1].buffer.dirty);
+
+        let mut app2 = make_test_app();
+        app2.buffers = vec![BufferSlot::new(TextBuffer::new())];
+        app2.active_buf = 0;
+        app2.restore_session_from(&session_dir);
+        assert_eq!(app2.buffers.len(), 3);
+        assert_eq!(app2.buffers[0].buffer.file_path.as_deref(), Some(saved_path.as_path()));
+        assert_eq!(app2.buffers[0].buffer.cursor_pos(), (2, 3));
+        assert!(app2.buffers[1].markdown_view);
+        assert_eq!(app2.buffers[1].buffer.lines, vec!["# old new"]);
+        let u2 = &app2.buffers[2].buffer;
+        assert!(u2.file_path.is_none() && u2.dirty);
+        assert_eq!(u2.lines, vec!["無題の内容", "2行目"]);
+        assert_eq!(app2.active_buf, 2);
+        // 状態ファイルと一時保存ファイルは消える
+        assert_eq!(fs::read_dir(&session_dir).unwrap().count(), 0);
+
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
