@@ -1,4 +1,4 @@
-use crate::buffer::{char_to_byte_idx, expand_tabs_for_display, TextBuffer};
+use crate::buffer::{char_to_byte_idx, expand_tabs_for_display, TextBuffer, TextPos};
 use crate::dialog::{spawn_open_dialog, spawn_save_dialog, DialogResult};
 use crate::filer::{
     copy_entry, create_dir, create_file, delete_entry, format_size, move_entry, rename_entry,
@@ -7,7 +7,7 @@ use crate::filer::{
 use crate::fonts::configure_japanese_fonts;
 use crate::markdown::{parse_markdown, render_markdown_view, MdBlock};
 use crate::send_to_app::{prepare_text, spawn_send, SendResult, SendTarget};
-use crate::settings::Settings;
+use crate::settings::{KeyScheme, Settings};
 use crate::window_style::{self, bg};
 use eframe::egui::{
     self, Align2, Color32, CornerRadius, Event, FontId, ImeEvent, Key, Pos2, Rect, Sense, Stroke,
@@ -69,6 +69,8 @@ const TEXT_AMBER: Color32 = Color32::from_rgb(255, 220, 96);
 
 const CURSOR_FILL: Color32 = Color32::from_rgba_premultiplied(80, 220, 255, 110);
 const CURSOR_BAR: Color32 = Color32::from_rgb(120, 244, 255);
+/// 範囲選択の背景色
+const SELECTION_BG: Color32 = Color32::from_rgb(38, 108, 190);
 const PREEDIT_BG: Color32 = Color32::from_rgb(28, 72, 134);
 const PREEDIT_FG: Color32 = Color32::from_rgb(255, 246, 160);
 const PREEDIT_UNDERLINE: Color32 = Color32::from_rgb(112, 236, 255);
@@ -98,6 +100,13 @@ enum EditorAction {
     MoveWordRight,
     SwitchToFiler,
     SaveFile,
+    // サクラ互換の F キー
+    Cut,
+    Copy,
+    Paste,
+    BeginSelect,
+    /// 割り当てなし（F キー欄の空欄）
+    Nop,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -115,6 +124,8 @@ enum FilerAction {
 }
 
 const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
+/// ビルド日時（build.rs が埋め込む。例: 2026/11/24 12:00）
+const BUILD_AT: &str = env!("VZ_BUILD_AT");
 /// 原作 LZ Editor (MIT License)
 const BASE_REPO_URL: &str = "https://github.com/TouryuTamane/lz-editor";
 
@@ -208,6 +219,8 @@ enum MenuAction {
     TextOpacityReset,
     SendToClaudeCode,
     SendToCodex,
+    ToggleKeyScheme,
+    SelectAll,
     // About
     ShowHelp,
     ShowAbout,
@@ -354,6 +367,13 @@ pub struct VzEditorApp {
     send_prefix: bool,
     /// 送信中の処理（別スレッド）
     pending_send: Option<Receiver<SendResult>>,
+
+    // キー割り当て（サクラ互換 / VZ 互換）
+    key_scheme: KeyScheme,
+    /// サクラの F6「範囲選択開始」: 移動キーで選択を広げるモード
+    select_mode: bool,
+    /// フレームの最後にクリップボードへ書き出す文字列（ctx を持たない処理から使う）
+    clipboard_out: Option<String>,
 }
 
 impl VzEditorApp {
@@ -370,8 +390,14 @@ impl VzEditorApp {
             o.zoom_with_keyboard = false;
         });
 
-        let status_message =
-            String::from("VZ互換: ^E/^S/^D/^X移動  ^Wバッファ切替  ^P MDビュー  ESCファイラー  F1ヘルプ");
+        let status_message = match settings.key_scheme {
+            KeyScheme::Sakura => String::from(
+                "サクラ互換: ^S保存  Shift+移動で選択  ^Tabバッファ切替  Escファイラー  F1ヘルプ（ツール→キー割り当てで VZ 互換へ）",
+            ),
+            KeyScheme::Vz => String::from(
+                "VZ互換: ^E/^S/^D/^X移動  ^Wバッファ切替  ^P MDビュー  ESCファイラー  F1ヘルプ",
+            ),
+        };
         let mut initial_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
         if let Some(first) = initial_paths.first() {
             let dir = if first.is_dir() {
@@ -422,6 +448,9 @@ impl VzEditorApp {
             allow_close: false,
             send_prefix: false,
             pending_send: None,
+            key_scheme: settings.key_scheme,
+            select_mode: false,
+            clipboard_out: None,
         };
         if !initial_paths.is_empty() {
             // 存在しないパスは新規ファイルとして開く（従来の `vz 新規.txt` と同じ）
@@ -489,6 +518,7 @@ impl VzEditorApp {
             text_opacity: self.text_opacity,
             always_on_top: self.always_on_top,
             font_size: self.font_size,
+            key_scheme: self.key_scheme,
         };
         if let Err(e) = settings.save() {
             self.status_message = format!("設定の保存に失敗しました: {e}");
@@ -645,6 +675,412 @@ impl VzEditorApp {
             Some(None) => self.status_message = "送信を取り消しました".to_string(),
             None => {}
         }
+    }
+
+    // --- キー割り当て（サクラ互換 / VZ 互換） ---
+
+    fn toggle_key_scheme(&mut self) {
+        self.key_scheme = match self.key_scheme {
+            KeyScheme::Sakura => KeyScheme::Vz,
+            KeyScheme::Vz => KeyScheme::Sakura,
+        };
+        // VZ 互換には範囲選択が無いので解除する
+        for slot in &mut self.buffers {
+            slot.buffer.clear_selection();
+        }
+        self.select_mode = false;
+        self.prefix = PrefixKey::None;
+        self.status_message = format!(
+            "キー割り当てを {} にしました（ツール→キー割り当てで切替）",
+            self.key_scheme.label()
+        );
+        self.save_settings();
+    }
+
+    fn is_sakura(&self) -> bool {
+        self.key_scheme == KeyScheme::Sakura
+    }
+
+    /// フレームの最後にクリップボードへ書き出す（内部クリップボードにも保持）。
+    fn copy_to_clipboard(&mut self, text: String) {
+        self.internal_clipboard = text.clone();
+        self.clipboard_out = Some(text);
+    }
+
+    fn view_mode_guard(&mut self) -> bool {
+        if self.is_markdown_view() {
+            self.status_message =
+                "ビューモード中は編集できません (Ctrl+Shift+V で編集モードへ)".to_string();
+            return true;
+        }
+        false
+    }
+
+    /// 選択範囲、選択が無ければ現在行（改行を含む）を返す。
+    fn selection_or_line_range(&self) -> (TextPos, TextPos) {
+        let buf = self.cur_buf();
+        if let Some(range) = buf.selection_range() {
+            return range;
+        }
+        let line = buf.cursor_line;
+        if line + 1 < buf.lines.len() {
+            ((line, 0), (line + 1, 0))
+        } else {
+            ((line, 0), (line, buf.line_char_len(line)))
+        }
+    }
+
+    /// サクラの切り取り（Ctrl+X / Shift+Del / F7）。選択が無ければ現在行を切り取る。
+    fn sakura_cut(&mut self) {
+        if self.view_mode_guard() {
+            return;
+        }
+        let had_selection = self.cur_buf().has_selection();
+        let (start, end) = self.selection_or_line_range();
+        if let Some(text) = self.cur_buf_mut().delete_range(start, end) {
+            self.copy_to_clipboard(text);
+            self.status_message = if had_selection {
+                "選択範囲を切り取りました".to_string()
+            } else {
+                "現在行を切り取りました".to_string()
+            };
+        }
+        self.select_mode = false;
+        self.need_scroll_to_cursor = true;
+    }
+
+    /// サクラのコピー（Ctrl+C / Ctrl+Ins / F8）。選択が無ければ現在行、ビューモードでは全文。
+    fn sakura_copy(&mut self) {
+        let (text, msg) = if self.is_markdown_view() {
+            (
+                self.cur_buf().lines.join(self.cur_buf().line_ending),
+                "ドキュメント全体をコピーしました",
+            )
+        } else if let Some(text) = self.cur_buf().selected_text() {
+            (text, "選択範囲をコピーしました")
+        } else {
+            let (start, end) = self.selection_or_line_range();
+            (self.cur_buf().text_in_range(start, end), "現在行をコピーしました")
+        };
+        self.copy_to_clipboard(text);
+        self.select_mode = false;
+        self.status_message = msg.to_string();
+    }
+
+    /// 貼り付け（選択中は置き換え）。
+    fn sakura_paste_text(&mut self, text: &str) {
+        if self.view_mode_guard() || text.is_empty() {
+            return;
+        }
+        self.cur_buf_mut().insert_text(text);
+        self.select_mode = false;
+        self.need_scroll_to_cursor = true;
+    }
+
+    /// F9 の貼り付け（システムのクリップボード、無ければ内部クリップボード）。
+    fn sakura_paste_from_clipboard(&mut self) {
+        let text = read_system_clipboard().unwrap_or_else(|| self.internal_clipboard.clone());
+        if text.is_empty() {
+            self.status_message = "クリップボードが空です".to_string();
+        } else {
+            self.sakura_paste_text(&text);
+        }
+    }
+
+    /// 範囲を切り取る（delete_only なら削除のみ）。
+    fn sakura_cut_range(&mut self, start: TextPos, end: TextPos, delete_only: bool, what: &str) {
+        if self.view_mode_guard() {
+            return;
+        }
+        if let Some(text) = self.cur_buf_mut().delete_range(start, end) {
+            if delete_only {
+                self.status_message = format!("{what}を削除しました");
+            } else {
+                self.copy_to_clipboard(text);
+                self.status_message = format!("{what}を切り取りました");
+            }
+        }
+        self.select_mode = false;
+        self.need_scroll_to_cursor = true;
+    }
+
+    /// 単語単位で移動した先の位置（カーソルは動かさない）。
+    fn word_boundary_pos(&mut self, right: bool) -> TextPos {
+        let buf = self.cur_buf_mut();
+        let cur = buf.cursor_pos();
+        if right {
+            buf.move_word_right();
+        } else {
+            buf.move_word_left();
+        }
+        let pos = buf.cursor_pos();
+        buf.set_cursor(cur.0, cur.1);
+        pos
+    }
+
+    fn toggle_select_mode(&mut self) {
+        if self.view_mode_guard() {
+            return;
+        }
+        self.select_mode = !self.select_mode;
+        if self.select_mode {
+            let buf = self.cur_buf_mut();
+            let pos = buf.cursor_pos();
+            buf.anchor = Some(pos);
+            self.status_message = "範囲選択開始（移動キーで選択、Esc で解除）".to_string();
+        } else {
+            self.status_message = "範囲選択モードを終了しました".to_string();
+        }
+    }
+
+    /// Markdown ビューでのサクラ互換キー（スクロール）。
+    fn sakura_md_view_key(&mut self, key: Key, ctrl: bool) -> bool {
+        let page = (self.cur_slot().md_viewport_h * 0.85).max(self.line_height * 4.0);
+        match (key, ctrl) {
+            (Key::ArrowUp, _) => self.scroll_markdown_by(-self.line_height * 2.5),
+            (Key::ArrowDown, _) => self.scroll_markdown_by(self.line_height * 2.5),
+            (Key::PageUp, _) => self.scroll_markdown_by(-page),
+            (Key::PageDown, _) | (Key::Space, false) => self.scroll_markdown_by(page),
+            (Key::Home, _) => self.scroll_markdown_to_top(),
+            (Key::End, _) => self.scroll_markdown_to_bottom(),
+            (Key::P, true) => self.toggle_markdown_view(),
+            _ => return ctrl,
+        }
+        true
+    }
+
+    /// サクラエディタ互換のキー処理（エディター画面）。処理したら true。
+    /// Ctrl+X / C / V、Shift+Del、Ctrl+Ins、Shift+Ins は egui が Cut / Copy / Paste イベントに
+    /// 変換するため、ここではなく handle_editor_events で扱う。
+    fn handle_sakura_key(&mut self, key: Key, modifiers: egui::Modifiers, in_md_view: bool) -> bool {
+        let ctrl = modifiers.ctrl || modifiers.command;
+        let shift = modifiers.shift;
+        if modifiers.alt {
+            // Alt 系は透過・最前面・送信（handle_events で処理済み）。サクラの Alt+P などは未対応
+            return false;
+        }
+
+        // ファンクションキー
+        match (key, ctrl, shift) {
+            (Key::F1, false, false) => {
+                self.show_help = !self.show_help;
+                return true;
+            }
+            (Key::F1, true, true) => {
+                self.show_help = false;
+                self.show_about = true;
+                return true;
+            }
+            (Key::F6, false, false) => {
+                self.toggle_select_mode();
+                return true;
+            }
+            (Key::F7, false, false) => {
+                self.sakura_cut();
+                return true;
+            }
+            (Key::F8, false, _) => {
+                self.sakura_copy();
+                return true;
+            }
+            (Key::F9, false, false) => {
+                self.sakura_paste_from_clipboard();
+                return true;
+            }
+            (Key::F10, false, true) => {
+                if !self.view_mode_guard() {
+                    self.cur_buf_mut().duplicate_line();
+                    self.need_scroll_to_cursor = true;
+                }
+                return true;
+            }
+            (Key::F2 | Key::F3 | Key::F4 | Key::F5 | Key::F6 | Key::F7 | Key::F9 | Key::F10
+            | Key::F11 | Key::F12, _, _) => {
+                self.status_message = format!("{key:?} はサクラ互換でまだ対応していません");
+                return true;
+            }
+            _ => {}
+        }
+
+        if key == Key::Escape {
+            if self.cur_buf().anchor.is_some() || self.select_mode {
+                self.cur_buf_mut().clear_selection();
+                self.select_mode = false;
+                self.status_message = "範囲選択を解除しました".to_string();
+            } else if self.show_help {
+                self.show_help = false;
+            } else {
+                self.enter_filer();
+            }
+            return true;
+        }
+
+        if self.handle_font_zoom_key(key, modifiers) {
+            return true;
+        }
+
+        if in_md_view {
+            return self.sakura_md_view_key(key, ctrl);
+        }
+
+        // --- 移動（Shift または F6 の選択モードで範囲選択） ---
+        let page = self.last_visible_lines;
+        let is_move = matches!(
+            key,
+            Key::ArrowLeft
+                | Key::ArrowRight
+                | Key::ArrowUp
+                | Key::ArrowDown
+                | Key::Home
+                | Key::End
+                | Key::PageUp
+                | Key::PageDown
+        );
+        if is_move {
+            // Ctrl+↑ / ↓（Shift なし）は1行スクロール
+            if ctrl && !shift && matches!(key, Key::ArrowUp | Key::ArrowDown) {
+                let dy = if key == Key::ArrowUp {
+                    -self.line_height
+                } else {
+                    self.line_height
+                };
+                let slot = self.cur_slot_mut();
+                slot.scroll_y = (slot.scroll_y + dy).max(0.0);
+                return true;
+            }
+            let extend = shift || self.select_mode;
+            let buf = self.cur_buf_mut();
+            if extend {
+                buf.begin_selection_if_none();
+            } else {
+                buf.clear_selection();
+            }
+            match (key, ctrl) {
+                (Key::ArrowLeft, false) => buf.move_left(),
+                (Key::ArrowLeft, true) => buf.move_word_left(),
+                (Key::ArrowRight, false) => buf.move_right(),
+                (Key::ArrowRight, true) => buf.move_word_right(),
+                (Key::ArrowUp, false) => buf.move_up(),
+                (Key::ArrowUp, true) => {
+                    buf.move_up();
+                    buf.move_up();
+                }
+                (Key::ArrowDown, false) => buf.move_down(),
+                (Key::ArrowDown, true) => {
+                    buf.move_down();
+                    buf.move_down();
+                }
+                (Key::Home, false) => buf.move_line_start(),
+                (Key::Home, true) => buf.move_doc_start(),
+                (Key::End, false) => buf.move_line_end(),
+                (Key::End, true) => buf.move_doc_end(),
+                (Key::PageUp, false) => buf.move_page_up(page),
+                (Key::PageUp, true) => buf.move_page_up((page / 2).max(1)),
+                (Key::PageDown, false) => buf.move_page_down(page),
+                (Key::PageDown, true) => buf.move_page_down((page / 2).max(1)),
+                _ => {}
+            }
+            self.need_scroll_to_cursor = true;
+            return true;
+        }
+
+        if ctrl {
+            let cur = self.cur_buf().cursor_pos();
+            match key {
+                Key::N => self.new_empty_buffer(),
+                Key::O => self.trigger_open(),
+                Key::S if shift => self.trigger_save_as(),
+                Key::S => self.trigger_save(),
+                Key::Tab => self.switch_buffer_step(if shift { -1 } else { 1 }),
+                Key::Z => self.menu_undo(),
+                Key::Y => self.menu_redo(),
+                Key::A => {
+                    self.cur_buf_mut().select_all();
+                    self.status_message = "すべて選択しました".to_string();
+                }
+                Key::W => self.cur_buf_mut().select_word_at_cursor(),
+                Key::P => self.toggle_markdown_view(),
+                Key::E if shift => {
+                    if !self.view_mode_guard() {
+                        self.cur_buf_mut().delete_current_line();
+                        self.need_scroll_to_cursor = true;
+                        self.status_message = "行を削除しました".to_string();
+                    }
+                }
+                Key::E => {
+                    let (start, end) = {
+                        let buf = self.cur_buf();
+                        if cur.0 + 1 < buf.lines.len() {
+                            ((cur.0, 0), (cur.0 + 1, 0))
+                        } else {
+                            ((cur.0, 0), (cur.0, buf.line_char_len(cur.0)))
+                        }
+                    };
+                    self.sakura_cut_range(start, end, false, "行");
+                }
+                Key::K => {
+                    let buf = self.cur_buf();
+                    let len = buf.line_char_len(cur.0);
+                    // 行末にいるときは改行を対象にする
+                    let end = if cur.1 >= len && cur.0 + 1 < buf.lines.len() {
+                        (cur.0 + 1, 0)
+                    } else {
+                        (cur.0, len)
+                    };
+                    self.sakura_cut_range(cur, end, shift, "行末まで");
+                }
+                Key::U => self.sakura_cut_range((cur.0, 0), cur, shift, "行頭まで"),
+                Key::D => {
+                    let (s, e) = self.cur_buf().word_range_at(cur);
+                    self.sakura_cut_range((cur.0, s), (cur.0, e), shift, "単語");
+                }
+                Key::I => {
+                    if !self.view_mode_guard() {
+                        self.cur_buf_mut().duplicate_line();
+                        self.need_scroll_to_cursor = true;
+                    }
+                }
+                Key::Backspace => {
+                    let start = self.word_boundary_pos(false);
+                    self.sakura_cut_range(start, cur, true, "単語の左側");
+                }
+                Key::Delete => {
+                    let end = self.word_boundary_pos(true);
+                    self.sakura_cut_range(cur, end, true, "単語の右側");
+                }
+                Key::F | Key::R | Key::G | Key::J => {
+                    self.status_message =
+                        "検索・置換・Grep・行ジャンプはまだ対応していません".to_string();
+                }
+                _ => {}
+            }
+            // Ctrl の組み合わせは文字入力に流さない
+            return true;
+        }
+
+        // --- 修飾キーなしの編集キー ---
+        match key {
+            Key::Enter => {
+                self.cur_buf_mut().insert_newline();
+            }
+            Key::Backspace => {
+                self.cur_buf_mut().backspace();
+            }
+            Key::Delete => {
+                self.cur_buf_mut().delete_char_at_cursor();
+            }
+            Key::Tab if !shift => {
+                self.cur_buf_mut().insert_text("\t");
+            }
+            Key::Insert => {
+                self.status_message = "挿入 / 上書きの切替はまだ対応していません".to_string();
+                return true;
+            }
+            _ => return false,
+        }
+        self.select_mode = false;
+        self.need_scroll_to_cursor = true;
+        true
     }
 
     fn toggle_always_on_top(&mut self, ctx: &egui::Context) {
@@ -1364,6 +1800,10 @@ impl VzEditorApp {
         if self.mode != AppMode::Editor {
             return;
         }
+        if self.is_sakura() {
+            self.sakura_copy();
+            return;
+        }
         let text = if self.is_markdown_view() {
             self.cur_buf().lines.join(self.cur_buf().line_ending)
         } else {
@@ -1380,6 +1820,10 @@ impl VzEditorApp {
 
     fn menu_cut(&mut self, ctx: &egui::Context) {
         if self.mode != AppMode::Editor || self.is_markdown_view() {
+            return;
+        }
+        if self.is_sakura() {
+            self.sakura_cut();
             return;
         }
         let line = self.cur_buf().current_line_str().to_string();
@@ -1420,30 +1864,32 @@ impl VzEditorApp {
         let in_editor = self.mode == AppMode::Editor;
         let in_md_view = self.is_markdown_view();
         let can_edit = in_editor && !in_md_view;
+        let sakura = self.is_sakura();
+        let sc = |sakura_key: &'static str, vz_key: &'static str| if sakura { sakura_key } else { vz_key };
 
         match menu {
             TopMenu::File => vec![
                 MenuEntry::Item {
                     label: "新規作成",
-                    shortcut: "F2",
+                    shortcut: sc("Ctrl+N", "F2"),
                     action: MenuAction::NewBuffer,
                     enabled: true,
                 },
                 MenuEntry::Item {
                     label: "ファイルを開く...",
-                    shortcut: "F3",
+                    shortcut: sc("Ctrl+O", "F3"),
                     action: MenuAction::OpenFile,
                     enabled: true,
                 },
                 MenuEntry::Item {
                     label: "上書き保存",
-                    shortcut: "^K^D / F10",
+                    shortcut: sc("Ctrl+S", "^K^D / F10"),
                     action: MenuAction::SaveFile,
                     enabled: true,
                 },
                 MenuEntry::Item {
                     label: "名前を付けて保存...",
-                    shortcut: "",
+                    shortcut: sc("Ctrl+Shift+S", ""),
                     action: MenuAction::SaveAs,
                     enabled: true,
                 },
@@ -1460,14 +1906,14 @@ impl VzEditorApp {
                     } else {
                         "エディタ画面へ戻る"
                     },
-                    shortcut: "ESC / F9",
+                    shortcut: sc("Esc", "ESC / F9"),
                     action: MenuAction::ToggleFiler,
                     enabled: true,
                 },
                 MenuEntry::Separator,
                 MenuEntry::Item {
                     label: "終了",
-                    shortcut: "^K^Q",
+                    shortcut: sc("Alt+F4", "^K^Q"),
                     action: MenuAction::Quit,
                     enabled: true,
                 },
@@ -1475,30 +1921,36 @@ impl VzEditorApp {
             TopMenu::Edit => vec![
                 MenuEntry::Item {
                     label: "元に戻す (Undo)",
-                    shortcut: "",
+                    shortcut: sc("Ctrl+Z", ""),
                     action: MenuAction::Undo,
                     enabled: can_edit && self.cur_buf().can_undo(),
                 },
                 MenuEntry::Item {
                     label: "やり直し (Redo)",
-                    shortcut: "",
+                    shortcut: sc("Ctrl+Y", ""),
                     action: MenuAction::Redo,
                     enabled: can_edit && self.cur_buf().can_redo(),
                 },
                 MenuEntry::Separator,
                 MenuEntry::Item {
-                    label: "切り取り (現在行)",
-                    shortcut: "",
+                    label: if sakura {
+                        "切り取り"
+                    } else {
+                        "切り取り (現在行)"
+                    },
+                    shortcut: sc("Ctrl+X", ""),
                     action: MenuAction::Cut,
                     enabled: can_edit,
                 },
                 MenuEntry::Item {
                     label: if in_md_view {
                         "コピー (全文)"
+                    } else if sakura {
+                        "コピー"
                     } else {
                         "コピー (現在行)"
                     },
-                    shortcut: "",
+                    shortcut: sc("Ctrl+C", ""),
                     action: MenuAction::Copy,
                     enabled: in_editor,
                 },
@@ -1508,10 +1960,16 @@ impl VzEditorApp {
                     action: MenuAction::Paste,
                     enabled: can_edit,
                 },
+                MenuEntry::Item {
+                    label: "すべて選択",
+                    shortcut: sc("Ctrl+A", ""),
+                    action: MenuAction::SelectAll,
+                    enabled: can_edit && sakura,
+                },
                 MenuEntry::Separator,
                 MenuEntry::Item {
                     label: "現在行の削除",
-                    shortcut: "Ctrl+Y",
+                    shortcut: sc("Ctrl+Shift+E", "Ctrl+Y"),
                     action: MenuAction::DeleteLine,
                     enabled: can_edit,
                 },
@@ -1521,7 +1979,7 @@ impl VzEditorApp {
                     } else {
                         "行頭へ移動"
                     },
-                    shortcut: "^Q^S / F4",
+                    shortcut: sc("Home", "^Q^S / F4"),
                     action: MenuAction::MoveLineStart,
                     enabled: in_editor,
                 },
@@ -1531,7 +1989,7 @@ impl VzEditorApp {
                     } else {
                         "行末へ移動"
                     },
-                    shortcut: "^Q^D / F5",
+                    shortcut: sc("End", "^Q^D / F5"),
                     action: MenuAction::MoveLineEnd,
                     enabled: in_editor,
                 },
@@ -1543,7 +2001,7 @@ impl VzEditorApp {
                     } else {
                         "Markdown ビューモードへ切替"
                     },
-                    shortcut: "Ctrl+P",
+                    shortcut: sc("Ctrl+Shift+V", "Ctrl+P"),
                     action: MenuAction::ToggleMarkdownView,
                     enabled: in_editor,
                 },
@@ -1569,7 +2027,7 @@ impl VzEditorApp {
                 MenuEntry::Separator,
                 MenuEntry::Item {
                     label: "次のバッファへ切替",
-                    shortcut: "Ctrl+W",
+                    shortcut: sc("Ctrl+Tab", "Ctrl+W"),
                     action: MenuAction::NextBuffer,
                     enabled: self.buffers.len() > 1,
                 },
@@ -1620,6 +2078,17 @@ impl VzEditorApp {
                     shortcut: "Alt+Shift+0",
                     action: MenuAction::TextOpacityReset,
                     enabled: self.text_opacity < window_style::MAX_OPACITY,
+                },
+                MenuEntry::Separator,
+                MenuEntry::Item {
+                    label: if sakura {
+                        "キー割り当て: サクラ互換 → VZ互換へ切替"
+                    } else {
+                        "キー割り当て: VZ互換 → サクラ互換へ切替"
+                    },
+                    shortcut: "",
+                    action: MenuAction::ToggleKeyScheme,
+                    enabled: true,
                 },
                 MenuEntry::Separator,
                 MenuEntry::Item {
@@ -1734,6 +2203,12 @@ impl VzEditorApp {
             MenuAction::TextOpacityReset => self.set_text_opacity(window_style::MAX_OPACITY),
             MenuAction::SendToClaudeCode => self.start_send(SendTarget::ClaudeCode),
             MenuAction::SendToCodex => self.start_send(SendTarget::Codex),
+            MenuAction::ToggleKeyScheme => self.toggle_key_scheme(),
+            MenuAction::SelectAll => {
+                if self.mode == AppMode::Editor && !self.is_markdown_view() {
+                    self.cur_buf_mut().select_all();
+                }
+            }
             MenuAction::ShowHelp => {
                 self.show_help = !self.show_help;
             }
@@ -1867,6 +2342,11 @@ impl VzEditorApp {
             EditorAction::SaveFile => {
                 self.trigger_save();
             }
+            EditorAction::Cut => self.sakura_cut(),
+            EditorAction::Copy => self.sakura_copy(),
+            EditorAction::Paste => self.sakura_paste_from_clipboard(),
+            EditorAction::BeginSelect => self.toggle_select_mode(),
+            EditorAction::Nop => {}
         }
     }
 
@@ -2028,6 +2508,7 @@ impl VzEditorApp {
                         self.ime_preedit.clear();
                         if !in_md_view && !text.is_empty() {
                             self.prefix = PrefixKey::None;
+                            self.select_mode = false;
                             self.cur_buf_mut().insert_text(&text);
                             self.need_scroll_to_cursor = true;
                         }
@@ -2044,6 +2525,11 @@ impl VzEditorApp {
                         continue;
                     }
                     suppress_text_this_frame = true;
+                    if self.is_sakura() {
+                        // Ctrl+X / Shift+Del
+                        self.sakura_cut();
+                        continue;
+                    }
                     if self.prefix == PrefixKey::None {
                         if in_md_view {
                             self.scroll_markdown_by(self.line_height * 2.5);
@@ -2063,6 +2549,13 @@ impl VzEditorApp {
                         continue;
                     }
                     suppress_text_this_frame = true;
+                    if self.is_sakura() {
+                        // Ctrl+C / Ctrl+Ins（Ctrl+Shift+C はサクラでは C/C++ ヘッダを開く: 対象外）
+                        if !modifiers_now.shift {
+                            self.sakura_copy();
+                        }
+                        continue;
+                    }
                     if self.prefix == PrefixKey::CtrlQ {
                         self.prefix = PrefixKey::None;
                         if in_md_view {
@@ -2082,6 +2575,16 @@ impl VzEditorApp {
                         continue;
                     }
                     suppress_text_this_frame = true;
+                    if self.is_sakura() {
+                        if (modifiers_now.ctrl || modifiers_now.command) && modifiers_now.shift {
+                            // Ctrl+Shift+V: Markdown 編集 / ビュー切替（egui は貼り付けとして届ける）
+                            self.toggle_markdown_view();
+                        } else {
+                            // Ctrl+V / Shift+Ins（選択中は置き換え）
+                            self.sakura_paste_text(&text);
+                        }
+                        continue;
+                    }
                     self.prefix = PrefixKey::None;
                     if !in_md_view && !text.is_empty() {
                         self.cur_buf_mut().insert_text(&text);
@@ -2100,6 +2603,17 @@ impl VzEditorApp {
                     }
 
                     let ctrl = modifiers.ctrl || modifiers.command;
+
+                    // 0. サクラ互換のキー割り当て（VZ の処理は通らない）
+                    if self.is_sakura() {
+                        if self.handle_sakura_key(key, modifiers, in_md_view) {
+                            suppress_text_this_frame = true;
+                            if self.mode == AppMode::Filer {
+                                return;
+                            }
+                        }
+                        continue;
+                    }
 
                     // 1. Two-stroke VZ prefix keys (^Q, ^K)
                     match self.prefix {
@@ -2454,6 +2968,8 @@ impl VzEditorApp {
                     }
                     let filtered: String = text.chars().filter(|c| !c.is_control()).collect();
                     if !filtered.is_empty() {
+                        // 選択中は置き換え（サクラ互換）。F6 の選択モードも終える
+                        self.select_mode = false;
                         self.cur_buf_mut().insert_text(&filtered);
                         self.need_scroll_to_cursor = true;
                     }
@@ -2840,8 +3356,27 @@ impl VzEditorApp {
         opacity: u8,
         text_opacity: u8,
         always_on_top: bool,
+        key_scheme: KeyScheme,
     ) -> Option<MenuAction> {
         let mut cmd = None;
+        let scheme_resp = ui
+            .add(
+                egui::Button::new(
+                    egui::RichText::new(match key_scheme {
+                        KeyScheme::Sakura => "サクラ",
+                        KeyScheme::Vz => "VZ",
+                    })
+                    .font(FontId::monospace(12.5))
+                    .strong()
+                    .color(TEXT_CYAN),
+                )
+                .fill(BG_TAB_INACTIVE)
+                .stroke(Stroke::new(1.0_f32, BORDER_BLUE)),
+            )
+            .on_hover_text("キー割り当ての切替（サクラ互換 / VZ互換）");
+        if scheme_resp.clicked() {
+            cmd = Some(MenuAction::ToggleKeyScheme);
+        }
         let top_resp = ui
             .add(
                 egui::Button::new(
@@ -3194,6 +3729,7 @@ impl VzEditorApp {
                                 self.bg_opacity,
                                 self.text_opacity,
                                 self.always_on_top,
+                                self.key_scheme,
                             ) {
                                 win_cmd = Some(cmd);
                             }
@@ -3314,6 +3850,7 @@ impl VzEditorApp {
                                 self.bg_opacity,
                                 self.text_opacity,
                                 self.always_on_top,
+                                self.key_scheme,
                             ) {
                                 win_cmd = Some(cmd);
                             }
@@ -3453,6 +3990,27 @@ impl VzEditorApp {
                 ("F9", "ファイラ", EditorAction::SwitchToFiler),
                 ("F10", "保存", EditorAction::SaveFile),
             ]
+        };
+
+        // サクラ互換の F キー（未対応のキーは空欄）
+        let sakura_left: &[(&str, &str, EditorAction)] = &[
+            ("F1", "ヘルプ", EditorAction::ToggleHelp),
+            ("F2", "", EditorAction::Nop),
+            ("F3", "", EditorAction::Nop),
+            ("F4", "", EditorAction::Nop),
+            ("F5", "", EditorAction::Nop),
+        ];
+        let sakura_right: &[(&str, &str, EditorAction)] = &[
+            ("F6", "選択", EditorAction::BeginSelect),
+            ("F7", "切取", EditorAction::Cut),
+            ("F8", "コピー", EditorAction::Copy),
+            ("F9", "貼付", EditorAction::Paste),
+            ("F10", "", EditorAction::Nop),
+        ];
+        let (keys_left, keys_right) = if self.is_sakura() {
+            (sakura_left, sakura_right)
+        } else {
+            (keys_left, keys_right)
         };
 
         let mut clicked_action: Option<EditorAction> = None;
@@ -3750,6 +4308,28 @@ impl VzEditorApp {
                 let mut scroll_y = self.cur_slot().scroll_y;
                 let mut scroll_x = self.cur_slot().scroll_x;
 
+                // Ctrl+マウスホイール: フォントサイズ（1ノッチ 1段階）
+                if response.hovered() {
+                    let wheel_steps: Vec<f32> = ctx.input(|i| {
+                        i.events
+                            .iter()
+                            .filter_map(|e| match e {
+                                Event::MouseWheel {
+                                    delta, modifiers, ..
+                                } if modifiers.ctrl || modifiers.command => Some(delta.y),
+                                _ => None,
+                            })
+                            .collect()
+                    });
+                    for dy in wheel_steps {
+                        if dy > 0.0 {
+                            self.zoom_in_font();
+                        } else if dy < 0.0 {
+                            self.zoom_out_font();
+                        }
+                    }
+                }
+
                 // Mouse wheel scrolling
                 if response.hovered() {
                     let scroll_delta = ctx.input(|i| i.smooth_scroll_delta);
@@ -3784,49 +4364,98 @@ impl VzEditorApp {
                 scroll_y = scroll_y.clamp(0.0, max_scroll_y);
                 scroll_x = scroll_x.max(0.0);
 
-                // Click-to-place cursor
-                if response.clicked()
-                    && self.open_menu.is_none()
+                // マウス: クリックでカーソル移動。サクラ互換ではドラッグ・Shift+クリックで範囲選択、
+                // ダブルクリックで単語、トリプルクリックで行を選択する。
+                let can_click = self.open_menu.is_none()
                     && !self.show_about
                     && self.filer_modal.is_none()
-                    && self.inline_prompt.is_none()
-                {
-                    if let Some(pointer_pos) = response.interact_pointer_pos() {
-                        if editor_rect.contains(pointer_pos) {
-                            let rel_y = pointer_pos.y - editor_rect.min.y - top_pad + scroll_y;
-                            let target_line = ((rel_y / self.line_height).floor().max(0.0) as usize)
-                                .min(total_lines.saturating_sub(1));
-
-                            let click_x =
-                                (pointer_pos.x - editor_rect.min.x - left_pad + scroll_x).max(0.0);
-                            let line_str = self.cur_buf().lines[target_line].clone();
-                            let target_col = ui.fonts(|f| {
-                                let mut best_col = 0usize;
-                                let mut best_dist = click_x;
-                                let mut acc = String::new();
-                                for (idx, c) in line_str.chars().enumerate() {
-                                    if c == '\t' {
-                                        acc.push_str("    ");
-                                    } else {
-                                        acc.push(c);
-                                    }
-                                    let w = f
-                                        .layout_no_wrap(acc.clone(), font_id.clone(), TEXT_WHITE)
-                                        .size()
-                                        .x;
-                                    let dist = (w - click_x).abs();
-                                    if dist < best_dist {
-                                        best_dist = dist;
-                                        best_col = idx + 1;
-                                    }
-                                    if w > click_x + self.font_size * 2.0 {
-                                        break;
-                                    }
+                    && self.inline_prompt.is_none();
+                if can_click {
+                    let sakura = self.is_sakura();
+                    let shift_held = ctx.input(|i| i.modifiers.shift);
+                    // 画面上の位置 → (行, 文字位置)
+                    let hit = |this: &Self, pos: Pos2| -> TextPos {
+                        let rel_y = pos.y - editor_rect.min.y - top_pad + scroll_y;
+                        let target_line = ((rel_y / this.line_height).floor().max(0.0) as usize)
+                            .min(total_lines.saturating_sub(1));
+                        let click_x = (pos.x - editor_rect.min.x - left_pad + scroll_x).max(0.0);
+                        let line_str = &this.cur_buf().lines[target_line];
+                        let target_col = ui.fonts(|f| {
+                            let mut best_col = 0usize;
+                            let mut best_dist = click_x;
+                            let mut acc = String::new();
+                            for (idx, c) in line_str.chars().enumerate() {
+                                if c == '\t' {
+                                    acc.push_str("    ");
+                                } else {
+                                    acc.push(c);
                                 }
-                                best_col
-                            });
+                                let w = f
+                                    .layout_no_wrap(acc.clone(), font_id.clone(), TEXT_WHITE)
+                                    .size()
+                                    .x;
+                                let dist = (w - click_x).abs();
+                                if dist < best_dist {
+                                    best_dist = dist;
+                                    best_col = idx + 1;
+                                }
+                                if w > click_x + this.font_size * 2.0 {
+                                    break;
+                                }
+                            }
+                            best_col
+                        });
+                        (target_line, target_col)
+                    };
+
+                    if sakura && response.drag_started() {
+                        let origin = ctx
+                            .input(|i| i.pointer.press_origin())
+                            .or(response.interact_pointer_pos());
+                        if let Some(origin) = origin.filter(|p| editor_rect.contains(*p)) {
+                            let pos = hit(self, origin);
                             self.prefix = PrefixKey::None;
-                            self.cur_buf_mut().set_cursor(target_line, target_col);
+                            self.select_mode = false;
+                            let buf = self.cur_buf_mut();
+                            if shift_held {
+                                buf.begin_selection_if_none();
+                            } else {
+                                buf.anchor = Some(pos);
+                            }
+                            buf.set_cursor(pos.0, pos.1);
+                        }
+                    }
+                    if sakura && response.dragged() && self.cur_buf().anchor.is_some() {
+                        if let Some(pointer) = response.interact_pointer_pos() {
+                            let pos = hit(self, pointer);
+                            self.cur_buf_mut().set_cursor(pos.0, pos.1);
+                            self.need_scroll_to_cursor = true;
+                        }
+                    }
+
+                    if let Some(pointer) = response
+                        .interact_pointer_pos()
+                        .filter(|p| editor_rect.contains(*p))
+                    {
+                        if sakura && response.triple_clicked() {
+                            let pos = hit(self, pointer);
+                            self.cur_buf_mut().select_line(pos.0);
+                        } else if sakura && response.double_clicked() {
+                            let pos = hit(self, pointer);
+                            let buf = self.cur_buf_mut();
+                            buf.set_cursor(pos.0, pos.1);
+                            buf.select_word_at_cursor();
+                        } else if response.clicked() {
+                            let pos = hit(self, pointer);
+                            self.prefix = PrefixKey::None;
+                            self.select_mode = false;
+                            let buf = self.cur_buf_mut();
+                            if sakura && shift_held {
+                                buf.begin_selection_if_none();
+                            } else {
+                                buf.clear_selection();
+                            }
+                            buf.set_cursor(pos.0, pos.1);
                         }
                     }
                 }
@@ -3887,6 +4516,39 @@ impl VzEditorApp {
                     let text_origin_x = editor_rect.min.x + left_pad - scroll_x;
                     let text_y = y + (self.line_height - self.font_size) * 0.42;
                     let line = &self.cur_buf().lines[line_idx];
+
+                    // 範囲選択の背景
+                    if let Some((from, to, newline)) = self.cur_buf().line_selection(line_idx) {
+                        let x_of = |col: usize| -> f32 {
+                            if col == 0 {
+                                return 0.0;
+                            }
+                            let b = char_to_byte_idx(line, col);
+                            editor_painter
+                                .layout_no_wrap(
+                                    expand_tabs_for_display(&line[..b]),
+                                    font_id.clone(),
+                                    TEXT_WHITE,
+                                )
+                                .size()
+                                .x
+                        };
+                        let x0 = text_origin_x + x_of(from);
+                        let mut x1 = text_origin_x + x_of(to);
+                        if newline {
+                            x1 += self.font_size * 0.5;
+                        }
+                        if x1 > x0 {
+                            editor_painter.rect_filled(
+                                Rect::from_min_max(
+                                    Pos2::new(x0, y + 1.0),
+                                    Pos2::new(x1, y + self.line_height - 1.0),
+                                ),
+                                CornerRadius::ZERO,
+                                SELECTION_BG,
+                            );
+                        }
+                    }
 
                     if is_current && !self.ime_preedit.is_empty() {
                         let byte_pos = char_to_byte_idx(line, cur_col_now);
@@ -4513,6 +5175,26 @@ impl VzEditorApp {
             )
             .show(ctx, |ui| {
                 let rows: &[(&str, &str)] = match self.mode {
+                    AppMode::Editor if self.key_scheme == KeyScheme::Sakura => &[
+                        ("Ctrl+N / Ctrl+O", "新規作成 / 開く"),
+                        ("Ctrl+S / Ctrl+Shift+S", "上書き保存 / 名前を付けて保存"),
+                        ("Ctrl+Z / Ctrl+Y", "元に戻す / やり直し"),
+                        ("Ctrl+X / Ctrl+C / Ctrl+V", "切り取り / コピー / 貼り付け (F7 / F8 / F9)"),
+                        ("Shift+移動キー / F6", "範囲選択 / 範囲選択開始"),
+                        ("Ctrl+A / Ctrl+W", "すべて選択 / 単語選択 (ダブル・トリプルクリック)"),
+                        ("Ctrl+← → / Ctrl+Home End", "単語移動 / ファイル先頭・末尾"),
+                        ("Ctrl+E / Ctrl+Shift+E", "行切り取り / 行削除"),
+                        ("Ctrl+K / Ctrl+U / Ctrl+D", "行末まで / 行頭まで / 単語を切り取り (Shift で削除)"),
+                        ("Ctrl+BkSp / Ctrl+Del / Ctrl+I", "単語の左・右を削除 / 行の二重化"),
+                        ("Ctrl+Tab / Ctrl+Shift+Tab", "バッファ切替"),
+                        ("Ctrl+Shift+V / Ctrl+P", "Markdown 編集 / ビュー切替"),
+                        ("Ctrl++ / Ctrl+- / Ctrl+0", "フォントサイズ (Ctrl+ホイールも可)"),
+                        ("Esc", "選択解除 / 2画面ファイラーへ切替"),
+                        ("Alt+T / Alt+↑↓0", "最前面固定 / 背景の濃さ"),
+                        ("Alt+Shift+「+」「-」「0」", "文字の濃さ"),
+                        ("Alt+C → C / Alt+C → X", "バッファ全体を Claude Code / Codex へ送信"),
+                        ("ツール→キー割り当て", "VZ 互換へ切替"),
+                    ],
                     AppMode::Editor => &[
                         ("Ctrl+E / S / D / X", "ダイヤモンドカーソル移動 (ビュー時は上下スクロール)"),
                         ("Ctrl+A / Ctrl+F", "単語単位の左・右移動"),
@@ -4619,7 +5301,7 @@ impl VzEditorApp {
                                 .color(TEXT_CYAN),
                         );
                         ui.label(
-                            egui::RichText::new(format!("Version {APP_VERSION}"))
+                            egui::RichText::new(format!("Version {APP_VERSION}  Build At {BUILD_AT}"))
                                 .font(FontId::monospace(13.5))
                                 .strong()
                                 .color(TEXT_AMBER),
@@ -5412,6 +6094,11 @@ impl eframe::App for VzEditorApp {
         self.render_inline_path_prompt(ctx);
         self.render_drop_overlay(ctx);
 
+        // ctx を持たない処理（F キー・メニュー）からのコピーを書き出す
+        if let Some(text) = self.clipboard_out.take() {
+            ctx.copy_text(text);
+        }
+
         // Keep OS window title bar synchronized with current file, dirty state, or filer directory
         self.sync_window_title(ctx);
 
@@ -5460,6 +6147,9 @@ mod tests {
             allow_close: false,
             send_prefix: false,
             pending_send: None,
+            key_scheme: KeyScheme::Vz,
+            select_mode: false,
+            clipboard_out: None,
         }
     }
 
@@ -6008,5 +6698,158 @@ mod tests {
         assert!(!app.send_prefix);
         assert!(app.pending_send.is_none());
         assert!(app.status_message.contains("Codex へ送る文字がありません"));
+    }
+
+    fn mods(ctrl: bool, shift: bool) -> egui::Modifiers {
+        egui::Modifiers {
+            ctrl,
+            command: ctrl,
+            shift,
+            ..Default::default()
+        }
+    }
+
+    fn key_with(key: Key, m: egui::Modifiers) -> Event {
+        Event::Key {
+            key,
+            physical_key: Some(key),
+            pressed: true,
+            repeat: false,
+            modifiers: m,
+        }
+    }
+
+    /// エディター画面の入力処理にイベントを流す（RawInput の modifiers も設定する）。
+    fn run_editor(ctx: &egui::Context, app: &mut VzEditorApp, m: egui::Modifiers, events: Vec<Event>) {
+        let input = egui::RawInput {
+            events,
+            modifiers: m,
+            ..Default::default()
+        };
+        let _ = ctx.run(input, |ctx| app.handle_editor_events(ctx));
+    }
+
+    fn make_sakura_app(text: &str) -> VzEditorApp {
+        let mut app = make_test_app();
+        app.key_scheme = KeyScheme::Sakura;
+        let mut buf = TextBuffer::new();
+        buf.insert_text(text);
+        buf.set_cursor(0, 0);
+        app.buffers = vec![BufferSlot::new(buf)];
+        app
+    }
+
+    #[test]
+    fn test_sakura_shift_select_and_replace() {
+        let ctx = egui::Context::default();
+        let mut app = make_sakura_app("abcdef\nghi");
+        let shift = mods(false, true);
+        run_editor(&ctx, &mut app, shift, vec![
+            key_with(Key::ArrowRight, shift),
+            key_with(Key::ArrowRight, shift),
+            key_with(Key::ArrowRight, shift),
+        ]);
+        assert_eq!(app.cur_buf().selected_text().as_deref(), Some("abc"));
+
+        // 文字入力で選択範囲を置き換える
+        run_editor(&ctx, &mut app, mods(false, false), vec![Event::Text("X".into())]);
+        assert_eq!(app.cur_buf().lines, vec!["Xdef", "ghi"]);
+
+        // Shift なしの移動で選択は解除される
+        run_editor(&ctx, &mut app, shift, vec![key_with(Key::End, shift)]);
+        assert!(app.cur_buf().has_selection());
+        run_editor(&ctx, &mut app, mods(false, false), vec![key_with(Key::ArrowLeft, mods(false, false))]);
+        assert!(!app.cur_buf().has_selection());
+
+        // Ctrl+Shift+End でファイル末尾まで選択
+        let cs = mods(true, true);
+        run_editor(&ctx, &mut app, cs, vec![key_with(Key::Home, mods(false, false)), key_with(Key::End, cs)]);
+        assert_eq!(app.cur_buf().selected_text().as_deref(), Some("Xdef\nghi"));
+    }
+
+    #[test]
+    fn test_sakura_select_all_cut_undo_and_escape() {
+        let ctx = egui::Context::default();
+        let mut app = make_sakura_app("one\ntwo");
+        let ctrl = mods(true, false);
+        run_editor(&ctx, &mut app, ctrl, vec![key_with(Key::A, ctrl), Event::Cut]);
+        assert_eq!(app.cur_buf().lines, vec![""]);
+        assert_eq!(app.clipboard_out.as_deref(), Some("one\ntwo"));
+
+        run_editor(&ctx, &mut app, ctrl, vec![key_with(Key::Z, ctrl)]);
+        assert_eq!(app.cur_buf().lines, vec!["one", "two"]);
+        run_editor(&ctx, &mut app, ctrl, vec![key_with(Key::Y, ctrl)]);
+        assert_eq!(app.cur_buf().lines, vec![""]);
+        run_editor(&ctx, &mut app, ctrl, vec![key_with(Key::Z, ctrl)]);
+
+        // 選択が無いときの Ctrl+C は現在行（改行付き）をコピー
+        app.clipboard_out = None;
+        app.cur_buf_mut().set_cursor(0, 1);
+        run_editor(&ctx, &mut app, ctrl, vec![Event::Copy]);
+        assert_eq!(app.clipboard_out.as_deref(), Some("one\n"));
+
+        // Esc: 選択中は解除、選択が無ければファイラーへ
+        let none = mods(false, false);
+        run_editor(&ctx, &mut app, ctrl, vec![key_with(Key::W, ctrl)]);
+        assert!(app.cur_buf().has_selection());
+        run_editor(&ctx, &mut app, none, vec![key_with(Key::Escape, none)]);
+        assert!(!app.cur_buf().has_selection());
+        assert_eq!(app.mode, AppMode::Editor);
+        run_editor(&ctx, &mut app, none, vec![key_with(Key::Escape, none)]);
+        assert_eq!(app.mode, AppMode::Filer);
+    }
+
+    #[test]
+    fn test_sakura_line_and_word_cut_keys() {
+        let ctx = egui::Context::default();
+        let mut app = make_sakura_app("first line\nsecond\nthird");
+        let ctrl = mods(true, false);
+        let cs = mods(true, true);
+        // Ctrl+E: 行切り取り（改行込み）
+        run_editor(&ctx, &mut app, ctrl, vec![key_with(Key::E, ctrl)]);
+        assert_eq!(app.cur_buf().lines, vec!["second", "third"]);
+        assert_eq!(app.clipboard_out.as_deref(), Some("first line\n"));
+        // Ctrl+Shift+E: 行削除（クリップボードは変えない）
+        app.clipboard_out = None;
+        run_editor(&ctx, &mut app, cs, vec![key_with(Key::E, cs)]);
+        assert_eq!(app.cur_buf().lines, vec!["third"]);
+        assert!(app.clipboard_out.is_none());
+        // Ctrl+K: 行末まで切り取り / Ctrl+U: 行頭まで
+        app.cur_buf_mut().set_cursor(0, 2);
+        run_editor(&ctx, &mut app, ctrl, vec![key_with(Key::K, ctrl)]);
+        assert_eq!(app.cur_buf().lines, vec!["th"]);
+        run_editor(&ctx, &mut app, ctrl, vec![key_with(Key::U, ctrl)]);
+        assert_eq!(app.cur_buf().lines, vec![""]);
+        // Ctrl+I: 行の二重化
+        app.cur_buf_mut().insert_text("dup");
+        run_editor(&ctx, &mut app, ctrl, vec![key_with(Key::I, ctrl)]);
+        assert_eq!(app.cur_buf().lines, vec!["dup", "dup"]);
+        // VZ のキーは効かない（Ctrl+Y は Redo、Ctrl+G は未対応で文字も入らない）
+        run_editor(&ctx, &mut app, ctrl, vec![key_with(Key::G, ctrl)]);
+        assert_eq!(app.cur_buf().lines, vec!["dup", "dup"]);
+    }
+
+    #[test]
+    fn test_sakura_paste_markdown_toggle_and_scheme_switch() {
+        let ctx = egui::Context::default();
+        let mut app = make_test_app(); // notes.md
+        app.key_scheme = KeyScheme::Sakura;
+        // Ctrl+Shift+V は egui では貼り付けとして届く → Markdown 切替
+        let cs = mods(true, true);
+        run_editor(&ctx, &mut app, cs, vec![Event::Paste("ignored".into())]);
+        assert!(app.cur_slot().markdown_view);
+        run_editor(&ctx, &mut app, cs, vec![Event::Paste("ignored".into())]);
+        assert!(!app.cur_slot().markdown_view);
+
+        // Ctrl+V は選択範囲を置き換える
+        let ctrl = mods(true, false);
+        run_editor(&ctx, &mut app, ctrl, vec![key_with(Key::A, ctrl), Event::Paste("new".into())]);
+        assert_eq!(app.cur_buf().lines, vec!["new"]);
+
+        // VZ 互換へ切り替えると選択は解除され、Ctrl+E は上移動に戻る
+        app.cur_buf_mut().select_all();
+        app.toggle_key_scheme();
+        assert_eq!(app.key_scheme, KeyScheme::Vz);
+        assert!(!app.cur_buf().has_selection());
     }
 }

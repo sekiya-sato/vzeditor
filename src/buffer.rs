@@ -88,7 +88,13 @@ pub struct TextBuffer {
     pub line_ending: &'static str,
     undo_stack: Vec<UndoSnapshot>,
     redo_stack: Vec<UndoSnapshot>,
+    /// 範囲選択の起点（行, 文字位置）。カーソルとの間が選択範囲。None なら選択なし。
+    /// サクラ互換のキー割り当てでのみ使う（VZ 互換では常に None）。
+    pub anchor: Option<(usize, usize)>,
 }
+
+/// 文書内の位置（行, 文字位置）。
+pub type TextPos = (usize, usize);
 
 impl Default for TextBuffer {
     fn default() -> Self {
@@ -110,6 +116,7 @@ impl TextBuffer {
             line_ending: "\n",
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
+            anchor: None,
         }
     }
 
@@ -133,6 +140,7 @@ impl TextBuffer {
             line_ending,
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
+            anchor: None,
         })
     }
 
@@ -399,6 +407,7 @@ impl TextBuffer {
             return false;
         };
         self.redo_stack.push(self.current_snapshot());
+        self.anchor = None;
         self.lines = prev.lines;
         self.cursor_line = prev.cursor_line;
         self.cursor_col = prev.cursor_col;
@@ -413,6 +422,7 @@ impl TextBuffer {
             return false;
         };
         self.undo_stack.push(self.current_snapshot());
+        self.anchor = None;
         self.lines = next.lines;
         self.cursor_line = next.cursor_line;
         self.cursor_col = next.cursor_col;
@@ -429,6 +439,12 @@ impl TextBuffer {
             return;
         }
         self.push_undo_snapshot();
+        // 選択中なら選択範囲を置き換える（アンドゥは1回）
+        self.delete_selection_internal();
+        self.insert_text_internal(text);
+    }
+
+    fn insert_text_internal(&mut self, text: &str) {
         self.preferred_visual_col = None;
         let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
         let mut parts = normalized.split('\n');
@@ -453,6 +469,7 @@ impl TextBuffer {
 
     pub fn insert_newline(&mut self) {
         self.push_undo_snapshot();
+        self.delete_selection_internal();
         self.preferred_visual_col = None;
         self.insert_newline_internal();
         self.dirty = true;
@@ -470,6 +487,9 @@ impl TextBuffer {
     /// Delete the character before the cursor (BackSpace / Ctrl+H).
     pub fn backspace(&mut self) {
         self.preferred_visual_col = None;
+        if self.delete_selection() {
+            return;
+        }
         if self.cursor_col > 0 {
             self.push_undo_snapshot();
             let line = &mut self.lines[self.cursor_line];
@@ -494,6 +514,9 @@ impl TextBuffer {
     /// Delete the character at the cursor (Ctrl+G / Delete).
     pub fn delete_char_at_cursor(&mut self) {
         self.preferred_visual_col = None;
+        if self.delete_selection() {
+            return;
+        }
         let len = self.line_char_len(self.cursor_line);
         if self.cursor_col < len {
             self.push_undo_snapshot();
@@ -515,6 +538,7 @@ impl TextBuffer {
     /// Delete the entire current line (Ctrl+Y).
     pub fn delete_current_line(&mut self) {
         self.preferred_visual_col = None;
+        self.anchor = None;
         if self.lines.len() == 1 {
             if !self.lines[0].is_empty() {
                 self.push_undo_snapshot();
@@ -535,6 +559,210 @@ impl TextBuffer {
         self.cursor_col = self.cursor_col.min(max_col);
         self.dirty = true;
         self.revision = self.revision.wrapping_add(1);
+    }
+
+    // --- 範囲選択（サクラ互換） ---
+
+    pub fn cursor_pos(&self) -> TextPos {
+        (self.cursor_line, self.cursor_col)
+    }
+
+    /// 位置を文書内に収める。
+    fn clamp_pos(&self, pos: TextPos) -> TextPos {
+        let line = pos.0.min(self.lines.len().saturating_sub(1));
+        (line, pos.1.min(self.line_char_len(line)))
+    }
+
+    /// 選択範囲（開始, 終了）。開始 < 終了 のときだけ返す。
+    pub fn selection_range(&self) -> Option<(TextPos, TextPos)> {
+        let a = self.clamp_pos(self.anchor?);
+        let c = self.cursor_pos();
+        match a.cmp(&c) {
+            std::cmp::Ordering::Less => Some((a, c)),
+            std::cmp::Ordering::Greater => Some((c, a)),
+            std::cmp::Ordering::Equal => None,
+        }
+    }
+
+    pub fn has_selection(&self) -> bool {
+        self.selection_range().is_some()
+    }
+
+    pub fn clear_selection(&mut self) {
+        self.anchor = None;
+    }
+
+    /// Shift+移動の前に呼ぶ。選択が無ければ現在位置を起点にする。
+    pub fn begin_selection_if_none(&mut self) {
+        if self.anchor.is_none() {
+            self.anchor = Some(self.cursor_pos());
+        }
+    }
+
+    /// 起点と終点を指定して選択する（カーソルは終点）。
+    pub fn select_range(&mut self, start: TextPos, end: TextPos) {
+        let start = self.clamp_pos(start);
+        let end = self.clamp_pos(end);
+        self.anchor = Some(start);
+        self.cursor_line = end.0;
+        self.cursor_col = end.1;
+        self.preferred_visual_col = None;
+    }
+
+    pub fn select_all(&mut self) {
+        let last = self.lines.len().saturating_sub(1);
+        let end = (last, self.line_char_len(last));
+        self.select_range((0, 0), end);
+    }
+
+    /// 1行選択（改行を含む。最終行は行末まで）。
+    pub fn select_line(&mut self, line: usize) {
+        let line = line.min(self.lines.len().saturating_sub(1));
+        let end = if line + 1 < self.lines.len() {
+            (line + 1, 0)
+        } else {
+            (line, self.line_char_len(line))
+        };
+        self.select_range((line, 0), end);
+    }
+
+    /// 指定位置の単語の範囲（同じ文字種が続く区間）。
+    pub fn word_range_at(&self, pos: TextPos) -> (usize, usize) {
+        let (line, col) = self.clamp_pos(pos);
+        let chars: Vec<char> = self.lines[line].chars().collect();
+        if chars.is_empty() {
+            return (0, 0);
+        }
+        let probe = if col < chars.len() { col } else { col - 1 };
+        let class = classify_char(chars[probe]);
+        let mut start = probe;
+        while start > 0 && classify_char(chars[start - 1]) == class {
+            start -= 1;
+        }
+        let mut end = probe + 1;
+        while end < chars.len() && classify_char(chars[end]) == class {
+            end += 1;
+        }
+        (start, end)
+    }
+
+    pub fn select_word_at_cursor(&mut self) {
+        let line = self.cursor_line;
+        let (start, end) = self.word_range_at(self.cursor_pos());
+        self.select_range((line, start), (line, end));
+    }
+
+    /// 指定範囲の文字列（行の区切りは \n）。
+    pub fn text_in_range(&self, start: TextPos, end: TextPos) -> String {
+        let (start, end) = (self.clamp_pos(start), self.clamp_pos(end));
+        if start.0 == end.0 {
+            let line = &self.lines[start.0];
+            let a = char_to_byte_idx(line, start.1);
+            let b = char_to_byte_idx(line, end.1);
+            return line[a..b].to_string();
+        }
+        let mut out = String::new();
+        let first = &self.lines[start.0];
+        out.push_str(&first[char_to_byte_idx(first, start.1)..]);
+        for line in &self.lines[start.0 + 1..end.0] {
+            out.push('\n');
+            out.push_str(line);
+        }
+        out.push('\n');
+        let last = &self.lines[end.0];
+        out.push_str(&last[..char_to_byte_idx(last, end.1)]);
+        out
+    }
+
+    pub fn selected_text(&self) -> Option<String> {
+        self.selection_range()
+            .map(|(start, end)| self.text_in_range(start, end))
+    }
+
+    /// 範囲を削除してカーソルを開始位置へ置く（アンドゥ記録なし）。
+    fn delete_range_internal(&mut self, start: TextPos, end: TextPos) {
+        let (start, end) = (self.clamp_pos(start), self.clamp_pos(end));
+        if start >= end {
+            return;
+        }
+        let tail = {
+            let last = &self.lines[end.0];
+            last[char_to_byte_idx(last, end.1)..].to_string()
+        };
+        let head_end = char_to_byte_idx(&self.lines[start.0], start.1);
+        self.lines[start.0].truncate(head_end);
+        self.lines[start.0].push_str(&tail);
+        if end.0 > start.0 {
+            self.lines.drain(start.0 + 1..=end.0);
+        }
+        self.cursor_line = start.0;
+        self.cursor_col = start.1;
+        self.preferred_visual_col = None;
+        self.dirty = true;
+        self.revision = self.revision.wrapping_add(1);
+    }
+
+    /// 選択範囲を削除する（アンドゥ記録なし）。選択が無ければ起点だけ消す。
+    fn delete_selection_internal(&mut self) -> bool {
+        let range = self.selection_range();
+        self.anchor = None;
+        match range {
+            Some((start, end)) => {
+                self.delete_range_internal(start, end);
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// 選択範囲を削除する。削除したら true。
+    pub fn delete_selection(&mut self) -> bool {
+        if !self.has_selection() {
+            self.anchor = None;
+            return false;
+        }
+        self.push_undo_snapshot();
+        self.delete_selection_internal()
+    }
+
+    /// 範囲を削除する（アンドゥ記録あり）。削除した文字列を返す。
+    pub fn delete_range(&mut self, start: TextPos, end: TextPos) -> Option<String> {
+        let (start, end) = (self.clamp_pos(start), self.clamp_pos(end));
+        if start >= end {
+            return None;
+        }
+        let text = self.text_in_range(start, end);
+        self.push_undo_snapshot();
+        self.anchor = None;
+        self.delete_range_internal(start, end);
+        Some(text)
+    }
+
+    /// カーソル行を下に複製する（サクラの「行の二重化」）。
+    pub fn duplicate_line(&mut self) {
+        self.push_undo_snapshot();
+        self.anchor = None;
+        let line = self.lines[self.cursor_line].clone();
+        self.lines.insert(self.cursor_line + 1, line);
+        self.cursor_line += 1;
+        self.cursor_col = self.cursor_col.min(self.line_char_len(self.cursor_line));
+        self.dirty = true;
+        self.revision = self.revision.wrapping_add(1);
+    }
+
+    /// 指定行の選択部分（開始文字位置, 終了文字位置, 行末の改行も選択されているか）。
+    pub fn line_selection(&self, line: usize) -> Option<(usize, usize, bool)> {
+        let (start, end) = self.selection_range()?;
+        if line < start.0 || line > end.0 {
+            return None;
+        }
+        let from = if line == start.0 { start.1 } else { 0 };
+        let to = if line == end.0 {
+            end.1
+        } else {
+            self.line_char_len(line)
+        };
+        Some((from, to, line < end.0))
     }
 }
 
@@ -644,5 +872,54 @@ mod tests {
         buf.insert_text("!");
         assert!(!buf.can_redo());
         assert_eq!(buf.lines, vec!["hello!"]);
+    }
+
+    #[test]
+    fn test_selection_replace_and_delete() {
+        let mut buf = TextBuffer::new();
+        buf.insert_text("abc def\n日本語\nxyz");
+        // 2行目の「本語」から3行目の「x」まで選択
+        buf.select_range((1, 1), (2, 1));
+        assert_eq!(buf.selected_text().as_deref(), Some("本語\nx"));
+        assert_eq!(buf.line_selection(1), Some((1, 3, true)));
+        assert_eq!(buf.line_selection(2), Some((0, 1, false)));
+        assert_eq!(buf.line_selection(0), None);
+
+        // 入力で置き換え、アンドゥ1回で元に戻る
+        buf.insert_text("ん");
+        assert_eq!(buf.lines, vec!["abc def", "日んyz"]);
+        assert!(!buf.has_selection());
+        buf.undo();
+        assert_eq!(buf.lines, vec!["abc def", "日本語", "xyz"]);
+
+        // 逆向き（カーソルが起点より前）でも同じ範囲
+        buf.select_range((2, 1), (1, 1));
+        assert_eq!(buf.selection_range(), Some(((1, 1), (2, 1))));
+        buf.backspace();
+        assert_eq!(buf.lines, vec!["abc def", "日yz"]);
+        assert_eq!(buf.cursor_pos(), (1, 1));
+    }
+
+    #[test]
+    fn test_select_word_line_all_and_duplicate() {
+        let mut buf = TextBuffer::new();
+        buf.insert_text("hello 日本語テスト\nsecond");
+        buf.set_cursor(0, 7);
+        buf.select_word_at_cursor();
+        assert_eq!(buf.selected_text().as_deref(), Some("日本語"));
+        buf.select_line(0);
+        assert_eq!(buf.selected_text().as_deref(), Some("hello 日本語テスト\n"));
+        buf.select_all();
+        assert_eq!(buf.selected_text().as_deref(), Some("hello 日本語テスト\nsecond"));
+
+        buf.clear_selection();
+        buf.set_cursor(1, 2);
+        buf.duplicate_line();
+        assert_eq!(buf.lines, vec!["hello 日本語テスト", "second", "second"]);
+        assert_eq!(buf.cursor_pos(), (2, 2));
+
+        let cut = buf.delete_range((1, 0), (2, 0));
+        assert_eq!(cut.as_deref(), Some("second\n"));
+        assert_eq!(buf.lines, vec!["hello 日本語テスト", "second"]);
     }
 }

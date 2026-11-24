@@ -1,4 +1,4 @@
-//! ウィンドウ設定（背景・文字の不透明度、最前面固定、フォントサイズ）の保存と読み込み。
+//! 設定（背景・文字の不透明度、最前面固定、フォントサイズ、キー割り当て）の保存と読み込み。
 //!
 //! 保存先:
 //! - Windows: `%APPDATA%\vzeditor\settings.ini`
@@ -7,12 +7,38 @@
 
 use std::path::PathBuf;
 
+/// キー割り当ての種類。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KeyScheme {
+    /// サクラエディタ互換（既定）
+    Sakura,
+    /// VZ Editor 互換（ダイヤモンドカーソル、^Q / ^K の2打鍵）
+    Vz,
+}
+
+impl KeyScheme {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            KeyScheme::Sakura => "sakura",
+            KeyScheme::Vz => "vz",
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            KeyScheme::Sakura => "サクラ互換",
+            KeyScheme::Vz => "VZ互換",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Settings {
     pub opacity: u8,
     pub text_opacity: u8,
     pub always_on_top: bool,
     pub font_size: f32,
+    pub key_scheme: KeyScheme,
 }
 
 impl Default for Settings {
@@ -22,6 +48,7 @@ impl Default for Settings {
             text_opacity: 100,
             always_on_top: false,
             font_size: 16.0,
+            key_scheme: KeyScheme::Sakura,
         }
     }
 }
@@ -46,6 +73,13 @@ impl Settings {
                     }
                 }
                 "always_on_top" => s.always_on_top = value == "true",
+                "key_scheme" => {
+                    s.key_scheme = if value == "vz" {
+                        KeyScheme::Vz
+                    } else {
+                        KeyScheme::Sakura
+                    }
+                }
                 "font_size" => {
                     if let Ok(v) = value.parse::<f32>() {
                         if v.is_finite() {
@@ -61,8 +95,12 @@ impl Settings {
 
     pub fn serialize(&self) -> String {
         format!(
-            "opacity={}\ntext_opacity={}\nalways_on_top={}\nfont_size={}\n",
-            self.opacity, self.text_opacity, self.always_on_top, self.font_size
+            "opacity={}\ntext_opacity={}\nalways_on_top={}\nfont_size={}\nkey_scheme={}\n",
+            self.opacity,
+            self.text_opacity,
+            self.always_on_top,
+            self.font_size,
+            self.key_scheme.as_str()
         )
     }
 
@@ -118,6 +156,7 @@ mod tests {
             text_opacity: 60,
             always_on_top: true,
             font_size: 20.0,
+            key_scheme: KeyScheme::Vz,
         };
         assert_eq!(Settings::parse(&s.serialize()), s);
     }
@@ -129,5 +168,7 @@ mod tests {
         assert_eq!(s.text_opacity, 100);
         assert!(s.always_on_top);
         assert_eq!(s.font_size, 16.0);
+        // 既定はサクラ互換
+        assert_eq!(s.key_scheme, KeyScheme::Sakura);
     }
 }
