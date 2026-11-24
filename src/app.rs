@@ -128,6 +128,8 @@ const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 const BUILD_AT: &str = env!("VZ_BUILD_AT");
 /// 原作 LZ Editor (MIT License)
 const BASE_REPO_URL: &str = "https://github.com/TouryuTamane/lz-editor";
+/// このフォーク（VZ Editor）のリポジトリ。Cargo.toml の repository から取る。
+const FORK_REPO_URL: &str = env!("CARGO_PKG_REPOSITORY");
 
 const MENU_BAR_BG: Color32 = Color32::from_rgb(7, 21, 50);
 const MENU_BAR_HOVER: Color32 = Color32::from_rgb(20, 56, 114);
@@ -5370,6 +5372,19 @@ impl VzEditorApp {
                                 .font(FontId::monospace(12.5))
                                 .color(TEXT_CYAN),
                             BASE_REPO_URL,
+                        );
+                        ui.end_row();
+
+                        ui.label(
+                            egui::RichText::new("Repository:")
+                                .font(FontId::monospace(12.5))
+                                .color(TEXT_DIM_CYAN),
+                        );
+                        ui.hyperlink_to(
+                            egui::RichText::new(format!("VZ Editor  {FORK_REPO_URL}"))
+                                .font(FontId::monospace(12.5))
+                                .color(TEXT_CYAN),
+                            FORK_REPO_URL,
                         );
                         ui.end_row();
                     });
