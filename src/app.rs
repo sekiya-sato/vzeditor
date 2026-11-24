@@ -347,6 +347,9 @@ pub struct VzEditorApp {
     menu_selected_idx: usize,
     show_help: bool,
     show_about: bool,
+    /// ヘルプ / About が前のフレームから表示中か。開いたフレームのクリック（メニュー操作）で閉じないための判定。
+    help_click_armed: bool,
+    about_click_armed: bool,
     pending_dialog: Option<Receiver<DialogResult>>,
     inline_prompt: Option<InlinePathPrompt>,
     filer_modal: Option<FilerModal>,
@@ -439,6 +442,8 @@ impl VzEditorApp {
             menu_selected_idx: 0,
             show_help: false,
             show_about: false,
+            help_click_armed: false,
+            about_click_armed: false,
             pending_dialog: None,
             inline_prompt: None,
             filer_modal: None,
@@ -887,6 +892,10 @@ impl VzEditorApp {
             }
             (Key::F9, false, false) => {
                 self.sakura_paste_from_clipboard();
+                return true;
+            }
+            (Key::F4, true, false) => {
+                self.close_current_buffer();
                 return true;
             }
             (Key::F10, false, true) => {
@@ -1897,7 +1906,7 @@ impl VzEditorApp {
                 },
                 MenuEntry::Item {
                     label: "現在のバッファを閉じる",
-                    shortcut: "",
+                    shortcut: "Ctrl+F4",
                     action: MenuAction::CloseBuffer,
                     enabled: true,
                 },
@@ -2688,6 +2697,13 @@ impl VzEditorApp {
                             continue;
                         }
                         PrefixKey::None => {}
+                    }
+
+                    // 1.5. Ctrl+F4: ファイル（現在のバッファ）を閉じる（F4 の行頭移動より先に判定）
+                    if key == Key::F4 && ctrl && !modifiers.alt && !modifiers.shift {
+                        suppress_text_this_frame = true;
+                        self.close_current_buffer();
+                        continue;
                     }
 
                     // 2. Function keys F1..F10
@@ -4368,8 +4384,10 @@ impl VzEditorApp {
 
                 // マウス: クリックでカーソル移動。サクラ互換ではドラッグ・Shift+クリックで範囲選択、
                 // ダブルクリックで単語、トリプルクリックで行を選択する。
+                // ヘルプ表示中のクリックはヘルプを閉じるだけにする
                 let can_click = self.open_menu.is_none()
                     && !self.show_about
+                    && !self.show_help
                     && self.filer_modal.is_none()
                     && self.inline_prompt.is_none();
                 if can_click {
@@ -4998,7 +5016,9 @@ impl VzEditorApp {
 
         // Mouse click / double-click on rows
         let mut double_clicked = false;
-        if resp.clicked() || resp.double_clicked() {
+        // ヘルプ・About 表示中のクリックはそれを閉じるだけにする
+        let overlay_open = self.show_help || self.show_about;
+        if !overlay_open && (resp.clicked() || resp.double_clicked()) {
             if let Some(pos) = resp.interact_pointer_pos() {
                 let clicked_row =
                     ((pos.y - list_rect.min.y + pane.scroll_y) / row_h).floor().max(0.0) as usize;
@@ -5158,12 +5178,15 @@ impl VzEditorApp {
 
     fn render_help_overlay(&mut self, ctx: &egui::Context) {
         if !self.show_help {
+            self.help_click_armed = false;
             return;
         }
+        let close_by_click = self.help_click_armed && ctx.input(|i| i.pointer.any_click());
+        self.help_click_armed = true;
         let mut open = self.show_help;
         let title = match self.mode {
-            AppMode::Editor => "VZ Editor - エディタ キーバインド (F1 / ESC で閉じる)",
-            AppMode::Filer => "VZ Filer - 2画面ファイラー操作 (F1 / ESC で閉じる)",
+            AppMode::Editor => "VZ Editor - エディタ キーバインド (F1 / ESC / クリックで閉じる)",
+            AppMode::Filer => "VZ Filer - 2画面ファイラー操作 (F1 / ESC / クリックで閉じる)",
         };
         egui::Window::new(title)
             .open(&mut open)
@@ -5180,6 +5203,7 @@ impl VzEditorApp {
                     AppMode::Editor if self.key_scheme == KeyScheme::Sakura => &[
                         ("Ctrl+N / Ctrl+O", "新規作成 / 開く"),
                         ("Ctrl+S / Ctrl+Shift+S", "上書き保存 / 名前を付けて保存"),
+                        ("Ctrl+F4", "ファイル（現在のバッファ）を閉じる"),
                         ("Ctrl+Z / Ctrl+Y", "元に戻す / やり直し"),
                         ("Ctrl+X / Ctrl+C / Ctrl+V", "切り取り / コピー / 貼り付け (F7 / F8 / F9)"),
                         ("Shift+移動キー / F6", "範囲選択 / 範囲選択開始"),
@@ -5209,6 +5233,7 @@ impl VzEditorApp {
                         ("Ctrl+P / Ctrl+K+V / Alt+P", "Markdown 編集 / ビュー（プレビュー）切替"),
                         ("Ctrl++ / Ctrl+- / Ctrl+0", "フォントサイズ拡大 / 縮小 / リセット"),
                         ("Ctrl+K+D / F10", "上書き保存 / 保存ダイアログ"),
+                        ("Ctrl+F4", "ファイル（現在のバッファ）を閉じる"),
                         ("ESC / Ctrl+K+Q / F9", "2画面ファイラーへ切替"),
                         ("Alt+T", "最前面固定の切替"),
                         ("ファイルをドロップ", "複数ファイルをまとめてバッファで開く"),
@@ -5252,11 +5277,12 @@ impl VzEditorApp {
                         }
                     });
             });
-        self.show_help = open;
+        self.show_help = open && !close_by_click;
     }
 
     fn render_about_dialog(&mut self, ctx: &egui::Context) {
         if !self.show_about {
+            self.about_click_armed = false;
             return;
         }
         ctx.output_mut(|o| {
@@ -5264,7 +5290,10 @@ impl VzEditorApp {
         });
 
         let mut open = self.show_about;
-        let mut close_clicked = false;
+        // どこをクリックしても閉じる（リンクのクリックは除く）
+        let mut close_clicked = self.about_click_armed && ctx.input(|i| i.pointer.any_click());
+        self.about_click_armed = true;
+        let mut link_clicked = false;
 
         egui::Window::new("VZ Editor について (バージョン情報)")
             .open(&mut open)
@@ -5367,12 +5396,14 @@ impl VzEditorApp {
                                 .font(FontId::monospace(12.5))
                                 .color(TEXT_DIM_CYAN),
                         );
-                        ui.hyperlink_to(
-                            egui::RichText::new(format!("LZ Editor  {BASE_REPO_URL}"))
-                                .font(FontId::monospace(12.5))
-                                .color(TEXT_CYAN),
-                            BASE_REPO_URL,
-                        );
+                        link_clicked |= ui
+                            .hyperlink_to(
+                                egui::RichText::new(format!("LZ Editor  {BASE_REPO_URL}"))
+                                    .font(FontId::monospace(12.5))
+                                    .color(TEXT_CYAN),
+                                BASE_REPO_URL,
+                            )
+                            .clicked();
                         ui.end_row();
 
                         ui.label(
@@ -5380,18 +5411,20 @@ impl VzEditorApp {
                                 .font(FontId::monospace(12.5))
                                 .color(TEXT_DIM_CYAN),
                         );
-                        ui.hyperlink_to(
-                            egui::RichText::new(format!("VZ Editor  {FORK_REPO_URL}"))
-                                .font(FontId::monospace(12.5))
-                                .color(TEXT_CYAN),
-                            FORK_REPO_URL,
-                        );
+                        link_clicked |= ui
+                            .hyperlink_to(
+                                egui::RichText::new(format!("VZ Editor  {FORK_REPO_URL}"))
+                                    .font(FontId::monospace(12.5))
+                                    .color(TEXT_CYAN),
+                                FORK_REPO_URL,
+                            )
+                            .clicked();
                         ui.end_row();
                     });
 
                 ui.add_space(14.0);
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.button("閉じる (ESC / Enter)").clicked()
+                    if ui.button("閉じる (ESC / Enter / クリック)").clicked()
                         || ui.input(|i| i.key_pressed(Key::Escape) || i.key_pressed(Key::Enter))
                     {
                         close_clicked = true;
@@ -5399,7 +5432,7 @@ impl VzEditorApp {
                 });
             });
 
-        self.show_about = open && !close_clicked;
+        self.show_about = open && (link_clicked || !close_clicked);
     }
 
     fn render_filer_modal(&mut self, ctx: &egui::Context) {
@@ -6165,6 +6198,8 @@ mod tests {
             menu_selected_idx: 0,
             show_help: false,
             show_about: false,
+            help_click_armed: false,
+            about_click_armed: false,
             pending_dialog: None,
             inline_prompt: None,
             filer_modal: None,
@@ -6380,6 +6415,70 @@ mod tests {
         assert_eq!(app.buffers.len(), 1);
         assert_eq!(app.cur_buf().display_name(), "[無題]");
         assert!(!app.cur_buf().dirty);
+    }
+
+    #[test]
+    fn test_ctrl_f4_closes_buffer_in_both_schemes() {
+        for sakura in [false, true] {
+            let ctx = egui::Context::default();
+            let mut app = if sakura { make_sakura_app("a") } else { make_test_app() };
+            let mut second = TextBuffer::new();
+            second.insert_text("b");
+            second.dirty = false;
+            app.buffers.push(BufferSlot::new(second));
+            app.active_buf = 1;
+            let ctrl = mods(true, false);
+            run_editor(&ctx, &mut app, ctrl, vec![key_with(Key::F4, ctrl)]);
+            assert_eq!(app.buffers.len(), 1, "sakura={sakura}");
+            assert!(app.filer_modal.is_none());
+
+            // 未保存なら確認ダイアログを出す
+            app.cur_buf_mut().dirty = true;
+            run_editor(&ctx, &mut app, ctrl, vec![key_with(Key::F4, ctrl)]);
+            assert!(matches!(
+                app.filer_modal,
+                Some(FilerModal::ConfirmCloseBuffer { .. })
+            ));
+        }
+    }
+
+    #[test]
+    fn test_help_and_about_close_on_click() {
+        let ctx = egui::Context::default();
+        let mut app = make_test_app();
+        let click = |pos: Pos2| -> egui::RawInput {
+            let ev = |pressed| Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: egui::Modifiers::NONE,
+            };
+            egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(1024.0, 680.0))),
+                events: vec![Event::PointerMoved(pos), ev(true), ev(false)],
+                ..Default::default()
+            }
+        };
+        let pos = Pos2::new(20.0, 20.0);
+        for about in [false, true] {
+            if about {
+                app.show_about = true;
+            } else {
+                app.show_help = true;
+            }
+            let frame = |app: &mut VzEditorApp| {
+                let _ = ctx.run(click(pos), |ctx| {
+                    app.render_help_overlay(ctx);
+                    app.render_about_dialog(ctx);
+                });
+            };
+            // 開いたフレームのクリック（メニュー操作など）では閉じない
+            frame(&mut app);
+            assert!(app.show_help || app.show_about, "about={about}");
+            // 次のクリックで閉じる
+            frame(&mut app);
+            assert!(!app.show_help && !app.show_about, "about={about}");
+        }
     }
 
     #[test]

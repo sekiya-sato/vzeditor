@@ -62,6 +62,7 @@ git merge upstream/main
 | :--- | :--- | :--- |
 | 新規 / 開く | `Ctrl+N` / `Ctrl+O` | `F2` / `F3` |
 | 上書き保存 / 名前を付けて保存 | `Ctrl+S` / `Ctrl+Shift+S` | `F10`・`Ctrl+K` → `D` / メニュー |
+| ファイル（現在のバッファ）を閉じる | `Ctrl+F4`（未保存なら確認） | 同左 |
 | 元に戻す / やり直し | `Ctrl+Z` / `Ctrl+Y` | メニュー |
 | 切り取り / コピー / 貼り付け | `Ctrl+X`・`F7` / `Ctrl+C`・`F8` / `Ctrl+V`・`F9`（選択なしは現在行） | なし / なし / `Ctrl+V` |
 | 範囲選択 | `Shift`+移動キー、`F6`、`Ctrl+A`、`Ctrl+W`、マウス | なし |
@@ -70,7 +71,7 @@ git merge upstream/main
 | バッファ切替 | `Ctrl+Tab` / `Ctrl+Shift+Tab` | `Ctrl+W` / `Ctrl+Shift+W` |
 | 2画面ファイラー | `Esc`（選択中は選択解除） | `Esc`・`F9`・`Ctrl+K` → `Q` |
 | Markdown 編集 / ビュー切替 | `Ctrl+Shift+V`・`Ctrl+P` | `Ctrl+P`・`Alt+P`・`Ctrl+K` → `V` |
-| ヘルプ / バージョン情報 | `F1` / `Ctrl+Shift+F1` | `F1` / メニュー |
+| ヘルプ / バージョン情報 | `F1` / `Ctrl+Shift+F1`（クリックでも閉じる） | `F1` / メニュー（同左） |
 | フォントサイズ | `Ctrl++` / `Ctrl+-` / `Ctrl+0` | 同左 |
 
 サクラ互換の検索・置換・Grep・行ジャンプなどは未対応です（押すとステータスバーに表示）。全キーの一覧は `F1`、対応状況は [docs/キー割り当て対比.md](docs/キー割り当て対比.md) を参照してください。
