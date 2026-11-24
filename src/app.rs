@@ -6,6 +6,7 @@ use crate::filer::{
 };
 use crate::fonts::configure_japanese_fonts;
 use crate::markdown::{parse_markdown, render_markdown_view, MdBlock};
+use crate::send_to_app::{prepare_text, spawn_send, SendResult, SendTarget};
 use crate::settings::Settings;
 use crate::window_style::{self, bg};
 use eframe::egui::{
@@ -205,6 +206,8 @@ enum MenuAction {
     TextOpacityUp,
     TextOpacityDown,
     TextOpacityReset,
+    SendToClaudeCode,
+    SendToCodex,
     // About
     ShowHelp,
     ShowAbout,
@@ -345,6 +348,12 @@ pub struct VzEditorApp {
     quit_after_save: bool,
     /// 確認済みのため次の close_requested を止めない
     allow_close: bool,
+
+    // Claude Code / Codex への送信 (Alt+C → C / X)
+    /// Alt+C を押して2打目を待っている
+    send_prefix: bool,
+    /// 送信中の処理（別スレッド）
+    pending_send: Option<Receiver<SendResult>>,
 }
 
 impl VzEditorApp {
@@ -411,6 +420,8 @@ impl VzEditorApp {
             persist_settings: true,
             quit_after_save: false,
             allow_close: false,
+            send_prefix: false,
+            pending_send: None,
         };
         if !initial_paths.is_empty() {
             // 存在しないパスは新規ファイルとして開く（従来の `vz 新規.txt` と同じ）
@@ -529,6 +540,111 @@ impl VzEditorApp {
     fn change_text_opacity(&mut self, delta: i16) {
         let next = (self.text_opacity as i16 + delta).clamp(0, 100) as u8;
         self.set_text_opacity(next);
+    }
+
+    // --- Claude Code / Codex への送信 ---
+
+    /// 現在のバッファ全体を送信先アプリへ送る（別スレッド）。送信後も内容は残す。
+    fn start_send(&mut self, target: SendTarget) {
+        self.send_prefix = false;
+        if self.pending_send.is_some() {
+            self.status_message = "送信中です。完了までお待ちください".to_string();
+            return;
+        }
+        let Some(text) = prepare_text(&self.cur_buf().lines) else {
+            self.status_message = format!("{} へ送る文字がありません", target.label());
+            return;
+        };
+        self.status_message = format!("{} へ送信中... (Alt などのキーを離してください)", target.label());
+        self.pending_send = Some(spawn_send(target, text));
+    }
+
+    fn poll_send(&mut self, ctx: &egui::Context) {
+        let Some(rx) = &self.pending_send else {
+            return;
+        };
+        match rx.try_recv() {
+            Ok(result) => {
+                self.pending_send = None;
+                self.status_message = match result {
+                    Ok(msg) => msg,
+                    Err(msg) => format!("送信エラー: {msg}"),
+                };
+                ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => {
+                ctx.request_repaint_after(std::time::Duration::from_millis(100));
+            }
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                self.pending_send = None;
+                self.status_message = "送信エラー: 送信処理が中断されました".to_string();
+            }
+        }
+    }
+
+    /// Alt+C → C（Claude Code）/ X（Codex）の2打鍵を処理し、使ったキーは入力から取り除く。
+    /// 2打目は Alt を押したままでも離してもよい。C / X 以外のキーなら取り消す。
+    fn handle_send_keys(&mut self, ctx: &egui::Context) {
+        let mut action: Option<Option<SendTarget>> = None; // Some(None) = 取り消し
+        let mut consumed = false;
+        let mut prefix = self.send_prefix;
+        ctx.input_mut(|i| {
+            i.events.retain(|ev| {
+                let Event::Key {
+                    key,
+                    pressed,
+                    modifiers,
+                    ..
+                } = ev
+                else {
+                    return true;
+                };
+                let ctrl = modifiers.ctrl || modifiers.command;
+                if prefix {
+                    if !*pressed {
+                        // 2打目の離し
+                        if matches!(key, Key::C | Key::X) {
+                            consumed = true;
+                            return false;
+                        }
+                        return true;
+                    }
+                    if action.is_none() {
+                        action = Some(match (key, ctrl) {
+                            (Key::C, false) => Some(SendTarget::ClaudeCode),
+                            (Key::X, false) => Some(SendTarget::Codex),
+                            _ => None,
+                        });
+                        prefix = false;
+                        consumed = true;
+                        return false;
+                    }
+                    return true;
+                }
+                if *key == Key::C && modifiers.alt && !ctrl && !modifiers.shift {
+                    if *pressed {
+                        prefix = true;
+                    }
+                    consumed = true;
+                    return false;
+                }
+                true
+            });
+            if consumed {
+                i.events.retain(|ev| !matches!(ev, Event::Text(_)));
+            }
+        });
+        let started_prefix = prefix && !self.send_prefix;
+        self.send_prefix = prefix;
+        if started_prefix {
+            self.status_message =
+                "Alt+C: 続けて C で Claude Code へ / X で Codex へ送信（他のキーで取り消し）".to_string();
+        }
+        match action {
+            Some(Some(target)) => self.start_send(target),
+            Some(None) => self.status_message = "送信を取り消しました".to_string(),
+            None => {}
+        }
     }
 
     fn toggle_always_on_top(&mut self, ctx: &egui::Context) {
@@ -1505,6 +1621,19 @@ impl VzEditorApp {
                     action: MenuAction::TextOpacityReset,
                     enabled: self.text_opacity < window_style::MAX_OPACITY,
                 },
+                MenuEntry::Separator,
+                MenuEntry::Item {
+                    label: "Claude Code へ送信",
+                    shortcut: "Alt+C → C",
+                    action: MenuAction::SendToClaudeCode,
+                    enabled: self.pending_send.is_none(),
+                },
+                MenuEntry::Item {
+                    label: "Codex へ送信",
+                    shortcut: "Alt+C → X",
+                    action: MenuAction::SendToCodex,
+                    enabled: self.pending_send.is_none(),
+                },
             ],
             TopMenu::About => vec![
                 MenuEntry::Item {
@@ -1603,6 +1732,8 @@ impl VzEditorApp {
                 self.change_text_opacity(-(window_style::OPACITY_STEP as i16))
             }
             MenuAction::TextOpacityReset => self.set_text_opacity(window_style::MAX_OPACITY),
+            MenuAction::SendToClaudeCode => self.start_send(SendTarget::ClaudeCode),
+            MenuAction::SendToCodex => self.start_send(SendTarget::Codex),
             MenuAction::ShowHelp => {
                 self.show_help = !self.show_help;
             }
@@ -1863,6 +1994,7 @@ impl VzEditorApp {
         if self.inline_prompt.is_some() || self.filer_modal.is_some() || self.show_about {
             return;
         }
+        self.handle_send_keys(ctx);
         self.handle_window_style_keys(ctx);
         if self.open_menu.is_some() {
             self.handle_menu_events(ctx);
@@ -4396,6 +4528,7 @@ impl VzEditorApp {
                         ("ESC / Ctrl+K+Q / F9", "2画面ファイラーへ切替"),
                         ("Alt+T", "最前面固定の切替"),
                         ("ファイルをドロップ", "複数ファイルをまとめてバッファで開く"),
+                        ("Alt+C → C / Alt+C → X", "バッファ全体を Claude Code / Codex へ送信"),
                         ("Alt+↑ / Alt+↓ / Alt+0", "背景を濃く / 薄く / 透過解除"),
                         ("Alt+Shift+「+」「-」「0」", "文字を濃く / 薄く / 透過解除"),
                     ],
@@ -5253,6 +5386,7 @@ impl eframe::App for VzEditorApp {
         self.handle_close_request(ctx);
         self.handle_dropped_files(ctx);
         self.poll_dialog();
+        self.poll_send(ctx);
         self.continue_save_and_quit(ctx);
         self.handle_events(ctx);
 
@@ -5324,6 +5458,8 @@ mod tests {
             persist_settings: false,
             quit_after_save: false,
             allow_close: false,
+            send_prefix: false,
+            pending_send: None,
         }
     }
 
@@ -5828,5 +5964,49 @@ mod tests {
         assert_eq!(app.mode, AppMode::Editor);
         assert!(app.filer.active_pane().marked.is_empty());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn key_event(key: Key, alt: bool) -> Event {
+        Event::Key {
+            key,
+            physical_key: Some(key),
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers {
+                alt,
+                ..Default::default()
+            },
+        }
+    }
+
+    #[test]
+    fn test_send_prefix_keys() {
+        let ctx = egui::Context::default();
+        let mut app = make_test_app();
+        // Alt+C は透過・最前面のキーと重ならない
+        assert_eq!(
+            window_style_key_action(Key::C, Some(Key::C), egui::Modifiers { alt: true, ..Default::default() }),
+            None
+        );
+
+        // Alt+C → 2打目待ち。C / X 以外は取り消し、文字も入力されない
+        let run = |app: &mut VzEditorApp, events: Vec<Event>| {
+            let input = egui::RawInput { events, ..Default::default() };
+            let _ = ctx.run(input, |ctx| app.handle_send_keys(ctx));
+        };
+        run(&mut app, vec![key_event(Key::C, true), Event::Text("c".into())]);
+        assert!(app.send_prefix);
+        run(&mut app, vec![key_event(Key::D, false), Event::Text("d".into())]);
+        assert!(!app.send_prefix);
+        assert_eq!(app.status_message, "送信を取り消しました");
+        assert!(app.pending_send.is_none());
+
+        // 空のバッファでは送らない（2打目は Alt を押したままでもよい）
+        app.buffers = vec![BufferSlot::new(TextBuffer::new())];
+        run(&mut app, vec![key_event(Key::C, true)]);
+        run(&mut app, vec![key_event(Key::X, true)]);
+        assert!(!app.send_prefix);
+        assert!(app.pending_send.is_none());
+        assert!(app.status_message.contains("Codex へ送る文字がありません"));
     }
 }

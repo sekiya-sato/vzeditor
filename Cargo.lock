@@ -2955,6 +2955,7 @@ dependencies = [
  "eframe",
  "rfd",
  "unicode-width 0.2.3",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]

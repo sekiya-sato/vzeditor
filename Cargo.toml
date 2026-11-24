@@ -16,10 +16,17 @@ chrono = { version = "0.4", default-features = false, features = ["clock", "std"
 eframe = { version = "0.31", default-features = false, features = ["default_fonts", "glow", "wayland", "x11"] }
 unicode-width = "0.2"
 
-# Windows: ネイティブのファイルダイアログとクリップボード
+# Windows: ネイティブのファイルダイアログとクリップボード、
+# Claude Code / Codex への送信（ウィンドウ検索・前面化・キー入力）
 [target.'cfg(windows)'.dependencies]
 rfd = "0.15"
 arboard = { version = "3", default-features = false }
+windows-sys = { version = "0.59", features = [
+    "Win32_Foundation",
+    "Win32_System_Threading",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_UI_WindowsAndMessaging",
+] }
 
 # macOS: クリップボード（ファイルダイアログは osascript）
 [target.'cfg(target_os = "macos")'.dependencies]

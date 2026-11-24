@@ -8,6 +8,7 @@ mod filer;
 mod fonts;
 mod icon;
 mod markdown;
+mod send_to_app;
 mod settings;
 mod window_style;
 
