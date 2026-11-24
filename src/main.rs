@@ -18,7 +18,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 fn main() -> eframe::Result<()> {
-    let initial_file = std::env::args_os().nth(1).map(PathBuf::from);
+    // 複数ファイル・フォルダを引数で受け取る（エクスプローラーで exe へ複数ドロップした場合も同じ）
+    let initial_paths: Vec<PathBuf> = std::env::args_os().skip(1).map(PathBuf::from).collect();
     let settings = Settings::load();
 
     let mut viewport = egui::ViewportBuilder::default()
@@ -28,7 +29,9 @@ fn main() -> eframe::Result<()> {
         .with_inner_size([1024.0, 680.0])
         .with_min_inner_size([640.0, 400.0])
         // 背面透過を実行中に切り替えられるよう、常に透過可能なウィンドウとして作成する
-        .with_transparent(true);
+        .with_transparent(true)
+        // ファイルのドラッグ＆ドロップを受け付ける（Windows / macOS / Linux X11）
+        .with_drag_and_drop(true);
     if settings.always_on_top {
         viewport = viewport.with_always_on_top();
     }
@@ -41,6 +44,6 @@ fn main() -> eframe::Result<()> {
     eframe::run_native(
         "VZ Editor",
         native_options,
-        Box::new(move |cc| Ok(Box::new(VzEditorApp::new(cc, initial_file, settings)))),
+        Box::new(move |cc| Ok(Box::new(VzEditorApp::new(cc, initial_paths, settings)))),
     )
 }

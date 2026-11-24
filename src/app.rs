@@ -350,7 +350,7 @@ pub struct VzEditorApp {
 impl VzEditorApp {
     pub fn new(
         cc: &eframe::CreationContext<'_>,
-        initial_file: Option<PathBuf>,
+        initial_paths: Vec<PathBuf>,
         settings: Settings,
     ) -> Self {
         configure_japanese_fonts(&cc.egui_ctx);
@@ -361,36 +361,22 @@ impl VzEditorApp {
             o.zoom_with_keyboard = false;
         });
 
-        let mut status_message =
+        let status_message =
             String::from("VZ互換: ^E/^S/^D/^X移動  ^Wバッファ切替  ^P MDビュー  ESCファイラー  F1ヘルプ");
         let mut initial_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-
-        let initial_buffer = if let Some(path) = initial_file {
-            if let Some(parent) = path.parent() {
-                if !parent.as_os_str().is_empty() && parent.exists() {
-                    initial_dir = parent.to_path_buf();
+        if let Some(first) = initial_paths.first() {
+            let dir = if first.is_dir() {
+                Some(first.as_path())
+            } else {
+                first.parent()
+            };
+            if let Some(dir) = dir {
+                if !dir.as_os_str().is_empty() && dir.exists() {
+                    initial_dir = dir.to_path_buf();
                 }
             }
-            match TextBuffer::from_file(&path) {
-                Ok(buf) => {
-                    status_message = format!("読み込みました: {}", path.display());
-                    buf
-                }
-                Err(e) => {
-                    if e.kind() == std::io::ErrorKind::NotFound {
-                        let mut buf = TextBuffer::new();
-                        buf.file_path = Some(path.clone());
-                        status_message = format!("新規ファイル: {}", path.display());
-                        buf
-                    } else {
-                        status_message = format!("読み込みエラー: {e}");
-                        TextBuffer::new()
-                    }
-                }
-            }
-        } else {
-            TextBuffer::new()
-        };
+        }
+        let initial_buffer = TextBuffer::new();
 
         let font_size = settings.font_size.clamp(MIN_FONT_SIZE, MAX_FONT_SIZE);
         let bg_opacity = window_style::set_opacity_percent(settings.opacity);
@@ -426,6 +412,10 @@ impl VzEditorApp {
             quit_after_save: false,
             allow_close: false,
         };
+        if !initial_paths.is_empty() {
+            // 存在しないパスは新規ファイルとして開く（従来の `vz 新規.txt` と同じ）
+            app.open_paths(initial_paths, true);
+        }
         app.sync_window_title(&cc.egui_ctx);
         app
     }
@@ -710,7 +700,148 @@ impl VzEditorApp {
 
     // --- Multi-Buffer Management ---
 
-    fn open_file_in_buffer(&mut self, path: PathBuf) {
+    /// 未編集の [無題] だけなら置き換え、それ以外は末尾に追加してアクティブにする。
+    fn add_buffer(&mut self, buf: TextBuffer) {
+        if self.buffers.len() == 1 && self.buffers[0].is_untouched_untitled() {
+            self.buffers[0] = BufferSlot::new(buf);
+            self.active_buf = 0;
+        } else {
+            self.buffers.push(BufferSlot::new(buf));
+            self.active_buf = self.buffers.len() - 1;
+        }
+        self.mode = AppMode::Editor;
+        self.need_scroll_to_cursor = true;
+    }
+
+    /// 複数のファイル・フォルダを開く（ドラッグ＆ドロップ、起動引数、開くダイアログ、ファイラーのマーク）。
+    ///
+    /// - ファイルはそれぞれバッファで開き、最初に開いたファイルを表示する。既に開いていれば切り替えるだけ。
+    /// - フォルダだけが渡された場合は、ファイラーでそのフォルダへ移動する。
+    /// - `create_missing` が true なら存在しないパスを新規ファイルとして開く。
+    fn open_paths(&mut self, paths: Vec<PathBuf>, create_missing: bool) {
+        let mut first_opened: Option<usize> = None;
+        let mut opened = 0usize;
+        let mut failed: Vec<String> = Vec::new();
+        let mut first_dir: Option<PathBuf> = None;
+
+        for path in paths {
+            if path.is_dir() {
+                if first_dir.is_none() {
+                    first_dir = Some(path);
+                }
+                continue;
+            }
+            let ok = if !path.exists() && create_missing {
+                let mut buf = TextBuffer::new();
+                buf.file_path = Some(path.clone());
+                self.add_buffer(buf);
+                self.status_message = format!("新規ファイル: {}", path.display());
+                true
+            } else {
+                self.open_file_in_buffer(path.clone())
+            };
+            if ok {
+                opened += 1;
+                first_opened.get_or_insert(self.active_buf);
+            } else {
+                failed.push(
+                    path.file_name()
+                        .map(|n| n.to_string_lossy().into_owned())
+                        .unwrap_or_else(|| path.display().to_string()),
+                );
+            }
+        }
+
+        if let Some(idx) = first_opened {
+            self.switch_buffer_to(idx);
+            self.mode = AppMode::Editor;
+            if opened > 1 || !failed.is_empty() {
+                let mut msg = format!(
+                    "{opened} 個のファイルを開きました [{}/{}]: {}",
+                    self.active_buf + 1,
+                    self.buffers.len(),
+                    self.cur_buf().display_name()
+                );
+                if !failed.is_empty() {
+                    msg.push_str(&format!("  (開けなかったファイル: {})", failed.join(", ")));
+                }
+                self.status_message = msg;
+            }
+        } else if let Some(dir) = first_dir {
+            match self.filer.active_pane_mut().enter_dir(dir.clone()) {
+                Ok(()) => {
+                    self.enter_filer();
+                    self.status_message = format!("フォルダを開きました: {}", dir.display());
+                }
+                Err(e) => self.status_message = format!("フォルダを開けません: {e}"),
+            }
+        } else if !failed.is_empty() {
+            self.status_message = format!("開けなかったファイル: {}", failed.join(", "));
+        }
+    }
+
+    /// ドロップされたファイルを開く。
+    fn handle_dropped_files(&mut self, ctx: &egui::Context) {
+        let paths: Vec<PathBuf> = ctx.input(|i| {
+            i.raw
+                .dropped_files
+                .iter()
+                .filter_map(|f| f.path.clone())
+                .collect()
+        });
+        if paths.is_empty() {
+            return;
+        }
+        if self.filer_modal.is_some()
+            || self.inline_prompt.is_some()
+            || self.pending_dialog.is_some()
+            || self.quit_after_save
+        {
+            self.status_message = "ダイアログを閉じてからドロップしてください".to_string();
+            return;
+        }
+        self.open_menu = None;
+        self.show_help = false;
+        self.show_about = false;
+        self.prefix = PrefixKey::None;
+        self.open_paths(paths, false);
+        ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+    }
+
+    /// ファイルをウィンドウ上にドラッグしている間の案内表示。
+    fn render_drop_overlay(&self, ctx: &egui::Context) {
+        let count = ctx.input(|i| i.raw.hovered_files.len());
+        if count == 0 {
+            return;
+        }
+        let painter = ctx.layer_painter(egui::LayerId::new(
+            egui::Order::Foreground,
+            egui::Id::new("vz_drop_overlay"),
+        ));
+        let rect = ctx.screen_rect();
+        painter.rect_filled(rect, CornerRadius::ZERO, Color32::from_rgba_unmultiplied(8, 24, 56, 210));
+        painter.rect_stroke(
+            rect.shrink(10.0),
+            CornerRadius::same(6),
+            Stroke::new(3.0_f32, TEXT_CYAN),
+            StrokeKind::Inside,
+        );
+        let text = if count > 1 {
+            format!("ドロップして {count} 個のファイルを開く")
+        } else {
+            "ドロップしてファイルを開く".to_string()
+        };
+        painter.text(
+            rect.center(),
+            Align2::CENTER_CENTER,
+            text,
+            FontId::monospace(22.0),
+            TEXT_CYAN,
+        );
+    }
+
+    /// ファイルをバッファで開く。開けた（または既存バッファへ切り替えた）ら true。
+    fn open_file_in_buffer(&mut self, path: PathBuf) -> bool {
         let canon_target = fs::canonicalize(&path).unwrap_or_else(|_| path.clone());
 
         // If already open in an existing buffer, switch directly to it.
@@ -733,22 +864,14 @@ impl VzEditorApp {
                 self.buffers.len(),
                 name
             );
-            return;
+            return true;
         }
 
         match TextBuffer::from_file(&path) {
             Ok(buf) => {
                 let display_path = path.display().to_string();
                 let is_md = buf.is_markdown();
-                if self.buffers.len() == 1 && self.buffers[0].is_untouched_untitled() {
-                    self.buffers[0] = BufferSlot::new(buf);
-                    self.active_buf = 0;
-                } else {
-                    self.buffers.push(BufferSlot::new(buf));
-                    self.active_buf = self.buffers.len() - 1;
-                }
-                self.mode = AppMode::Editor;
-                self.need_scroll_to_cursor = true;
+                self.add_buffer(buf);
                 if is_md {
                     self.status_message = format!(
                         "開きました [{}/{}]: {} (^PでMDビュー切替)",
@@ -764,9 +887,11 @@ impl VzEditorApp {
                         display_path
                     );
                 }
+                true
             }
             Err(e) => {
                 self.status_message = format!("読み込みエラー: {e}");
+                false
             }
         }
     }
@@ -873,8 +998,10 @@ impl VzEditorApp {
                     };
                     self.quit_after_save = false;
                 }
-                DialogResult::OpenPath(Some(path)) => self.open_file_in_buffer(path),
-                DialogResult::OpenPath(None) => {
+                DialogResult::OpenPaths(paths) if !paths.is_empty() => {
+                    self.open_paths(paths, false)
+                }
+                DialogResult::OpenPaths(_) => {
                     self.status_message = "ファイルを開くのをキャンセルしました".to_string();
                 }
                 DialogResult::Unavailable { is_save } => {
@@ -1615,6 +1742,24 @@ impl VzEditorApp {
     // --- Filer Actions ---
 
     fn filer_open_selected(&mut self) {
+        // Space でマークしたファイルがあれば、まとめてバッファで開く
+        let marked_files: Vec<PathBuf> = if self.filer.active_pane().marked.is_empty() {
+            Vec::new()
+        } else {
+            self.filer
+                .active_pane()
+                .target_entries()
+                .into_iter()
+                .filter(|e| !e.is_dir && !e.is_parent)
+                .map(|e| e.path)
+                .collect()
+        };
+        if !marked_files.is_empty() {
+            self.filer.active_pane_mut().marked.clear();
+            self.open_paths(marked_files, false);
+            return;
+        }
+
         let Some(entry) = self.filer.active_pane().selected_entry().cloned() else {
             return;
         };
@@ -4250,13 +4395,14 @@ impl VzEditorApp {
                         ("Ctrl+K+D / F10", "上書き保存 / 保存ダイアログ"),
                         ("ESC / Ctrl+K+Q / F9", "2画面ファイラーへ切替"),
                         ("Alt+T", "最前面固定の切替"),
+                        ("ファイルをドロップ", "複数ファイルをまとめてバッファで開く"),
                         ("Alt+↑ / Alt+↓ / Alt+0", "背景を濃く / 薄く / 透過解除"),
                         ("Alt+Shift+「+」「-」「0」", "文字を濃く / 薄く / 透過解除"),
                     ],
                     AppMode::Filer => &[
                         ("Ctrl+E / X (↑ / ↓)", "ファイルカーソル移動"),
                         ("Tab / Ctrl+S / D (← / →)", "左右ペイン（アクティブ窓）切替"),
-                        ("Enter / ダブルクリック", "フォルダ移動・ファイルをバッファで開く"),
+                        ("Enter / ダブルクリック", "フォルダ移動・ファイルを開く (マーク時はまとめて開く)"),
                         ("BackSpace / Ctrl+H", "親ディレクトリへ移動"),
                         ("Space", "ファイルマーク（複数選択・反転表示）"),
                         ("Ctrl++ / Ctrl+- / Ctrl+0", "フォントサイズ拡大 / 縮小 / リセット"),
@@ -5105,6 +5251,7 @@ impl eframe::App for VzEditorApp {
         window_style::set_opacity_percent(self.bg_opacity);
         window_style::set_text_opacity_percent(self.text_opacity);
         self.handle_close_request(ctx);
+        self.handle_dropped_files(ctx);
         self.poll_dialog();
         self.continue_save_and_quit(ctx);
         self.handle_events(ctx);
@@ -5129,6 +5276,7 @@ impl eframe::App for VzEditorApp {
         self.render_about_dialog(ctx);
         self.render_filer_modal(ctx);
         self.render_inline_path_prompt(ctx);
+        self.render_drop_overlay(ctx);
 
         // Keep OS window title bar synchronized with current file, dirty state, or filer directory
         self.sync_window_title(ctx);
@@ -5613,6 +5761,72 @@ mod tests {
         assert_eq!(app.save_dirty_buffers_for_quit(), QuitSaveStep::Done);
         assert!(!app.has_any_dirty_buffer());
         assert!(std::fs::read_to_string(&path).unwrap().starts_with("new old"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_open_paths_multiple_files_and_dir() {
+        let dir = std::env::temp_dir().join(format!("vz_open_test_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let a = dir.join("a.txt");
+        let b = dir.join("b.md");
+        std::fs::write(&a, "aaa\n").unwrap();
+        std::fs::write(&b, "# b\n").unwrap();
+
+        let mut app = make_test_app();
+        app.buffers = vec![BufferSlot::new(TextBuffer::new())];
+
+        // 複数ファイル: 未編集の [無題] を置き換えて2つ開き、最初のファイルを表示
+        app.open_paths(vec![a.clone(), b.clone(), dir.join("missing.txt")], false);
+        assert_eq!(app.buffers.len(), 2);
+        assert_eq!(app.active_buf, 0);
+        assert_eq!(app.cur_buf().display_name(), "a.txt");
+        assert!(app.status_message.contains("2 個のファイルを開きました"));
+        assert!(app.status_message.contains("missing.txt"));
+
+        // 同じファイルを再ドロップしても重複しない
+        app.open_paths(vec![b.clone()], false);
+        assert_eq!(app.buffers.len(), 2);
+        assert_eq!(app.active_buf, 1);
+
+        // 存在しないパスは create_missing で新規ファイル
+        app.open_paths(vec![dir.join("new.txt")], true);
+        assert_eq!(app.buffers.len(), 3);
+        assert!(!app.cur_buf().dirty);
+
+        // フォルダだけならファイラーで移動
+        app.open_paths(vec![dir.clone()], false);
+        assert_eq!(app.mode, AppMode::Filer);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_filer_enter_opens_marked_files() {
+        let dir = std::env::temp_dir().join(format!("vz_mark_test_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        for name in ["m1.txt", "m2.txt", "m3.txt"] {
+            std::fs::write(dir.join(name), name).unwrap();
+        }
+        let mut app = make_test_app();
+        app.buffers = vec![BufferSlot::new(TextBuffer::new())];
+        app.filer = FilerState::new(dir.clone());
+        {
+            // ファイラーはフォルダを正規化するため、一覧の項目のパスでマークする
+            let pane = app.filer.active_pane_mut();
+            let targets: Vec<PathBuf> = pane
+                .entries
+                .iter()
+                .filter(|e| e.name == "m1.txt" || e.name == "m3.txt")
+                .map(|e| e.path.clone())
+                .collect();
+            assert_eq!(targets.len(), 2);
+            pane.marked.extend(targets);
+        }
+        app.filer_open_selected();
+        assert_eq!(app.buffers.len(), 2);
+        assert_eq!(app.mode, AppMode::Editor);
+        assert!(app.filer.active_pane().marked.is_empty());
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

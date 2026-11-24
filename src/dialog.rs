@@ -13,7 +13,8 @@ use std::thread;
 #[derive(Debug, Clone)]
 pub enum DialogResult {
     SavePath(Option<PathBuf>),
-    OpenPath(Option<PathBuf>),
+    /// 開くファイル（複数選択可）。空ならキャンセル。
+    OpenPaths(Vec<PathBuf>),
     /// ネイティブダイアログが使えないため、組み込みのパス入力欄を使う。
     #[cfg_attr(windows, allow(dead_code))]
     Unavailable { is_save: bool },
@@ -32,7 +33,7 @@ pub fn spawn_save_dialog(initial_path: Option<&Path>) -> Receiver<DialogResult> 
     rx
 }
 
-/// ファイルを開くダイアログを非同期で開く。
+/// ファイルを開くダイアログ（複数選択可）を非同期で開く。
 pub fn spawn_open_dialog(initial_dir: Option<&Path>) -> Receiver<DialogResult> {
     let initial = initial_dir.map(|p| p.to_path_buf());
     let (tx, rx) = mpsc::channel();
@@ -50,6 +51,17 @@ fn non_empty_path(s: &[u8]) -> Option<PathBuf> {
     } else {
         Some(PathBuf::from(s))
     }
+}
+
+/// 改行区切りの出力（zenity / kdialog / osascript）をパスの一覧にする。
+#[cfg_attr(windows, allow(dead_code))]
+fn lines_to_paths(s: &[u8]) -> Vec<PathBuf> {
+    String::from_utf8_lossy(s)
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .map(PathBuf::from)
+        .collect()
 }
 
 // ---------------------------------------------------------------- Windows
@@ -82,7 +94,7 @@ fn run_open_dialog(initial_dir: Option<&Path>) -> DialogResult {
     if let Some(dir) = initial_dir {
         dlg = dlg.set_directory(dir);
     }
-    DialogResult::OpenPath(dlg.pick_file())
+    DialogResult::OpenPaths(dlg.pick_files().unwrap_or_default())
 }
 
 // ---------------------------------------------------------------- macOS
@@ -92,17 +104,18 @@ fn applescript_quote(s: &str) -> String {
     format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""))
 }
 
+/// osascript を実行して標準出力を返す。起動できなければ None、キャンセル時は空。
 #[cfg(target_os = "macos")]
-fn run_osascript(script: &str) -> Option<Option<PathBuf>> {
+fn run_osascript(script: &str) -> Option<Vec<u8>> {
     let output = std::process::Command::new("osascript")
         .args(["-e", script])
         .output()
         .ok()?;
     // キャンセル時は osascript が非 0 で終了する
     Some(if output.status.success() {
-        non_empty_path(&output.stdout)
+        output.stdout
     } else {
-        None
+        Vec::new()
     })
 }
 
@@ -132,26 +145,31 @@ fn run_save_dialog(initial_path: Option<&Path>) -> DialogResult {
     }
     script.push(')');
     match run_osascript(&script) {
-        Some(p) => DialogResult::SavePath(p),
+        Some(out) => DialogResult::SavePath(non_empty_path(&out)),
         None => DialogResult::Unavailable { is_save: true },
     }
 }
 
 #[cfg(target_os = "macos")]
 fn run_open_dialog(initial_dir: Option<&Path>) -> DialogResult {
-    let mut script = format!(
-        "POSIX path of (choose file with prompt {}",
-        applescript_quote(OPEN_TITLE)
-    );
+    let mut script = format!("set fs to (choose file with prompt {}", applescript_quote(OPEN_TITLE));
     if let Some(d) = initial_dir {
         script.push_str(&format!(
             " default location (POSIX file {})",
             applescript_quote(&d.to_string_lossy())
         ));
     }
-    script.push(')');
+    // 複数選択を許可し、選ばれたファイルを1行1パスで返す
+    script.push_str(concat!(
+        " with multiple selections allowed)\n",
+        "set out to \"\"\n",
+        "repeat with f in fs\n",
+        "set out to out & (POSIX path of f) & linefeed\n",
+        "end repeat\n",
+        "return out",
+    ));
     match run_osascript(&script) {
-        Some(p) => DialogResult::OpenPath(p),
+        Some(out) => DialogResult::OpenPaths(lines_to_paths(&out)),
         None => DialogResult::Unavailable { is_save: false },
     }
 }
@@ -204,29 +222,34 @@ fn run_open_dialog(initial_dir: Option<&Path>) -> DialogResult {
     use std::process::Command;
 
     let mut cmd = Command::new("zenity");
-    cmd.args(["--file-selection", &format!("--title={OPEN_TITLE}")]);
+    cmd.args([
+        "--file-selection",
+        "--multiple",
+        "--separator=\n",
+        &format!("--title={OPEN_TITLE}"),
+    ]);
     if let Some(p) = initial_dir {
         cmd.arg(format!("--filename={}/", p.display()));
     }
     if let Ok(output) = cmd.output() {
-        return DialogResult::OpenPath(if output.status.success() {
-            non_empty_path(&output.stdout)
+        return DialogResult::OpenPaths(if output.status.success() {
+            lines_to_paths(&output.stdout)
         } else {
-            None
+            Vec::new()
         });
     }
 
     let mut kcmd = Command::new("kdialog");
-    kcmd.arg("--getopenfilename");
+    kcmd.args(["--getopenfilename", "--multiple", "--separate-output"]);
     match initial_dir {
         Some(p) => kcmd.arg(p),
         None => kcmd.arg("."),
     };
     if let Ok(output) = kcmd.output() {
-        return DialogResult::OpenPath(if output.status.success() {
-            non_empty_path(&output.stdout)
+        return DialogResult::OpenPaths(if output.status.success() {
+            lines_to_paths(&output.stdout)
         } else {
-            None
+            Vec::new()
         });
     }
 
