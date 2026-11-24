@@ -1,4 +1,4 @@
-//! 設定（背景・文字の不透明度、最前面固定、フォントサイズ、キー割り当て）の保存と読み込み。
+//! 設定（背景・文字の不透明度、最前面固定、フォントサイズ、キー割り当て、折り返し）の保存と読み込み。
 //!
 //! 保存先:
 //! - Windows: `%APPDATA%\vzeditor\settings.ini`
@@ -39,6 +39,8 @@ pub struct Settings {
     pub always_on_top: bool,
     pub font_size: f32,
     pub key_scheme: KeyScheme,
+    /// 長い行を折り返して表示する
+    pub word_wrap: bool,
 }
 
 impl Default for Settings {
@@ -49,6 +51,7 @@ impl Default for Settings {
             always_on_top: false,
             font_size: 16.0,
             key_scheme: KeyScheme::Sakura,
+            word_wrap: false,
         }
     }
 }
@@ -73,6 +76,7 @@ impl Settings {
                     }
                 }
                 "always_on_top" => s.always_on_top = value == "true",
+                "word_wrap" => s.word_wrap = value == "true",
                 "key_scheme" => {
                     s.key_scheme = if value == "vz" {
                         KeyScheme::Vz
@@ -95,12 +99,13 @@ impl Settings {
 
     pub fn serialize(&self) -> String {
         format!(
-            "opacity={}\ntext_opacity={}\nalways_on_top={}\nfont_size={}\nkey_scheme={}\n",
+            "opacity={}\ntext_opacity={}\nalways_on_top={}\nfont_size={}\nkey_scheme={}\nword_wrap={}\n",
             self.opacity,
             self.text_opacity,
             self.always_on_top,
             self.font_size,
-            self.key_scheme.as_str()
+            self.key_scheme.as_str(),
+            self.word_wrap
         )
     }
 
@@ -162,6 +167,7 @@ mod tests {
             always_on_top: true,
             font_size: 20.0,
             key_scheme: KeyScheme::Vz,
+            word_wrap: true,
         };
         assert_eq!(Settings::parse(&s.serialize()), s);
     }
@@ -175,5 +181,6 @@ mod tests {
         assert_eq!(s.font_size, 16.0);
         // 既定はサクラ互換
         assert_eq!(s.key_scheme, KeyScheme::Sakura);
+        assert!(!s.word_wrap);
     }
 }

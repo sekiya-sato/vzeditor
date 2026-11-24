@@ -216,6 +216,7 @@ enum MenuAction {
     FontReset,
     NextBuffer,
     ToggleAlwaysOnTop,
+    ToggleWordWrap,
     OpacityUp,
     OpacityDown,
     OpacityReset,
@@ -292,11 +293,109 @@ struct BufferSlot {
     md_scroll_dirty: bool,
     md_cache_rev: Option<u64>,
     md_blocks: Vec<MdBlock>,
+    /// 折り返し表示の行割り（折り返しモードのときだけ作る）
+    wrap: Option<WrapLayout>,
+}
+
+/// 折り返し位置（2つ目以降の表示行の先頭の文字位置）。
+/// 幅は半角 1・全角 2・タブ 4 のセル数で数え、`cols` セルを超える文字の前で折り返す。
+fn wrap_breaks(line: &str, cols: usize) -> Vec<usize> {
+    let cols = cols.max(1);
+    let mut breaks = Vec::new();
+    let mut acc = 0usize;
+    for (i, c) in line.chars().enumerate() {
+        let w = crate::buffer::char_display_width(c);
+        if acc > 0 && acc + w > cols {
+            breaks.push(i);
+            acc = 0;
+        }
+        acc += w;
+    }
+    breaks
+}
+
+/// 折り返し表示の行割り。論理行（改行で区切った行）を、幅に収まる表示行に分ける。
+struct WrapLayout {
+    rev: u64,
+    cols: usize,
+    /// 各論理行の折り返し位置
+    breaks: Vec<Vec<usize>>,
+    /// 各論理行の最初の表示行番号（末尾に総表示行数を足して 行数+1 個）
+    row_start: Vec<usize>,
+}
+
+impl WrapLayout {
+    fn build(lines: &[String], cols: usize, rev: u64) -> Self {
+        let breaks: Vec<Vec<usize>> = lines.iter().map(|l| wrap_breaks(l, cols)).collect();
+        let mut row_start = Vec::with_capacity(lines.len() + 1);
+        let mut acc = 0usize;
+        for b in &breaks {
+            row_start.push(acc);
+            acc += b.len() + 1;
+        }
+        row_start.push(acc);
+        Self {
+            rev,
+            cols,
+            breaks,
+            row_start,
+        }
+    }
+
+    fn is_valid_for(&self, buf: &TextBuffer, cols: usize) -> bool {
+        self.rev == buf.revision && self.cols == cols && self.breaks.len() == buf.lines.len()
+    }
+
+    fn total_rows(&self) -> usize {
+        self.row_start.last().copied().unwrap_or(0)
+    }
+
+    /// 文字位置が何番目の表示行（行内）にあるか。折り返し位置ちょうどは次の表示行の先頭。
+    fn seg_of(&self, line: usize, col: usize) -> usize {
+        self.breaks
+            .get(line)
+            .map(|b| b.partition_point(|&x| x <= col))
+            .unwrap_or(0)
+    }
+
+    fn row_of(&self, line: usize, col: usize) -> usize {
+        self.row_start.get(line).copied().unwrap_or(0) + self.seg_of(line, col)
+    }
+
+    /// 表示行 → (論理行, 行内の表示行番号)
+    fn line_of_row(&self, row: usize) -> (usize, usize) {
+        let lines = self.breaks.len();
+        if lines == 0 {
+            return (0, 0);
+        }
+        let line = self
+            .row_start
+            .partition_point(|&s| s <= row)
+            .saturating_sub(1)
+            .min(lines - 1);
+        let seg = (row - self.row_start[line].min(row)).min(self.breaks[line].len());
+        (line, seg)
+    }
+
+    /// 表示行の文字範囲 [開始, 終了)。`len` は論理行の文字数。
+    fn seg_range(&self, line: usize, seg: usize, len: usize) -> (usize, usize) {
+        let Some(b) = self.breaks.get(line) else {
+            return (0, len);
+        };
+        let start = if seg == 0 { 0 } else { b.get(seg - 1).copied().unwrap_or(len) };
+        let end = b.get(seg).copied().unwrap_or(len);
+        (start.min(len), end.min(len).max(start.min(len)))
+    }
+
+    fn is_last_seg(&self, line: usize, seg: usize) -> bool {
+        self.breaks.get(line).is_none_or(|b| seg >= b.len())
+    }
 }
 
 impl BufferSlot {
     fn new(buffer: TextBuffer) -> Self {
         Self {
+            wrap: None,
             buffer,
             scroll_x: 0.0,
             scroll_y: 0.0,
@@ -385,6 +484,11 @@ pub struct VzEditorApp {
 
     /// `vz --save-and-quit` からの終了要求（監視スレッドが true にする）。テストでは None
     quit_request: Option<Arc<AtomicBool>>,
+
+    /// 長い行をウィンドウ幅で折り返して表示する（Alt+W）
+    word_wrap: bool,
+    /// 直前の描画で求めた折り返し幅（セル数）。キー操作の表示行移動に使う
+    wrap_cols: usize,
 }
 
 impl VzEditorApp {
@@ -466,6 +570,8 @@ impl VzEditorApp {
             select_mode: false,
             clipboard_out: None,
             quit_request: None,
+            word_wrap: settings.word_wrap,
+            wrap_cols: 80,
         };
         let session_dir = session::session_dir();
         if restore {
@@ -544,6 +650,7 @@ impl VzEditorApp {
             always_on_top: self.always_on_top,
             font_size: self.font_size,
             key_scheme: self.key_scheme,
+            word_wrap: self.word_wrap,
         };
         if let Err(e) = settings.save() {
             self.status_message = format!("設定の保存に失敗しました: {e}");
@@ -1018,6 +1125,17 @@ impl VzEditorApp {
             } else {
                 buf.clear_selection();
             }
+            // 折り返し表示では ↑↓ は表示行単位（Ctrl 付きは2行）
+            let row_delta = match key {
+                Key::ArrowUp => -1,
+                Key::ArrowDown => 1,
+                _ => 0,
+            } * if ctrl { 2 } else { 1 };
+            if row_delta != 0 && self.move_cursor_row(row_delta) {
+                self.need_scroll_to_cursor = true;
+                return true;
+            }
+            let buf = self.cur_buf_mut();
             match (key, ctrl) {
                 (Key::ArrowLeft, false) => buf.move_left(),
                 (Key::ArrowLeft, true) => buf.move_word_left(),
@@ -1833,6 +1951,95 @@ impl VzEditorApp {
         }
     }
 
+    // --- 折り返し表示（Alt+W） ---
+
+    fn toggle_word_wrap(&mut self) {
+        self.word_wrap = !self.word_wrap;
+        for slot in &mut self.buffers {
+            slot.scroll_x = 0.0;
+            slot.wrap = None;
+        }
+        self.need_scroll_to_cursor = true;
+        self.status_message = if self.word_wrap {
+            "折り返し表示: オン（ウィンドウ幅で折り返す。Alt+W で解除）".to_string()
+        } else {
+            "折り返し表示: オフ".to_string()
+        };
+        self.save_settings();
+    }
+
+    /// 現在のバッファの折り返し行割り（幅 `cols`）を、必要なら作り直して返す。
+    fn ensure_wrap_layout(&mut self, cols: usize) {
+        let slot = &mut self.buffers[self.active_buf];
+        if !slot.wrap.as_ref().is_some_and(|w| w.is_valid_for(&slot.buffer, cols)) {
+            slot.wrap = Some(WrapLayout::build(&slot.buffer.lines, cols, slot.buffer.revision));
+        }
+    }
+
+    /// 折り返し表示のとき、カーソルを表示行単位で `delta` 行動かす（左端からの見た目の位置を保つ）。
+    /// 折り返し表示でなければ何もせず false。
+    fn move_cursor_row(&mut self, delta: isize) -> bool {
+        if !self.word_wrap || self.is_markdown_view() {
+            return false;
+        }
+        let cols = self.wrap_cols;
+        let (line, col) = self.cur_buf().cursor_pos();
+        self.ensure_wrap_layout(cols);
+        let (target_line, target_col) = {
+            let slot = &self.buffers[self.active_buf];
+            let Some(layout) = slot.wrap.as_ref() else {
+                return false;
+            };
+            let buf = &slot.buffer;
+            let line_str = &buf.lines[line];
+            let seg = layout.seg_of(line, col);
+            let (s, _) = layout.seg_range(line, seg, buf.line_char_len(line));
+            let x: usize = line_str
+                .chars()
+                .skip(s)
+                .take(col.saturating_sub(s))
+                .map(crate::buffer::char_display_width)
+                .sum();
+            let row = layout.row_of(line, col) as isize;
+            let max_row = layout.total_rows().saturating_sub(1) as isize;
+            let target_row = (row + delta).clamp(0, max_row) as usize;
+            let (tl, tseg) = layout.line_of_row(target_row);
+            let tlen = buf.line_char_len(tl);
+            let (ts, te) = layout.seg_range(tl, tseg, tlen);
+            // 最後以外の表示行の終端は次の表示行の先頭になるため、1文字手前までにする
+            let limit = if layout.is_last_seg(tl, tseg) || te == ts {
+                te
+            } else {
+                te - 1
+            };
+            let mut acc = 0usize;
+            let mut tcol = ts;
+            for c in buf.lines[tl].chars().skip(ts).take(limit - ts) {
+                let w = crate::buffer::char_display_width(c);
+                if acc + w > x {
+                    break;
+                }
+                acc += w;
+                tcol += 1;
+            }
+            (tl, tcol)
+        };
+        self.cur_buf_mut().set_cursor(target_line, target_col);
+        true
+    }
+
+    fn cursor_up(&mut self) {
+        if !self.move_cursor_row(-1) {
+            self.cur_buf_mut().move_up();
+        }
+    }
+
+    fn cursor_down(&mut self) {
+        if !self.move_cursor_row(1) {
+            self.cur_buf_mut().move_down();
+        }
+    }
+
     // --- 更新時の保存して終了 / 状態の復元（vz --save-and-quit / --restore） ---
 
     /// 外部からの終了要求を受け取っていれば、状態を保存して終了する。
@@ -2209,6 +2416,16 @@ impl VzEditorApp {
                     action: MenuAction::FontReset,
                     enabled: true,
                 },
+                MenuEntry::Item {
+                    label: if self.word_wrap {
+                        "折り返し表示を解除"
+                    } else {
+                        "長い行を折り返して表示"
+                    },
+                    shortcut: "Alt+W",
+                    action: MenuAction::ToggleWordWrap,
+                    enabled: true,
+                },
                 MenuEntry::Separator,
                 MenuEntry::Item {
                     label: "次のバッファへ切替",
@@ -2389,6 +2606,7 @@ impl VzEditorApp {
             MenuAction::SendToClaudeCode => self.start_send(SendTarget::ClaudeCode),
             MenuAction::SendToCodex => self.start_send(SendTarget::Codex),
             MenuAction::ToggleKeyScheme => self.toggle_key_scheme(),
+            MenuAction::ToggleWordWrap => self.toggle_word_wrap(),
             MenuAction::SelectAll => {
                 if self.mode == AppMode::Editor && !self.is_markdown_view() {
                     self.cur_buf_mut().select_all();
@@ -2719,7 +2937,7 @@ impl VzEditorApp {
                         if in_md_view {
                             self.scroll_markdown_by(self.line_height * 2.5);
                         } else {
-                            self.cur_buf_mut().move_down();
+                            self.cursor_down();
                             self.need_scroll_to_cursor = true;
                         }
                     } else {
@@ -2941,7 +3159,7 @@ impl VzEditorApp {
                                 if in_md_view {
                                     self.scroll_markdown_by(-self.line_height * 2.5);
                                 } else {
-                                    self.cur_buf_mut().move_up();
+                                    self.cursor_up();
                                     self.need_scroll_to_cursor = true;
                                 }
                                 true
@@ -2964,7 +3182,7 @@ impl VzEditorApp {
                                 if in_md_view {
                                     self.scroll_markdown_by(self.line_height * 2.5);
                                 } else {
-                                    self.cur_buf_mut().move_down();
+                                    self.cursor_down();
                                     self.need_scroll_to_cursor = true;
                                 }
                                 true
@@ -3092,11 +3310,11 @@ impl VzEditorApp {
                         } else {
                             match key {
                                 Key::ArrowUp => {
-                                    self.cur_buf_mut().move_up();
+                                    self.cursor_up();
                                     self.need_scroll_to_cursor = true;
                                 }
                                 Key::ArrowDown => {
-                                    self.cur_buf_mut().move_down();
+                                    self.cursor_down();
                                     self.need_scroll_to_cursor = true;
                                 }
                                 Key::ArrowLeft => {
@@ -4435,7 +4653,6 @@ impl VzEditorApp {
                 let cursor_col = self.cur_buf().cursor_col;
                 let cursor_line_str = self.cur_buf().current_line_str().to_string();
                 let cursor_byte = char_to_byte_idx(&cursor_line_str, cursor_col);
-                let before_cursor_disp = expand_tabs_for_display(&cursor_line_str[..cursor_byte]);
                 let preedit_disp = expand_tabs_for_display(&self.ime_preedit);
                 let char_under_cursor = cursor_line_str[cursor_byte..].chars().next();
                 let cursor_sample = match char_under_cursor {
@@ -4444,10 +4661,7 @@ impl VzEditorApp {
                     None => "M".to_string(),
                 };
 
-                let (cursor_px_x, preedit_px_w, gutter_text_w, cursor_w) = ui.fonts(|f| {
-                    let g_before =
-                        f.layout_no_wrap(before_cursor_disp.clone(), font_id.clone(), TEXT_WHITE);
-                    let x = g_before.size().x;
+                let (cell_w, preedit_px_w, gutter_text_w, cursor_w) = ui.fonts(|f| {
                     let pw = if preedit_disp.is_empty() {
                         0.0
                     } else {
@@ -4472,7 +4686,14 @@ impl VzEditorApp {
                         .layout_no_wrap(cursor_sample.clone(), font_id.clone(), TEXT_WHITE)
                         .size()
                         .x;
-                    (x, pw, gw, char_w.max(half_cell_w))
+                    // 折り返し幅の計算用に、半角1文字の実際の幅を10文字分から求める
+                    let cell_w = (f
+                        .layout_no_wrap("M".repeat(10), font_id.clone(), TEXT_WHITE)
+                        .size()
+                        .x
+                        / 10.0)
+                        .max(1.0);
+                    (cell_w, pw, gw, char_w.max(half_cell_w))
                 });
 
                 let gutter_pad = (self.font_size * 1.1).clamp(14.0, 28.0);
@@ -4491,8 +4712,50 @@ impl VzEditorApp {
                 let viewport_w = (editor_rect.width() - left_pad * 2.0).max(40.0);
                 self.last_visible_lines = (viewport_h / self.line_height).floor().max(1.0) as usize;
 
+                // 折り返し表示: 表示幅（セル数）で論理行を表示行に分ける。描画中は行割りをスロットから借りる
+                let wrap: Option<WrapLayout> = if self.word_wrap {
+                    let cols = ((viewport_w - cursor_w) / cell_w).floor().max(8.0) as usize;
+                    self.wrap_cols = cols;
+                    self.ensure_wrap_layout(cols);
+                    self.cur_slot_mut().wrap.take()
+                } else {
+                    None
+                };
+                let total_rows = wrap.as_ref().map_or(total_lines, |w| w.total_rows());
+                // 表示行 → (論理行, 行内の表示行番号)
+                let row_to_line = |row: usize| -> (usize, usize) {
+                    match &wrap {
+                        Some(w) => w.line_of_row(row),
+                        None => (row.min(total_lines.saturating_sub(1)), 0),
+                    }
+                };
+                let seg_range = |line_idx: usize, seg: usize, len: usize| -> (usize, usize) {
+                    match &wrap {
+                        Some(w) => w.seg_range(line_idx, seg, len),
+                        None => (0, len),
+                    }
+                };
+                let is_last_seg =
+                    |line_idx: usize, seg: usize| wrap.as_ref().is_none_or(|w| w.is_last_seg(line_idx, seg));
+                let cursor_seg = wrap.as_ref().map_or(0, |w| w.seg_of(cursor_line, cursor_col));
+                let cursor_row = wrap.as_ref().map_or(cursor_line, |w| w.row_of(cursor_line, cursor_col));
+                let (cursor_seg_start, _) =
+                    seg_range(cursor_line, cursor_seg, cursor_line_str.chars().count());
+                let cursor_seg_byte = char_to_byte_idx(&cursor_line_str, cursor_seg_start);
+                let before_cursor_disp =
+                    expand_tabs_for_display(&cursor_line_str[cursor_seg_byte..cursor_byte]);
+                let cursor_px_x = ui.fonts(|f| {
+                    f.layout_no_wrap(before_cursor_disp, font_id.clone(), TEXT_WHITE)
+                        .size()
+                        .x
+                });
+
                 let mut scroll_y = self.cur_slot().scroll_y;
-                let mut scroll_x = self.cur_slot().scroll_x;
+                let mut scroll_x = if wrap.is_some() {
+                    0.0
+                } else {
+                    self.cur_slot().scroll_x
+                };
 
                 // Ctrl+マウスホイール: フォントサイズ（1ノッチ 1段階）
                 if response.hovered() {
@@ -4522,13 +4785,13 @@ impl VzEditorApp {
                     if scroll_delta.y.abs() > 0.0 {
                         scroll_y -= scroll_delta.y;
                     }
-                    if scroll_delta.x.abs() > 0.0 {
+                    if scroll_delta.x.abs() > 0.0 && wrap.is_none() {
                         scroll_x -= scroll_delta.x;
                     }
                 }
 
                 // Auto-scroll to keep cursor inside viewport
-                let cursor_px_y = cursor_line as f32 * self.line_height;
+                let cursor_px_y = cursor_row as f32 * self.line_height;
                 if self.need_scroll_to_cursor {
                     if cursor_px_y < scroll_y {
                         scroll_y = cursor_px_y;
@@ -4537,7 +4800,9 @@ impl VzEditorApp {
                     }
 
                     let caret_end_x = cursor_px_x + preedit_px_w + cursor_w + 8.0;
-                    if cursor_px_x < scroll_x {
+                    if wrap.is_some() {
+                        // 折り返し表示では横スクロールしない
+                    } else if cursor_px_x < scroll_x {
                         scroll_x = (cursor_px_x - cursor_w * 2.0).max(0.0);
                     } else if caret_end_x > scroll_x + viewport_w {
                         scroll_x = (caret_end_x - viewport_w).max(0.0);
@@ -4545,10 +4810,10 @@ impl VzEditorApp {
                     self.need_scroll_to_cursor = false;
                 }
 
-                let total_content_h = (total_lines as f32 + 2.0) * self.line_height;
+                let total_content_h = (total_rows as f32 + 2.0) * self.line_height;
                 let max_scroll_y = (total_content_h - viewport_h).max(0.0);
                 scroll_y = scroll_y.clamp(0.0, max_scroll_y);
-                scroll_x = scroll_x.max(0.0);
+                scroll_x = if wrap.is_some() { 0.0 } else { scroll_x.max(0.0) };
 
                 // マウス: クリックでカーソル移動。サクラ互換ではドラッグ・Shift+クリックで範囲選択、
                 // ダブルクリックで単語、トリプルクリックで行を選択する。
@@ -4564,15 +4829,30 @@ impl VzEditorApp {
                     // 画面上の位置 → (行, 文字位置)
                     let hit = |this: &Self, pos: Pos2| -> TextPos {
                         let rel_y = pos.y - editor_rect.min.y - top_pad + scroll_y;
-                        let target_line = ((rel_y / this.line_height).floor().max(0.0) as usize)
-                            .min(total_lines.saturating_sub(1));
+                        let target_row = ((rel_y / this.line_height).floor().max(0.0) as usize)
+                            .min(total_rows.saturating_sub(1));
+                        let (target_line, seg) = row_to_line(target_row);
                         let click_x = (pos.x - editor_rect.min.x - left_pad + scroll_x).max(0.0);
                         let line_str = &this.cur_buf().lines[target_line];
-                        let target_col = ui.fonts(|f| {
+                        let line_len = line_str.chars().count();
+                        let (seg_start, seg_end) = seg_range(target_line, seg, line_len);
+                        // 最後以外の表示行の終端は次の表示行の先頭になるため、1文字手前までにする
+                        let seg_limit = if is_last_seg(target_line, seg) || seg_end == seg_start {
+                            seg_end
+                        } else {
+                            seg_end - 1
+                        };
+                        let target_col = seg_start
+                            + ui.fonts(|f| {
                             let mut best_col = 0usize;
                             let mut best_dist = click_x;
                             let mut acc = String::new();
-                            for (idx, c) in line_str.chars().enumerate() {
+                            for (idx, c) in line_str
+                                .chars()
+                                .skip(seg_start)
+                                .take(seg_limit - seg_start)
+                                .enumerate()
+                            {
                                 if c == '\t' {
                                     acc.push_str("    ");
                                 } else {
@@ -4665,20 +4945,27 @@ impl VzEditorApp {
                     Stroke::new(1.0_f32, GUTTER_SEP),
                 );
 
-                // Virtualized line painting
-                let first_line = (scroll_y / self.line_height).floor().max(0.0) as usize;
-                let last_line = ((scroll_y + viewport_h) / self.line_height).ceil() as usize;
-                let end_line = (last_line + 1).min(total_lines);
+                // Virtualized painting（表示行単位。折り返しなしなら 表示行 = 論理行）
+                let first_row = (scroll_y / self.line_height).floor().max(0.0) as usize;
+                let last_row = ((scroll_y + viewport_h) / self.line_height).ceil() as usize;
+                let end_row = (last_row + 1).min(total_rows);
 
                 let editor_painter = ui.painter_at(editor_rect);
                 let gutter_painter = ui.painter_at(gutter_rect);
                 let cur_line_now = self.cur_buf().cursor_line;
                 let cur_col_now = self.cur_buf().cursor_col;
 
-                for line_idx in first_line..end_line {
-                    let y = editor_rect.min.y + top_pad + line_idx as f32 * self.line_height
+                for row_idx in first_row..end_row {
+                    let (line_idx, seg) = row_to_line(row_idx);
+                    let y = editor_rect.min.y + top_pad + row_idx as f32 * self.line_height
                         - scroll_y;
                     let is_current = line_idx == cur_line_now;
+                    let full_line = &self.cur_buf().lines[line_idx];
+                    let line_len = full_line.chars().count();
+                    let (seg_start, seg_end) = seg_range(line_idx, seg, line_len);
+                    let last_seg = is_last_seg(line_idx, seg);
+                    let line = &full_line[char_to_byte_idx(full_line, seg_start)
+                        ..char_to_byte_idx(full_line, seg_end)];
 
                     if is_current {
                         let line_bg_rect = Rect::from_min_size(
@@ -4692,21 +4979,26 @@ impl VzEditorApp {
                         );
                     }
 
-                    let num_str = format!("{:>width$}", line_idx + 1, width = line_digits);
-                    gutter_painter.text(
-                        Pos2::new(gutter_rect.max.x - 8.0, y + self.line_height * 0.5),
-                        Align2::RIGHT_CENTER,
-                        num_str,
-                        FontId::monospace(gutter_font_size),
-                        if is_current { TEXT_CYAN } else { TEXT_DIM_CYAN },
-                    );
+                    // 行番号は論理行の最初の表示行だけ
+                    if seg == 0 {
+                        let num_str = format!("{:>width$}", line_idx + 1, width = line_digits);
+                        gutter_painter.text(
+                            Pos2::new(gutter_rect.max.x - 8.0, y + self.line_height * 0.5),
+                            Align2::RIGHT_CENTER,
+                            num_str,
+                            FontId::monospace(gutter_font_size),
+                            if is_current { TEXT_CYAN } else { TEXT_DIM_CYAN },
+                        );
+                    }
 
                     let text_origin_x = editor_rect.min.x + left_pad - scroll_x;
                     let text_y = y + (self.line_height - self.font_size) * 0.42;
-                    let line = &self.cur_buf().lines[line_idx];
 
-                    // 範囲選択の背景
+                    // 範囲選択の背景（この表示行の範囲に切り詰める）
                     if let Some((from, to, newline)) = self.cur_buf().line_selection(line_idx) {
+                        let from = from.clamp(seg_start, seg_end) - seg_start;
+                        let to = to.clamp(seg_start, seg_end) - seg_start;
+                        let newline = newline && last_seg;
                         let x_of = |col: usize| -> f32 {
                             if col == 0 {
                                 return 0.0;
@@ -4738,8 +5030,9 @@ impl VzEditorApp {
                         }
                     }
 
-                    if is_current && !self.ime_preedit.is_empty() {
-                        let byte_pos = char_to_byte_idx(line, cur_col_now);
+                    let has_newline = last_seg && line_idx + 1 < total_lines;
+                    if is_current && seg == cursor_seg && !self.ime_preedit.is_empty() {
+                        let byte_pos = char_to_byte_idx(line, cur_col_now.saturating_sub(seg_start));
                         let before = expand_tabs_for_display(&line[..byte_pos]);
                         let after = expand_tabs_for_display(&line[byte_pos..]);
                         let mut cur_x = text_origin_x;
@@ -4788,7 +5081,7 @@ impl VzEditorApp {
                             cur_x += w;
                         }
 
-                        if line_idx + 1 < total_lines {
+                        if has_newline {
                             editor_painter.text(
                                 Pos2::new(cur_x + 2.0, y + self.line_height * 0.5),
                                 Align2::LEFT_CENTER,
@@ -4804,7 +5097,7 @@ impl VzEditorApp {
                         let end_x = text_origin_x + galley.size().x;
                         editor_painter.galley(Pos2::new(text_origin_x, text_y), galley, TEXT_WHITE);
 
-                        if line_idx + 1 < total_lines {
+                        if has_newline {
                             editor_painter.text(
                                 Pos2::new(end_x + 2.0, y + self.line_height * 0.5),
                                 Align2::LEFT_CENTER,
@@ -4819,7 +5112,7 @@ impl VzEditorApp {
                 // [EOF] marker
                 let eof_y = editor_rect.min.y
                     + top_pad
-                    + total_lines as f32 * self.line_height
+                    + total_rows as f32 * self.line_height
                     - scroll_y;
                 if eof_y >= editor_rect.min.y - self.line_height && eof_y <= editor_rect.max.y {
                     editor_painter.text(
@@ -4915,6 +5208,9 @@ impl VzEditorApp {
                 let slot = self.cur_slot_mut();
                 slot.scroll_x = scroll_x;
                 slot.scroll_y = scroll_y;
+                if wrap.is_some() {
+                    slot.wrap = wrap;
+                }
             });
     }
 
@@ -5386,6 +5682,7 @@ impl VzEditorApp {
                         ("Ctrl++ / Ctrl+- / Ctrl+0", "フォントサイズ (Ctrl+ホイールも可)"),
                         ("Esc", "選択解除 / 2画面ファイラーへ切替"),
                         ("Alt+T / Alt+↑↓0", "最前面固定 / 背景の濃さ"),
+                        ("Alt+W", "長い行の折り返し表示の切替"),
                         ("Alt+Shift+「+」「-」「0」", "文字の濃さ"),
                         ("Alt+C → C / Alt+C → X", "バッファ全体を Claude Code / Codex へ送信"),
                         ("ツール→キー割り当て", "VZ 互換へ切替"),
@@ -5405,6 +5702,7 @@ impl VzEditorApp {
                         ("Ctrl+F4", "ファイル（現在のバッファ）を閉じる"),
                         ("ESC / Ctrl+K+Q / F9", "2画面ファイラーへ切替"),
                         ("Alt+T", "最前面固定の切替"),
+                        ("Alt+W", "長い行の折り返し表示の切替"),
                         ("ファイルをドロップ", "複数ファイルをまとめてバッファで開く"),
                         ("Alt+C → C / Alt+C → X", "バッファ全体を Claude Code / Codex へ送信"),
                         ("Alt+↑ / Alt+↓ / Alt+0", "背景を濃く / 薄く / 透過解除"),
@@ -6201,6 +6499,7 @@ fn window_style_key_action(
     }
     match key {
         Key::T => Some(MenuAction::ToggleAlwaysOnTop),
+        Key::W => Some(MenuAction::ToggleWordWrap),
         Key::ArrowUp => Some(MenuAction::OpacityUp),
         Key::ArrowDown => Some(MenuAction::OpacityDown),
         Key::Num0 => Some(MenuAction::OpacityReset),
@@ -6385,7 +6684,78 @@ mod tests {
             select_mode: false,
             clipboard_out: None,
             quit_request: None,
+            word_wrap: false,
+            wrap_cols: 80,
         }
+    }
+
+    #[test]
+    fn test_wrap_breaks_and_layout() {
+        // 半角 1・全角 2 セル。全角が端に収まらなければ次の表示行へ送る
+        assert_eq!(wrap_breaks("abcdefghij", 4), vec![4, 8]);
+        assert_eq!(wrap_breaks("abc", 4), Vec::<usize>::new());
+        assert_eq!(wrap_breaks("abcあい", 4), vec![3]);
+        assert_eq!(wrap_breaks("abcあいう", 4), vec![3, 5]);
+        assert_eq!(wrap_breaks("", 4), Vec::<usize>::new());
+
+        let lines: Vec<String> = vec!["abcdefghij".into(), "".into(), "xy".into()];
+        let w = WrapLayout::build(&lines, 4, 0);
+        assert_eq!(w.total_rows(), 5);
+        assert_eq!(w.line_of_row(0), (0, 0));
+        assert_eq!(w.line_of_row(2), (0, 2));
+        assert_eq!(w.line_of_row(3), (1, 0));
+        assert_eq!(w.line_of_row(4), (2, 0));
+        assert_eq!(w.seg_range(0, 1, 10), (4, 8));
+        assert_eq!(w.seg_range(0, 2, 10), (8, 10));
+        // 折り返し位置ちょうどは次の表示行、行末は最後の表示行
+        assert_eq!(w.row_of(0, 4), 1);
+        assert_eq!(w.row_of(0, 10), 2);
+        assert!(w.is_last_seg(0, 2) && !w.is_last_seg(0, 1));
+    }
+
+    #[test]
+    fn test_word_wrap_cursor_moves_by_display_row() {
+        let mut app = make_test_app();
+        let mut buf = TextBuffer::new();
+        buf.insert_text("abcdefghij\nxy");
+        buf.set_cursor(0, 1);
+        app.buffers = vec![BufferSlot::new(buf)];
+        app.word_wrap = true;
+        app.wrap_cols = 4;
+
+        app.cursor_down();
+        assert_eq!(app.cur_buf().cursor_pos(), (0, 5));
+        app.cursor_down();
+        assert_eq!(app.cur_buf().cursor_pos(), (0, 9));
+        app.cursor_down();
+        assert_eq!(app.cur_buf().cursor_pos(), (1, 1));
+        app.cursor_up();
+        app.cursor_up();
+        assert_eq!(app.cur_buf().cursor_pos(), (0, 5));
+        // 次の表示行の先頭に移らないよう、途中の表示行の終端は1文字手前
+        app.cur_buf_mut().set_cursor(1, 2);
+        app.cursor_up();
+        app.cursor_up();
+        assert_eq!(app.cur_buf().cursor_pos(), (0, 6));
+        app.cur_buf_mut().set_cursor(0, 7);
+        app.cursor_up();
+        assert_eq!(app.cur_buf().cursor_pos(), (0, 3));
+
+        // オフなら論理行単位
+        app.toggle_word_wrap();
+        assert!(!app.word_wrap);
+        app.cur_buf_mut().set_cursor(0, 1);
+        app.cursor_down();
+        assert_eq!(app.cur_buf().cursor_pos(), (1, 1));
+
+        // サクラ互換の ↓ も表示行単位
+        let ctx = egui::Context::default();
+        let mut app = make_sakura_app("abcdefghij\nxy");
+        app.word_wrap = true;
+        app.wrap_cols = 4;
+        let none = mods(false, false);
+        run_editor(&ctx, &mut app, none, vec![key_with(Key::ArrowDown, none)]);
+        assert_eq!(app.cur_buf().cursor_pos(), (0, 4));
     }
 
     #[test]
@@ -6847,6 +7217,11 @@ mod tests {
             window_style_key_action(Key::Num0, Some(Key::Num0), alt),
             Some(MenuAction::OpacityReset)
         );
+        assert_eq!(
+            window_style_key_action(Key::W, Some(Key::W), alt),
+            Some(MenuAction::ToggleWordWrap)
+        );
+        assert_eq!(window_style_key_action(Key::W, Some(Key::W), alt_shift), None);
         // Alt+P（Markdown 切替）と Alt+±は奪わない
         assert_eq!(window_style_key_action(Key::P, Some(Key::P), alt), None);
         assert_eq!(
