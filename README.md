@@ -1,8 +1,14 @@
 # VZ Editor
 
-A fast, lightweight, cross-platform native GUI text editor and dual-pane file manager written in Rust. Forked from [LZ Editor](https://github.com/TouryuTamane/lz-editor).
+VZEditor was originally forked from [LZ Editor](https://github.com/TouryuTamane/lz-editor) developed by Touryu Tamane.
 
-Rust 製の高速・軽量なネイティブ GUI テキストエディター＆2画面ファイラーです。[LZ Editor](https://github.com/TouryuTamane/lz-editor)（MIT License）をフォークし、背面透過・最前面固定などを追加しています。往年の VZ Editor の操作性を受け継ぎつつ、今のデスクトップ環境で使いやすいエディターを目指します。
+VZEditor has since evolved into an independent project with its own architecture, features, and development roadmap.
+
+本プロジェクトは、Touryu Tamane氏が開発したLZ Editorを起源としています。
+現在は独自の設計、機能、開発方針を持つ独立したプロジェクトとして開発を進めています。
+具体的にはClaudeCodeとCodex、GithubDesktop などと連携する機能など。
+
+We thank the original author and contributors for their work.
 
 ## 開発方針
 
@@ -102,9 +108,7 @@ cd vzeditor
 cargo build --release
 ```
 
-実行ファイルは `target/release/vz`（Windows は `vz.exe`）です。
-
-- Windows: MSVC ツールチェーン（Visual Studio の「C++ によるデスクトップ開発」と Windows SDK）が必要です。配布用の `vz.exe`（出力先 `C:\gitroot\ut\vzeditor\`）の作り方は [AGENTS.md](AGENTS.md) の「Release 手順」を参照してください。
+- Windows: MSVC ツールチェーン（Visual Studio の「C++ によるデスクトップ開発」と Windows SDK）が必要です。
 - Linux: 日本語フォント（`fonts-noto-cjk` など）と、ファイルダイアログ用に `zenity` を推奨。
 - macOS: 追加の依存はありません。
 
