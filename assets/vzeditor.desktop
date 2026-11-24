@@ -1,0 +1,14 @@
+[Desktop Entry]
+Type=Application
+Name=VZ Editor
+GenericName=Text Editor
+GenericName[ja]=テキストエディタ
+Comment=Fast native GUI VZ-style text editor & 2-pane filer (based on LZ Editor)
+Comment[ja]=VZ Editor 風の高速ネイティブ GUI テキストエディター＆2画面ファイラー（LZ Editor ベース）
+Exec=vz %F
+Icon=vzeditor
+Terminal=false
+Categories=Utility;TextEditor;
+MimeType=text/plain;text/markdown;text/x-csrc;text/x-chdr;text/x-rust;text/x-python;application/json;application/xml;application/x-shellscript;
+Keywords=editor;text;vz;sakura;filer;
+StartupWMClass=vzeditor

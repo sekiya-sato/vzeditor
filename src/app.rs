@@ -5340,9 +5340,23 @@ impl VzEditorApp {
                                 .color(TEXT_DIM_CYAN),
                         );
                         ui.label(
-                            egui::RichText::new("MIT License © 2026 Touryu Tamane")
+                            egui::RichText::new("MIT License")
                                 .font(FontId::monospace(12.5))
                                 .color(TEXT_WHITE),
+                        );
+                        ui.end_row();
+
+                        ui.label(
+                            egui::RichText::new("Copyright:")
+                                .font(FontId::monospace(12.5))
+                                .color(TEXT_DIM_CYAN),
+                        );
+                        ui.label(
+                            egui::RichText::new(
+                                "(c) 2026 Touryu Tamane\n(c) 2026 Sekiya Sato",
+                            )
+                            .font(FontId::monospace(12.5))
+                            .color(TEXT_WHITE),
                         );
                         ui.end_row();
 

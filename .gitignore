@@ -1,8 +1,8 @@
 # Rust のビルド成果物（target\gnu は他 OS 向け型チェック用）
 /target/
 
-# 原作 LZ Editor を参照用に clone する場所（コミットしない）
-/lz-editor/
+# 元作業フォルダorgeditor を保存（コミットしない）
+/org-editor/
 
 # エージェント・ツールのローカル設定
 .claude/
@@ -16,3 +16,4 @@
 *~
 .DS_Store
 Thumbs.db
+AGENTS.md

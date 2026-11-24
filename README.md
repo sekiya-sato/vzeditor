@@ -1,6 +1,20 @@
 # VZ Editor
 
-Rust 製の高速ネイティブ GUI テキストエディター。[LZ Editor](https://github.com/TouryuTamane/lz-editor)（MIT License）をもとに、Windows 11 / Linux / macOS 対応と、背面透過・最前面固定を追加しています。
+Rust 製の高速ネイティブ GUI テキストエディター。[LZ Editor](https://github.com/TouryuTamane/lz-editor)（MIT License）をフォークし、Windows 11 / Linux / macOS 対応と、背面透過・最前面固定などを追加しています。
+
+## フォーク元との関係
+
+- このリポジトリ（[sekiya-sato/vzeditor](https://github.com/sekiya-sato/vzeditor)）は [TouryuTamane/lz-editor](https://github.com/TouryuTamane/lz-editor) のフォークです。フォーク元のコミット `adab5d2` までの履歴を含み、それ以降の変更がこのリポジトリ独自のものです。
+- フォーク後に追加・変更した機能は Windows 11 でしか動作確認していません。Linux / macOS の実機では未確認です。
+- 実行ファイル名は `lz` から `vz` に、パッケージ名は `vzeditor` に変えています。原作と同時にインストールしても衝突しません。
+- 不具合報告や要望は、原作由来の部分も含めてこのリポジトリの Issue へお願いします。
+- フォーク元の更新を取り込む場合:
+
+```powershell
+git remote add upstream https://github.com/TouryuTamane/lz-editor.git
+git fetch upstream
+git merge upstream/main
+```
 
 ## 追加機能
 
@@ -28,11 +42,26 @@ Rust 製の高速ネイティブ GUI テキストエディター。[LZ Editor](h
 
 一覧は `F1` で表示できます。対応状況は [docs/キー割り当て対比.md](docs/キー割り当て対比.md) を参照してください。
 
+## 入手
+
+[Releases](https://github.com/sekiya-sato/vzeditor/releases) に、`v` で始まるタグごとに各 OS 向けのビルドを公開します（GitHub Actions で自動ビルド）。
+
+| ファイル | 対象 |
+| :--- | :--- |
+| `vz-windows-x86_64.exe` | Windows 11（x86_64） |
+| `vz-macos-aarch64` | macOS（Apple Silicon） |
+| `vz-linux-x86_64` / `vz-linux-aarch64` | Linux |
+| `*.deb` / `*.rpm` | Ubuntu・Debian / Fedora など（`/usr/bin/vz` とデスクトップ登録） |
+
 ## ビルド
 
 ```powershell
+git clone https://github.com/sekiya-sato/vzeditor.git
+cd vzeditor
 cargo build --release
 ```
+
+実行ファイルは `target/release/vz`（Windows は `vz.exe`）です。
 
 - Windows: MSVC ツールチェーン（Visual Studio の「C++ によるデスクトップ開発」と Windows SDK）が必要です。配布用の `vz.exe`（出力先 `C:\gitroot\ut\vzeditor\`）の作り方は [AGENTS.md](AGENTS.md) の「Release 手順」を参照してください。
 - Linux: 日本語フォント（`fonts-noto-cjk` など）と、ファイルダイアログ用に `zenity` を推奨。
@@ -42,4 +71,11 @@ cargo build --release
 
 ## ライセンス
 
-MIT License。原作 LZ Editor の著作権表示を [LICENSE](LICENSE) に含みます。
+MIT License（[LICENSE](LICENSE)）。
+
+```text
+Copyright (c) 2026 Touryu Tamane
+Copyright (c) 2026 Sekiya Sato
+```
+
+同じ表示をアプリの About ダイアログにも載せています。

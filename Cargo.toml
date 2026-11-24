@@ -4,6 +4,8 @@ version = "0.1.0"
 edition = "2021"
 description = "VZ Editor - fast native GUI VZ-style text editor (based on LZ Editor, MIT)"
 license = "MIT"
+repository = "https://github.com/sekiya-sato/vzeditor"
+readme = "README.md"
 keywords = ["editor", "vz-editor", "egui", "filer"]
 categories = ["text-editors", "gui"]
 
@@ -41,3 +43,34 @@ opt-level = "s"
 lto = true
 codegen-units = 1
 strip = true
+
+# Linux 向け .deb / .rpm（.github/workflows/release.yml で cargo-deb / cargo-generate-rpm が使う）
+[package.metadata.deb]
+maintainer = "Sekiya Sato"
+copyright = "2026, Touryu Tamane; 2026, Sekiya Sato"
+license-file = ["LICENSE", "0"]
+extended-description = """\
+VZ Editor is a fast native GUI text editor and 2-pane filer written in Rust (eframe/egui), \
+based on LZ Editor. It adds background/text transparency, always-on-top, \
+Sakura Editor compatible key bindings (switchable to VZ style), multi-file drag & drop, \
+and sending text to Claude Code / Codex."""
+depends = "$auto"
+recommends = "fonts-noto-cjk | fonts-ipafont-gothic | fonts-vlgothic, zenity, xdotool, xclip"
+section = "editors"
+priority = "optional"
+assets = [
+    ["target/release/vz", "usr/bin/vz", "755"],
+    ["assets/vzeditor.desktop", "usr/share/applications/vzeditor.desktop", "644"],
+    ["assets/lz-editor.svg", "usr/share/icons/hicolor/scalable/apps/vzeditor.svg", "644"],
+    ["README.md", "usr/share/doc/vzeditor/README.md", "644"],
+]
+
+[package.metadata.generate-rpm]
+auto-req = "builtin"
+assets = [
+    { source = "target/release/vz", dest = "/usr/bin/vz", mode = "0755" },
+    { source = "assets/vzeditor.desktop", dest = "/usr/share/applications/vzeditor.desktop", mode = "0644" },
+    { source = "assets/lz-editor.svg", dest = "/usr/share/icons/hicolor/scalable/apps/vzeditor.svg", mode = "0644" },
+    { source = "README.md", dest = "/usr/share/doc/vzeditor/README.md", mode = "0644", doc = true },
+    { source = "LICENSE", dest = "/usr/share/licenses/vzeditor/LICENSE", mode = "0644", doc = true },
+]
