@@ -8,7 +8,7 @@ use crate::fonts::configure_japanese_fonts;
 use crate::markdown::{parse_markdown, render_markdown_view, MdBlock};
 use crate::send_to_app::{prepare_text, spawn_send, SendResult, SendTarget};
 use crate::session::{self, EntryKind, SessionEntry};
-use crate::settings::{KeyScheme, Settings};
+use crate::settings::{KeyScheme, Settings, WindowGeometry};
 use crate::window_style::{self, bg};
 use eframe::egui::{
     self, Align2, Color32, CornerRadius, Event, FontId, ImeEvent, Key, Pos2, Rect, Sense, Stroke,
@@ -490,6 +490,11 @@ pub struct VzEditorApp {
     word_wrap: bool,
     /// 直前の描画で求めた折り返し幅（セル数）。キー操作の表示行移動に使う
     wrap_cols: usize,
+
+    /// 最後に確認したウィンドウの位置とサイズ（終了時に settings.ini へ保存する）
+    window_geometry: Option<WindowGeometry>,
+    /// 起動直後に合わせる前回の位置（合わせ終わるまで window_geometry を更新しない）
+    pending_window_restore: Option<WindowGeometry>,
 }
 
 impl VzEditorApp {
@@ -573,6 +578,8 @@ impl VzEditorApp {
             quit_request: None,
             word_wrap: settings.word_wrap,
             wrap_cols: 80,
+            window_geometry: settings.window,
+            pending_window_restore: settings.window,
         };
         let session_dir = session::session_dir();
         if restore {
@@ -652,9 +659,51 @@ impl VzEditorApp {
             font_size: self.font_size,
             key_scheme: self.key_scheme,
             word_wrap: self.word_wrap,
+            window: self.window_geometry,
         };
         if let Err(e) = settings.save() {
             self.status_message = format!("設定の保存に失敗しました: {e}");
+        }
+    }
+
+    // --- Window geometry (前回のモニター・位置・サイズで起動) ---
+
+    /// 起動直後に前回の位置へ合わせる。保存した位置がどのモニターにも見えなければ主モニターの中央に置く。
+    fn restore_window_position(&mut self, ctx: &egui::Context) {
+        let Some(g) = self.pending_window_restore else {
+            return;
+        };
+        let (native_ppp, outer) =
+            ctx.input(|i| (i.viewport().native_pixels_per_point, i.viewport().outer_rect));
+        // ウィンドウの情報が届くまで待つ
+        let (Some(native_ppp), Some(outer)) = (native_ppp, outer) else {
+            return;
+        };
+        self.pending_window_restore = None;
+        if window_title_bar_visible(&g) {
+            // 作成時は主モニターの拡大率で換算されるので、物理ピクセルで合わせ直す
+            let ppp = native_ppp * ctx.zoom_factor();
+            let target = egui::pos2(g.x as f32 / ppp, g.y as f32 / ppp);
+            if (outer.min - target).length() > 0.5 {
+                ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(target));
+            }
+        } else if let Some(cmd) = egui::ViewportCommand::center_on_screen(ctx) {
+            ctx.send_viewport_cmd(cmd);
+        }
+        if g.maximized {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(true));
+        }
+    }
+
+    /// 現在のウィンドウの位置とサイズを覚える（最小化・全画面中は前の値を残す）。
+    fn track_window_geometry(&mut self, ctx: &egui::Context) {
+        if self.pending_window_restore.is_some() {
+            return;
+        }
+        let zoom = ctx.zoom_factor();
+        let next = ctx.input(|i| next_window_geometry(self.window_geometry, i.viewport(), zoom));
+        if next.is_some() {
+            self.window_geometry = next;
         }
     }
 
@@ -6600,6 +6649,8 @@ impl eframe::App for VzEditorApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         window_style::set_opacity_percent(self.bg_opacity);
         window_style::set_text_opacity_percent(self.text_opacity);
+        self.restore_window_position(ctx);
+        self.track_window_geometry(ctx);
         self.handle_close_request(ctx);
         self.poll_quit_request(ctx);
         self.handle_dropped_files(ctx);
@@ -6642,6 +6693,110 @@ impl eframe::App for VzEditorApp {
             ctx.request_repaint_after(std::time::Duration::from_millis(100));
         }
     }
+
+    /// 終了時にウィンドウの位置とサイズを settings.ini へ保存する。
+    fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+        self.save_settings();
+    }
+}
+
+/// ウィンドウの情報から保存する位置とサイズを求める。最小化・全画面・情報なしは None（前の値を残す）。
+/// 最大化中は元に戻したときのサイズを残し、位置は最大化したモニター上に置く。
+fn next_window_geometry(
+    prev: Option<WindowGeometry>,
+    info: &egui::ViewportInfo,
+    zoom: f32,
+) -> Option<WindowGeometry> {
+    if info.minimized == Some(true) || info.fullscreen == Some(true) {
+        return None;
+    }
+    let (outer, inner, native_ppp) = (info.outer_rect?, info.inner_rect?, info.native_pixels_per_point?);
+    let ppp = native_ppp * zoom;
+    if !(ppp > 0.0) {
+        return None;
+    }
+    let px = |v: f32| (v * ppp).round() as i32;
+    if info.maximized != Some(true) {
+        return Some(WindowGeometry {
+            x: px(outer.min.x),
+            y: px(outer.min.y),
+            width: inner.width(),
+            height: inner.height(),
+            scale: ppp,
+            maximized: false,
+        });
+    }
+    // 最大化中: 元のサイズを残す。元の位置が最大化したモニター上ならそのまま、違えば中央へ
+    let (width, height) = prev.map_or((inner.width(), inner.height()), |p| (p.width, p.height));
+    let max_rect_px = egui::Rect::from_min_max(
+        egui::pos2(outer.min.x * ppp, outer.min.y * ppp),
+        egui::pos2(outer.max.x * ppp, outer.max.y * ppp),
+    );
+    let (x, y) = match prev {
+        Some(p) if max_rect_px.contains(egui::pos2(p.x as f32, p.y as f32)) => (p.x, p.y),
+        _ => {
+            let c = outer.center();
+            (px(c.x - width / 2.0), px(c.y - height / 2.0))
+        }
+    };
+    Some(WindowGeometry {
+        x,
+        y,
+        width,
+        height,
+        scale: ppp,
+        maximized: true,
+    })
+}
+
+/// タイトルバー部分（上端 32 論理ピクセル）がモニターの作業領域に十分見えるか。
+/// モニターを外した・配置を変えた後に画面外へ出さないための判定。
+#[cfg_attr(not(windows), allow(dead_code))]
+fn title_bar_fits(bar: [i32; 4], work: [i32; 4]) -> bool {
+    let w = bar[2].min(work[2]) - bar[0].max(work[0]);
+    let h = bar[3].min(work[3]) - bar[1].max(work[1]);
+    let need_w = (bar[2] - bar[0]).min(100);
+    w >= need_w && h >= (bar[3] - bar[1]).min(10)
+}
+
+#[cfg(windows)]
+fn window_title_bar_visible(g: &WindowGeometry) -> bool {
+    use windows_sys::Win32::Foundation::RECT;
+    use windows_sys::Win32::Graphics::Gdi::{
+        GetMonitorInfoW, MonitorFromRect, MONITORINFO, MONITOR_DEFAULTTONULL,
+    };
+    let bar = [
+        g.x,
+        g.y,
+        g.x + (g.width * g.scale).round() as i32,
+        g.y + (32.0 * g.scale).round() as i32,
+    ];
+    let rect = RECT {
+        left: bar[0],
+        top: bar[1],
+        right: bar[2],
+        bottom: bar[3],
+    };
+    // SAFETY: RECT と MONITORINFO は呼び出しの間だけ有効なローカル変数を渡す
+    unsafe {
+        let monitor = MonitorFromRect(&rect, MONITOR_DEFAULTTONULL);
+        if monitor.is_null() {
+            return false;
+        }
+        let mut info: MONITORINFO = std::mem::zeroed();
+        info.cbSize = std::mem::size_of::<MONITORINFO>() as u32;
+        if GetMonitorInfoW(monitor, &mut info) == 0 {
+            return false;
+        }
+        let w = info.rcWork;
+        title_bar_fits(bar, [w.left, w.top, w.right, w.bottom])
+    }
+}
+
+/// macOS は OS が画面内へ収め、Wayland は位置を指定できないため判定しない。
+#[cfg(not(windows))]
+fn window_title_bar_visible(_g: &WindowGeometry) -> bool {
+    true
 }
 
 #[cfg(test)]
@@ -6691,7 +6846,58 @@ mod tests {
             quit_request: None,
             word_wrap: false,
             wrap_cols: 80,
+            window_geometry: None,
+            pending_window_restore: None,
         }
+    }
+
+    fn viewport_info(outer: [f32; 4], ppp: f32, maximized: bool) -> egui::ViewportInfo {
+        let rect = egui::Rect::from_min_max(egui::pos2(outer[0], outer[1]), egui::pos2(outer[2], outer[3]));
+        egui::ViewportInfo {
+            native_pixels_per_point: Some(ppp),
+            outer_rect: Some(rect),
+            inner_rect: Some(rect.shrink2(egui::vec2(8.0, 16.0))),
+            maximized: Some(maximized),
+            minimized: Some(false),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn test_next_window_geometry() {
+        // 通常: 外枠の左上を物理ピクセル、内側サイズを論理ピクセルで覚える（2台目 150%）
+        let info = viewport_info([-1000.0, 100.0, -200.0, 700.0], 1.5, false);
+        let g = next_window_geometry(None, &info, 1.0).unwrap();
+        assert_eq!((g.x, g.y, g.scale, g.maximized), (-1500, 150, 1.5, false));
+        assert_eq!((g.width, g.height), (784.0, 568.0));
+
+        // 最大化: 元のサイズと、最大化したモニター上の元の位置を残す
+        let max = viewport_info([-1285.0, -5.0, 5.0, 715.0], 1.5, true);
+        let m = next_window_geometry(Some(g), &max, 1.0).unwrap();
+        assert_eq!((m.x, m.y, m.width, m.height, m.maximized), (-1500, 150, 784.0, 568.0, true));
+
+        // 別のモニターで最大化: そのモニターの中央に置く
+        let other = viewport_info([0.0, 0.0, 1920.0, 1040.0], 1.0, true);
+        let o = next_window_geometry(Some(g), &other, 1.0).unwrap();
+        assert_eq!((o.x, o.y, o.maximized), (568, 236, true));
+
+        // 最小化中・情報なしは前の値を残す（None）
+        let mut min = info.clone();
+        min.minimized = Some(true);
+        assert_eq!(next_window_geometry(Some(g), &min, 1.0), None);
+        assert_eq!(next_window_geometry(Some(g), &egui::ViewportInfo::default(), 1.0), None);
+    }
+
+    #[test]
+    fn test_title_bar_fits() {
+        let work = [0, 0, 1920, 1040];
+        assert!(title_bar_fits([100, 100, 900, 132], work));
+        // 左にはみ出しても 100px 以上見えていればよい
+        assert!(title_bar_fits([-700, 100, 100, 132], work));
+        assert!(!title_bar_fits([-750, 100, 50, 132], work));
+        // 外したモニターの位置（作業領域の外）
+        assert!(!title_bar_fits([2000, 100, 2800, 132], work));
+        assert!(!title_bar_fits([100, 1035, 900, 1067], work));
     }
 
     #[test]

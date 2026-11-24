@@ -50,6 +50,13 @@ fn main() -> eframe::Result<()> {
         .with_transparent(true)
         // ファイルのドラッグ＆ドロップを受け付ける（Windows / macOS / Linux X11）
         .with_drag_and_drop(true);
+    // 前回の位置とサイズ。作成時の位置は主モニターの拡大率で換算されるため、
+    // 拡大率の違うモニターでは起動直後に app 側（restore_window_position）で合わせ直す
+    if let Some(w) = settings.window {
+        viewport = viewport
+            .with_inner_size([w.width.max(640.0), w.height.max(400.0)])
+            .with_position([w.x as f32 / w.scale, w.y as f32 / w.scale]);
+    }
     if settings.always_on_top {
         viewport = viewport.with_always_on_top();
     }
