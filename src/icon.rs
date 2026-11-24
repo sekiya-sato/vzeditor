@@ -142,20 +142,31 @@ fn sample_svg(x: f32, y: f32) -> [u8; 4] {
 
 /// Build the 64x64 RGBA window icon matching `assets/lz-editor.svg` with 2x2 supersampling.
 pub fn build_app_icon() -> IconData {
-    let mut rgba = vec![0u8; ICON_SIZE * ICON_SIZE * 4];
+    IconData {
+        rgba: render_icon_rgba(ICON_SIZE, 2),
+        width: ICON_SIZE as u32,
+        height: ICON_SIZE as u32,
+    }
+}
 
-    for py in 0..ICON_SIZE {
-        for px in 0..ICON_SIZE {
+/// Render the icon at `size`x`size` pixels with `ss`x`ss` supersampling
+/// (mapped onto the 128x128 SVG coordinate grid).
+fn render_icon_rgba(size: usize, ss: usize) -> Vec<u8> {
+    let mut rgba = vec![0u8; size * size * 4];
+    let scale = 128.0 / (size * ss) as f32;
+    let samples = (ss * ss) as f32;
+
+    for py in 0..size {
+        for px in 0..size {
             let mut acc_r = 0.0_f32;
             let mut acc_g = 0.0_f32;
             let mut acc_b = 0.0_f32;
             let mut acc_a = 0.0_f32;
 
-            // 2x2 supersampling mapped directly to the 128x128 SVG coordinate grid
-            for sy in 0..2 {
-                for sx in 0..2 {
-                    let x = (px * 2 + sx) as f32 + 0.5;
-                    let y = (py * 2 + sy) as f32 + 0.5;
+            for sy in 0..ss {
+                for sx in 0..ss {
+                    let x = ((px * ss + sx) as f32 + 0.5) * scale;
+                    let y = ((py * ss + sy) as f32 + 0.5) * scale;
                     let s = sample_svg(x, y);
                     let a = s[3] as f32 / 255.0;
                     acc_r += s[0] as f32 * a;
@@ -165,21 +176,76 @@ pub fn build_app_icon() -> IconData {
                 }
             }
 
-            let idx = (py * ICON_SIZE + px) * 4;
+            let idx = (py * size + px) * 4;
             if acc_a > 0.001 {
                 rgba[idx] = (acc_r / acc_a).round().clamp(0.0, 255.0) as u8;
                 rgba[idx + 1] = (acc_g / acc_a).round().clamp(0.0, 255.0) as u8;
                 rgba[idx + 2] = (acc_b / acc_a).round().clamp(0.0, 255.0) as u8;
-                rgba[idx + 3] = ((acc_a / 4.0) * 255.0).round().clamp(0.0, 255.0) as u8;
+                rgba[idx + 3] = ((acc_a / samples) * 255.0).round().clamp(0.0, 255.0) as u8;
             }
         }
     }
+    rgba
+}
 
-    IconData {
-        rgba,
-        width: ICON_SIZE as u32,
-        height: ICON_SIZE as u32,
+/// Windows の exe に埋め込む ICO（`assets/vzeditor.ico`）を作る。
+/// 16〜256px の各サイズを 32bit BMP で格納する。
+#[cfg(test)]
+fn build_ico() -> Vec<u8> {
+    const SIZES: [usize; 7] = [16, 24, 32, 48, 64, 128, 256];
+    let images: Vec<Vec<u8>> = SIZES
+        .iter()
+        .map(|&size| {
+            let rgba = render_icon_rgba(size, 8);
+            let mask_row = (size.div_ceil(32)) * 4;
+            let mut dib = Vec::new();
+            // BITMAPINFOHEADER（高さは XOR + AND マスクで 2 倍）
+            dib.extend_from_slice(&40u32.to_le_bytes());
+            dib.extend_from_slice(&(size as i32).to_le_bytes());
+            dib.extend_from_slice(&((size * 2) as i32).to_le_bytes());
+            dib.extend_from_slice(&1u16.to_le_bytes());
+            dib.extend_from_slice(&32u16.to_le_bytes());
+            dib.extend_from_slice(&0u32.to_le_bytes());
+            dib.extend_from_slice(&((size * size * 4 + mask_row * size) as u32).to_le_bytes());
+            dib.extend_from_slice(&[0u8; 16]);
+            // 画素は下から上へ BGRA
+            for y in (0..size).rev() {
+                for x in 0..size {
+                    let i = (y * size + x) * 4;
+                    dib.extend_from_slice(&[rgba[i + 2], rgba[i + 1], rgba[i], rgba[i + 3]]);
+                }
+            }
+            // AND マスク（透明画素を 1）
+            for y in (0..size).rev() {
+                let mut row = vec![0u8; mask_row];
+                for x in 0..size {
+                    if rgba[(y * size + x) * 4 + 3] == 0 {
+                        row[x / 8] |= 0x80 >> (x % 8);
+                    }
+                }
+                dib.extend_from_slice(&row);
+            }
+            dib
+        })
+        .collect();
+
+    let mut ico = Vec::new();
+    ico.extend_from_slice(&[0, 0, 1, 0]);
+    ico.extend_from_slice(&(SIZES.len() as u16).to_le_bytes());
+    let mut offset = 6 + 16 * SIZES.len();
+    for (&size, dib) in SIZES.iter().zip(&images) {
+        let dim = if size >= 256 { 0 } else { size as u8 };
+        ico.extend_from_slice(&[dim, dim, 0, 0]);
+        ico.extend_from_slice(&1u16.to_le_bytes());
+        ico.extend_from_slice(&32u16.to_le_bytes());
+        ico.extend_from_slice(&(dib.len() as u32).to_le_bytes());
+        ico.extend_from_slice(&(offset as u32).to_le_bytes());
+        offset += dib.len();
     }
+    for dib in &images {
+        ico.extend_from_slice(dib);
+    }
+    ico
 }
 
 #[cfg(test)]
@@ -219,5 +285,18 @@ mod tests {
         let cursor = pixel(50, 32);
         assert_eq!(cursor[3], 255);
         assert!(cursor[2] > 210 && cursor[1] > 160);
+    }
+
+    /// `assets/vzeditor.ico` が現在の描画と一致すること。
+    /// 図柄を変えたら `VZ_WRITE_ICO=1 cargo test test_ico_asset_is_up_to_date` で作り直す。
+    #[test]
+    fn test_ico_asset_is_up_to_date() {
+        let ico = build_ico();
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/vzeditor.ico");
+        if std::env::var_os("VZ_WRITE_ICO").is_some() {
+            std::fs::write(&path, &ico).unwrap();
+        }
+        let current = std::fs::read(&path).expect("assets/vzeditor.ico がありません");
+        assert!(current == ico, "assets/vzeditor.ico が古い（VZ_WRITE_ICO=1 で再生成）");
     }
 }
