@@ -1,6 +1,27 @@
 # VZ Editor
 
-Rust 製の高速ネイティブ GUI テキストエディター。[LZ Editor](https://github.com/TouryuTamane/lz-editor)（MIT License）をフォークし、Windows 11 / Linux / macOS 対応と、背面透過・最前面固定などを追加しています。
+A fast, lightweight, cross-platform native GUI text editor and dual-pane file manager written in Rust. Forked from [LZ Editor](https://github.com/TouryuTamane/lz-editor).
+
+Rust 製の高速・軽量なネイティブ GUI テキストエディター＆2画面ファイラーです。[LZ Editor](https://github.com/TouryuTamane/lz-editor)（MIT License）をフォークし、背面透過・最前面固定などを追加しています。往年の VZ Editor の操作性を受け継ぎつつ、今のデスクトップ環境で使いやすいエディターを目指します。
+
+## 開発方針
+
+- 高速起動・軽量動作、GPU（OpenGL）による描画
+- VZ Editor のキー操作の継承と、サクラエディタ互換のキー割り当ての両立
+- 日本語入力（IME）への対応
+- Windows 11 / Linux / macOS のクロスプラットフォーム対応
+- ウィンドウの最前面固定・背景透過など、作業の横に置いて使うための機能
+- 2画面ファイラーの機能拡張
+
+## 開発状況
+
+開発中です。独自機能の追加とクロスプラットフォーム対応を進めています。
+
+| OS | 状況 |
+| :--- | :--- |
+| Windows 11 | 動作確認済み |
+| Linux（Ubuntu など） | 原作は対応。フォーク後の機能は実機未確認 |
+| macOS | ビルド対象。実機未確認 |
 
 ## フォーク元との関係
 
@@ -79,3 +100,9 @@ Copyright (c) 2026 Sekiya Sato
 ```
 
 同じ表示をアプリの About ダイアログにも載せています。
+
+## 謝辞
+
+原作 LZ Editor を開発した Touryu Tamane 氏とコントリビューターの皆さんに感謝します。
+
+Special thanks to Touryu Tamane and the contributors of LZ Editor.
