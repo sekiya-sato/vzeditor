@@ -898,6 +898,40 @@ impl VzEditorApp {
                 self.close_current_buffer();
                 return true;
             }
+            // F2〜F5 は VZ 互換と同じ（新規 / 開く / 行頭 / 行末）
+            (Key::F2, false, false) => {
+                self.execute_editor_action(EditorAction::NewBuffer);
+                return true;
+            }
+            (Key::F3, false, false) => {
+                self.execute_editor_action(EditorAction::OpenFile);
+                return true;
+            }
+            (Key::F4 | Key::F5, false, _) => {
+                if in_md_view {
+                    self.execute_editor_action(if key == Key::F4 {
+                        EditorAction::MoveLineStart
+                    } else {
+                        EditorAction::MoveLineEnd
+                    });
+                } else {
+                    // Home / End と同じく、Shift または選択モードなら範囲選択
+                    let extend = shift || self.select_mode;
+                    let buf = self.cur_buf_mut();
+                    if extend {
+                        buf.begin_selection_if_none();
+                    } else {
+                        buf.clear_selection();
+                    }
+                    if key == Key::F4 {
+                        buf.move_line_start();
+                    } else {
+                        buf.move_line_end();
+                    }
+                    self.need_scroll_to_cursor = true;
+                }
+                return true;
+            }
             (Key::F10, false, true) => {
                 if !self.view_mode_guard() {
                     self.cur_buf_mut().duplicate_line();
@@ -4010,14 +4044,8 @@ impl VzEditorApp {
             ]
         };
 
-        // サクラ互換の F キー（未対応のキーは空欄）
-        let sakura_left: &[(&str, &str, EditorAction)] = &[
-            ("F1", "ヘルプ", EditorAction::ToggleHelp),
-            ("F2", "", EditorAction::Nop),
-            ("F3", "", EditorAction::Nop),
-            ("F4", "", EditorAction::Nop),
-            ("F5", "", EditorAction::Nop),
-        ];
+        // サクラ互換の F キー（F1〜F5 は VZ 互換と同じ。未対応のキーは空欄）
+        let sakura_left = keys_left;
         let sakura_right: &[(&str, &str, EditorAction)] = &[
             ("F6", "選択", EditorAction::BeginSelect),
             ("F7", "切取", EditorAction::Cut),
@@ -5201,7 +5229,8 @@ impl VzEditorApp {
             .show(ctx, |ui| {
                 let rows: &[(&str, &str)] = match self.mode {
                     AppMode::Editor if self.key_scheme == KeyScheme::Sakura => &[
-                        ("Ctrl+N / Ctrl+O", "新規作成 / 開く"),
+                        ("Ctrl+N / Ctrl+O", "新規作成 / 開く (F2 / F3)"),
+                        ("F4 / F5", "行頭 / 行末 (ビュー時は先頭 / 末尾。Shift で範囲選択)"),
                         ("Ctrl+S / Ctrl+Shift+S", "上書き保存 / 名前を付けて保存"),
                         ("Ctrl+F4", "ファイル（現在のバッファ）を閉じる"),
                         ("Ctrl+Z / Ctrl+Y", "元に戻す / やり直し"),
@@ -6893,6 +6922,32 @@ mod tests {
         let cs = mods(true, true);
         run_editor(&ctx, &mut app, cs, vec![key_with(Key::Home, mods(false, false)), key_with(Key::End, cs)]);
         assert_eq!(app.cur_buf().selected_text().as_deref(), Some("Xdef\nghi"));
+    }
+
+    #[test]
+    fn test_sakura_f2_to_f5_same_as_vz() {
+        let ctx = egui::Context::default();
+        let mut app = make_sakura_app("abcdef\nghi");
+        let none = mods(false, false);
+        let shift = mods(false, true);
+
+        // F5 / F4: 行末 / 行頭（選択なし）
+        run_editor(&ctx, &mut app, none, vec![key_with(Key::F5, none)]);
+        assert_eq!(app.cur_buf().cursor_pos(), (0, 6));
+        assert!(!app.cur_buf().has_selection());
+        run_editor(&ctx, &mut app, none, vec![key_with(Key::F4, none)]);
+        assert_eq!(app.cur_buf().cursor_pos(), (0, 0));
+
+        // Shift+F5 は範囲選択
+        run_editor(&ctx, &mut app, shift, vec![key_with(Key::F5, shift)]);
+        assert_eq!(app.cur_buf().selected_text().as_deref(), Some("abcdef"));
+        run_editor(&ctx, &mut app, none, vec![key_with(Key::F4, none)]);
+        assert!(!app.cur_buf().has_selection());
+
+        // F2: 新規バッファ
+        run_editor(&ctx, &mut app, none, vec![key_with(Key::F2, none)]);
+        assert_eq!(app.buffers.len(), 2);
+        assert_eq!(app.active_buf, 1);
     }
 
     #[test]
