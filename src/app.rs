@@ -3798,7 +3798,7 @@ impl VzEditorApp {
         let op_resp = ui
             .add(
                 egui::Button::new(
-                    egui::RichText::new(format!("透過{:>3}%", opacity))
+                    egui::RichText::new(format!("背{:>3}%", opacity))
                         .font(FontId::monospace(12.5))
                         .color(if opacity < window_style::MAX_OPACITY {
                             TEXT_AMBER
@@ -3824,7 +3824,7 @@ impl VzEditorApp {
         let text_resp = ui
             .add(
                 egui::Button::new(
-                    egui::RichText::new(format!("文字{:>3}%", text_opacity))
+                    egui::RichText::new(format!("字{:>3}%", text_opacity))
                         .font(FontId::monospace(12.5))
                         .color(if text_opacity < window_style::MAX_OPACITY {
                             TEXT_AMBER
