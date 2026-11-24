@@ -11,10 +11,6 @@ fn sd_rounded_box(px: f32, py: f32, cx: f32, cy: f32, half_w: f32, half_h: f32, 
     outside + inside - r
 }
 
-fn in_rect(x: f32, y: f32, rx: f32, ry: f32, rw: f32, rh: f32) -> bool {
-    x >= rx && x <= rx + rw && y >= ry && y <= ry + rh
-}
-
 fn in_rounded_rect(x: f32, y: f32, rx: f32, ry: f32, rw: f32, rh: f32, r: f32) -> bool {
     let cx = rx + rw * 0.5;
     let cy = ry + rh * 0.5;
@@ -54,7 +50,7 @@ fn blend_rgba(dst: [u8; 4], src: [u8; 4]) -> [u8; 4] {
     ]
 }
 
-/// Sample the 128x128 SVG design (`assets/lz-editor.svg`) at floating-point coordinate `(x, y)`.
+/// Sample the 128x128 SVG design (`assets/vzeditor.svg`) at floating-point coordinate `(x, y)`.
 fn sample_svg(x: f32, y: f32) -> [u8; 4] {
     // Window frame: rect x=6 y=6 w=116 h=116 rx=16 stroke=#40D2FF stroke-width=4
     let frame_sd = sd_rounded_box(x, y, 64.0, 64.0, 58.0, 58.0, 16.0);
@@ -91,9 +87,17 @@ fn sample_svg(x: f32, y: f32) -> [u8; 4] {
         color = blend_rgba(color, [0x70, 0xE8, 0xFF, 217]);
     }
 
-    // Vector letter L: M22 44 H32 V74 H48 V83 H22 Z
-    let in_l = in_rect(x, y, 22.0, 44.0, 10.0, 39.0) || in_rect(x, y, 22.0, 74.0, 26.0, 9.0);
-    if in_l {
+    // Vector letter V: M22 44 H31 L35 72 L39 44 H48 L40 83 H30 Z
+    const V_VERTS: [(f32, f32); 7] = [
+        (22.0, 44.0),
+        (31.0, 44.0),
+        (35.0, 72.0),
+        (39.0, 44.0),
+        (48.0, 44.0),
+        (40.0, 83.0),
+        (30.0, 83.0),
+    ];
+    if point_in_polygon(x, y, &V_VERTS) {
         color = [0xEA, 0xF4, 0xFF, 255];
     }
 
@@ -140,7 +144,7 @@ fn sample_svg(x: f32, y: f32) -> [u8; 4] {
     color
 }
 
-/// Build the 64x64 RGBA window icon matching `assets/lz-editor.svg` with 2x2 supersampling.
+/// Build the 64x64 RGBA window icon matching `assets/vzeditor.svg` with 2x2 supersampling.
 pub fn build_app_icon() -> IconData {
     IconData {
         rgba: render_icon_rgba(ICON_SIZE, 2),
@@ -273,9 +277,12 @@ mod tests {
         assert_eq!(border[3], 255);
         assert!(border[2] > 230 && border[1] > 180);
 
-        // White 'L' stem (svg x=26, y=60 -> pixel 13, 30)
-        let letter_l = pixel(13, 30);
-        assert_eq!(letter_l, [0xEA, 0xF4, 0xFF, 255]);
+        // White 'V' left arm (svg x=28, y=60 -> pixel 14, 30)
+        let letter_v = pixel(14, 30);
+        assert_eq!(letter_v, [0xEA, 0xF4, 0xFF, 255]);
+
+        // 'V' notch between the arms stays background (svg x=35, y=50 -> pixel 17, 25)
+        assert_ne!(pixel(17, 25), [0xEA, 0xF4, 0xFF, 255]);
 
         // White 'Z' top bar (svg x=70, y=48 -> pixel 35, 24)
         let letter_z = pixel(35, 24);

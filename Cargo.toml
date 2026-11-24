@@ -64,7 +64,7 @@ priority = "optional"
 assets = [
     ["target/release/vz", "usr/bin/vz", "755"],
     ["assets/vzeditor.desktop", "usr/share/applications/vzeditor.desktop", "644"],
-    ["assets/lz-editor.svg", "usr/share/icons/hicolor/scalable/apps/vzeditor.svg", "644"],
+    ["assets/vzeditor.svg", "usr/share/icons/hicolor/scalable/apps/vzeditor.svg", "644"],
     ["README.md", "usr/share/doc/vzeditor/README.md", "644"],
 ]
 
@@ -73,7 +73,7 @@ auto-req = "builtin"
 assets = [
     { source = "target/release/vz", dest = "/usr/bin/vz", mode = "0755" },
     { source = "assets/vzeditor.desktop", dest = "/usr/share/applications/vzeditor.desktop", mode = "0644" },
-    { source = "assets/lz-editor.svg", dest = "/usr/share/icons/hicolor/scalable/apps/vzeditor.svg", mode = "0644" },
+    { source = "assets/vzeditor.svg", dest = "/usr/share/icons/hicolor/scalable/apps/vzeditor.svg", mode = "0644" },
     { source = "README.md", dest = "/usr/share/doc/vzeditor/README.md", mode = "0644", doc = true },
     { source = "LICENSE", dest = "/usr/share/licenses/vzeditor/LICENSE", mode = "0644", doc = true },
 ]
