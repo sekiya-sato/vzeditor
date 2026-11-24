@@ -162,6 +162,17 @@ impl TopMenu {
     }
 }
 
+/// 「保存して終了」の進み具合。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum QuitSaveStep {
+    /// 未保存のバッファが無くなった
+    Done,
+    /// 無題のバッファ（索引）の保存先を尋ねる必要がある
+    NeedSaveAs(usize),
+    /// 保存に失敗した
+    Failed,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum MenuAction {
     // File
@@ -328,6 +339,12 @@ pub struct VzEditorApp {
     always_on_top: bool,
     /// false in tests so that user settings are never overwritten.
     persist_settings: bool,
+
+    // Quit confirmation (未保存時の終了確認)
+    /// 「保存して終了」で保存ダイアログの完了を待っている
+    quit_after_save: bool,
+    /// 確認済みのため次の close_requested を止めない
+    allow_close: bool,
 }
 
 impl VzEditorApp {
@@ -406,6 +423,8 @@ impl VzEditorApp {
             text_opacity,
             always_on_top: settings.always_on_top,
             persist_settings: true,
+            quit_after_save: false,
+            allow_close: false,
         };
         app.sync_window_title(&cc.egui_ctx);
         app
@@ -847,7 +866,12 @@ impl VzEditorApp {
             match res {
                 DialogResult::SavePath(Some(path)) => self.perform_save(path),
                 DialogResult::SavePath(None) => {
-                    self.status_message = "保存をキャンセルしました".to_string();
+                    self.status_message = if self.quit_after_save {
+                        "保存をキャンセルしたため終了を中止しました".to_string()
+                    } else {
+                        "保存をキャンセルしました".to_string()
+                    };
+                    self.quit_after_save = false;
                 }
                 DialogResult::OpenPath(Some(path)) => self.open_file_in_buffer(path),
                 DialogResult::OpenPath(None) => {
@@ -905,6 +929,7 @@ impl VzEditorApp {
             }
             Err(e) => {
                 self.status_message = format!("保存エラー: {e}");
+                self.quit_after_save = false;
             }
         }
     }
@@ -979,11 +1004,90 @@ impl VzEditorApp {
         }
     }
 
+    /// F10・メニュー「終了」・ウィンドウの×ボタン / Alt+F4 / Cmd+Q からの終了要求。
+    /// 未保存（新規バッファへの入力を含む）があれば確認ダイアログを出す。
     fn request_quit(&mut self, ctx: &egui::Context) {
         if self.has_any_dirty_buffer() {
-            self.filer_modal = Some(FilerModal::ConfirmQuit);
+            self.open_quit_confirm();
         } else {
-            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            self.close_now(ctx);
+        }
+    }
+
+    fn open_quit_confirm(&mut self) {
+        self.quit_after_save = false;
+        self.open_menu = None;
+        self.show_about = false;
+        self.show_help = false;
+        self.inline_prompt = None;
+        self.filer_modal = Some(FilerModal::ConfirmQuit);
+    }
+
+    /// 確認済みとしてウィンドウを閉じる（close_requested を再度止めない）。
+    fn close_now(&mut self, ctx: &egui::Context) {
+        self.allow_close = true;
+        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+    }
+
+    /// OS からの終了要求（×ボタン・Alt+F4・Cmd+Q）を横取りして確認する。
+    fn handle_close_request(&mut self, ctx: &egui::Context) {
+        if !ctx.input(|i| i.viewport().close_requested()) || self.allow_close {
+            return;
+        }
+        if !self.has_any_dirty_buffer() {
+            self.allow_close = true;
+            return;
+        }
+        ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+        if self.pending_dialog.is_some() {
+            self.status_message = "保存ダイアログを閉じてから終了してください".to_string();
+        } else if !matches!(self.filer_modal, Some(FilerModal::ConfirmQuit)) {
+            self.open_quit_confirm();
+        }
+    }
+
+    /// 「保存して終了」: パスのある未保存バッファを保存し、無題のバッファは順に保存先を尋ねる。
+    fn save_dirty_buffers_for_quit(&mut self) -> QuitSaveStep {
+        for idx in 0..self.buffers.len() {
+            if !self.buffers[idx].buffer.dirty {
+                continue;
+            }
+            let Some(path) = self.buffers[idx].buffer.file_path.clone() else {
+                continue;
+            };
+            if let Err(e) = self.buffers[idx].buffer.save_to_path(&path) {
+                self.switch_buffer_to(idx);
+                self.status_message = format!("保存エラーのため終了を中止しました: {e}");
+                return QuitSaveStep::Failed;
+            }
+        }
+        match self.buffers.iter().position(|s| s.buffer.dirty) {
+            Some(idx) => QuitSaveStep::NeedSaveAs(idx),
+            None => QuitSaveStep::Done,
+        }
+    }
+
+    fn continue_save_and_quit(&mut self, ctx: &egui::Context) {
+        if !self.quit_after_save || self.pending_dialog.is_some() || self.inline_prompt.is_some() {
+            return;
+        }
+        match self.save_dirty_buffers_for_quit() {
+            QuitSaveStep::Done => {
+                self.quit_after_save = false;
+                self.close_now(ctx);
+            }
+            QuitSaveStep::NeedSaveAs(idx) => {
+                if self.mode != AppMode::Editor {
+                    self.enter_editor();
+                }
+                self.switch_buffer_to(idx);
+                self.trigger_save_as();
+                self.status_message =
+                    format!("終了前に保存: {} の保存先を選択中...", self.cur_buf().display_name());
+            }
+            QuitSaveStep::Failed => {
+                self.quit_after_save = false;
+            }
         }
     }
 
@@ -4743,9 +4847,16 @@ impl VzEditorApp {
             }
 
             FilerModal::ConfirmQuit => {
+                let mut do_save_quit = false;
                 let mut do_quit = false;
                 let mut do_cancel = false;
-                egui::Window::new("終了確認 (F10)")
+                let dirty_names: Vec<String> = self
+                    .buffers
+                    .iter()
+                    .filter(|s| s.buffer.dirty)
+                    .map(|s| s.buffer.display_name())
+                    .collect();
+                egui::Window::new("終了確認 - 未保存の変更")
                     .collapsible(false)
                     .resizable(false)
                     .anchor(Align2::CENTER_CENTER, Vec2::ZERO)
@@ -4757,28 +4868,45 @@ impl VzEditorApp {
                     .show(ctx, |ui| {
                         ui.set_min_width(380.0);
                         ui.label(
-                            egui::RichText::new("未保存の変更があるバッファがあります。終了しますか？")
+                            egui::RichText::new("次のバッファに未保存の変更があります。保存しますか？")
                                 .font(FontId::monospace(13.5))
                                 .color(TEXT_AMBER),
                         );
+                        ui.add_space(6.0);
+                        for name in &dirty_names {
+                            ui.label(
+                                egui::RichText::new(format!("  * {name}"))
+                                    .font(FontId::monospace(13.0))
+                                    .color(TEXT_WHITE),
+                            );
+                        }
                         ui.add_space(10.0);
                         ui.horizontal(|ui| {
-                            if ui.button("保存せず終了 (Enter / Y)").clicked()
+                            if ui.button("保存して終了 (Enter / Y)").clicked()
                                 || ui.input(|i| i.key_pressed(Key::Enter) || i.key_pressed(Key::Y))
+                            {
+                                do_save_quit = true;
+                            }
+                            if ui.button("保存せず終了 (N)").clicked()
+                                || ui.input(|i| i.key_pressed(Key::N))
                             {
                                 do_quit = true;
                             }
-                            if ui.button("キャンセル (ESC / N)").clicked()
-                                || ui.input(|i| i.key_pressed(Key::Escape) || i.key_pressed(Key::N))
+                            if ui.button("キャンセル (ESC)").clicked()
+                                || ui.input(|i| i.key_pressed(Key::Escape))
                             {
                                 do_cancel = true;
                             }
                         });
                     });
 
-                if do_quit {
+                if do_save_quit {
                     keep_modal = false;
-                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                    self.quit_after_save = true;
+                    self.continue_save_and_quit(ctx);
+                } else if do_quit {
+                    keep_modal = false;
+                    self.close_now(ctx);
                 } else if do_cancel {
                     keep_modal = false;
                     self.status_message = "終了をキャンセルしました".to_string();
@@ -4850,12 +4978,12 @@ impl VzEditorApp {
             }
         } else if cancel {
             self.inline_prompt = None;
+            self.quit_after_save = false;
             self.status_message = "キャンセルしました".to_string();
         }
     }
 }
 
-/// Attempt to read UTF-8 text from the Linux system clipboard (Wayland `wl-paste`, X11 `xclip`/`xsel`).
 /// ウィンドウスタイル用ショートカットの判定。該当しなければ None。
 fn window_style_key_action(
     key: Key,
@@ -4893,6 +5021,7 @@ fn read_system_clipboard() -> Option<String> {
     arboard::Clipboard::new().ok()?.get_text().ok()
 }
 
+/// Attempt to read UTF-8 text from the Linux system clipboard (Wayland `wl-paste`, X11 `xclip`/`xsel`).
 #[cfg(not(any(windows, target_os = "macos")))]
 fn read_system_clipboard() -> Option<String> {
     use std::process::Command;
@@ -4975,7 +5104,9 @@ impl eframe::App for VzEditorApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         window_style::set_opacity_percent(self.bg_opacity);
         window_style::set_text_opacity_percent(self.text_opacity);
+        self.handle_close_request(ctx);
         self.poll_dialog();
+        self.continue_save_and_quit(ctx);
         self.handle_events(ctx);
 
         self.render_menu_bar(ctx);
@@ -5043,6 +5174,8 @@ mod tests {
             text_opacity: 100,
             always_on_top: false,
             persist_settings: false,
+            quit_after_save: false,
+            allow_close: false,
         }
     }
 
@@ -5444,5 +5577,42 @@ mod tests {
         assert_eq!(app.text_opacity, 90);
         app.set_text_opacity(0);
         assert_eq!(app.text_opacity, window_style::MIN_OPACITY);
+    }
+
+    #[test]
+    fn test_quit_confirm_for_new_buffer_input() {
+        // 新規バッファは入力前なら確認なし
+        let mut app = make_test_app();
+        app.buffers = vec![BufferSlot::new(TextBuffer::new())];
+        assert!(!app.has_any_dirty_buffer());
+
+        // 新規バッファに文字を入力すると終了確認が出る
+        app.cur_buf_mut().insert_text("あ");
+        assert!(app.has_any_dirty_buffer());
+        app.open_quit_confirm();
+        assert!(matches!(app.filer_modal, Some(FilerModal::ConfirmQuit)));
+
+        // 無題のバッファは保存先を尋ねる段階になる
+        assert_eq!(app.save_dirty_buffers_for_quit(), QuitSaveStep::NeedSaveAs(0));
+    }
+
+    #[test]
+    fn test_save_dirty_buffers_for_quit_saves_files() {
+        let dir = std::env::temp_dir().join(format!("vz_quit_test_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("edited.txt");
+        std::fs::write(&path, "old
+").unwrap();
+
+        let mut app = make_test_app();
+        let mut buf = TextBuffer::from_file(&path).unwrap();
+        buf.insert_text("new ");
+        app.buffers = vec![BufferSlot::new(buf)];
+        assert!(app.has_any_dirty_buffer());
+
+        assert_eq!(app.save_dirty_buffers_for_quit(), QuitSaveStep::Done);
+        assert!(!app.has_any_dirty_buffer());
+        assert!(std::fs::read_to_string(&path).unwrap().starts_with("new old"));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
