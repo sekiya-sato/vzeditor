@@ -5301,7 +5301,7 @@ impl VzEditorApp {
 
                 if editor_rect.intersects(cursor_rect) && self.inline_prompt.is_none() {
                     let t = ctx.input(|i| i.time);
-                    let blink_on = !self.ime_preedit.is_empty() || ((t * 1.8) as u64 % 2 == 0);
+                    let blink_on = !self.ime_preedit.is_empty() || ((t * 1.8) as u64).is_multiple_of(2);
                     if blink_on {
                         editor_painter.rect_filled(cursor_rect, CornerRadius::ZERO, CURSOR_FILL);
                         editor_painter.line_segment(
@@ -6925,7 +6925,7 @@ fn next_window_geometry(
     }
     let (outer, inner, native_ppp) = (info.outer_rect?, info.inner_rect?, info.native_pixels_per_point?);
     let ppp = native_ppp * zoom;
-    if !(ppp > 0.0) {
+    if ppp.is_nan() || ppp <= 0.0 {
         return None;
     }
     let px = |v: f32| (v * ppp).round() as i32;

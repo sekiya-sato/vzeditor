@@ -237,10 +237,8 @@ impl FilerPane {
     /// Toggle mark on the current entry (`Space` key) and advance cursor down.
     pub fn toggle_mark_and_advance(&mut self) {
         if let Some(entry) = self.entries.get(self.cursor) {
-            if !entry.is_parent {
-                if !self.marked.remove(&entry.path) {
-                    self.marked.insert(entry.path.clone());
-                }
+            if !entry.is_parent && !self.marked.remove(&entry.path) {
+                self.marked.insert(entry.path.clone());
             }
         }
         self.move_down();
