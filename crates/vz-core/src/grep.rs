@@ -35,6 +35,8 @@ pub struct GrepHit {
 
 #[derive(Default)]
 pub struct GrepResults {
+    /// 検索したフォルダ（結果のパスの表示を短くするのに使う）
+    pub root: PathBuf,
     pub hits: Vec<GrepHit>,
     pub skipped: usize,
     pub limited: bool,
@@ -52,7 +54,10 @@ pub fn file_patterns(patterns: &str) -> Result<GlobSet, String> {
 }
 
 pub fn grep(pattern: &SearchPattern, options: &GrepOptions, cancelled: &AtomicBool) -> GrepResults {
-    let mut results = GrepResults::default();
+    let mut results = GrepResults {
+        root: options.root.clone(),
+        ..Default::default()
+    };
     let walker = WalkDir::new(&options.root)
         .follow_root_links(false)
         .max_depth(if options.recursive { usize::MAX } else { 1 })
@@ -170,5 +175,9 @@ mod tests {
         assert_eq!(results.hits[0].col, 2);
         assert_eq!(results.hits[1].col, 4);
         assert!(results.hits[0].path.ends_with("sub/a.txt"));
+        assert_eq!(
+            results.hits[0].path.strip_prefix(&results.root).ok(),
+            Some(Path::new("sub").join("a.txt").as_path())
+        );
     }
 }

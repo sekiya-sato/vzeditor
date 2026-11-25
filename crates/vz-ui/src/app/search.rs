@@ -123,6 +123,16 @@ impl SearchState {
     ) -> Option<DialogAction> {
         let dialog = self.dialog?;
         let focus = std::mem::take(&mut self.focus);
+        // Alt+英字（Alt+N など）の文字が入力欄に入らないようにする（AltGr = Ctrl+Alt は除く）。
+        ctx.input_mut(|i| {
+            let alt_key = i.events.iter().any(|ev| {
+                matches!(ev, Event::Key { pressed: true, modifiers, .. }
+                    if modifiers.alt && !modifiers.ctrl)
+            });
+            if alt_key {
+                i.events.retain(|ev| !matches!(ev, Event::Text(_)));
+            }
+        });
         // TextEdit に渡す前に Enter をダイアログの既定操作にする。
         let mut action = if focus {
             None
@@ -289,7 +299,7 @@ impl SearchState {
     fn render_grep_options(&mut self, ui: &mut egui::Ui, current_dir: &Path) {
         ui.horizontal(|ui| {
             ui.label("検索場所");
-            ui.text_edit_singleline(&mut self.root);
+            ui.add(egui::TextEdit::singleline(&mut self.root).desired_width(f32::INFINITY));
         });
         ui.horizontal_wrapped(|ui| {
             if ui.button("現フォルダー").clicked() {
@@ -351,9 +361,11 @@ impl SearchState {
             .show_rows(ui, row_h, results.hits.len(), |ui, rows| {
                 for i in rows {
                     let hit = &results.hits[i];
+                    // 正規化したパス（Windows は \\?\C:\...）ではなく、検索場所からの相対パスを示す
+                    let path = hit.path.strip_prefix(&results.root).unwrap_or(&hit.path);
                     let label = format!(
                         "{}:{}:{}  {}",
-                        hit.path.display(),
+                        path.display(),
                         hit.line + 1,
                         hit.col + 1,
                         hit.text
@@ -813,6 +825,24 @@ mod tests {
             vec![key_event(Key::Enter, egui::Modifiers::SHIFT)],
         );
         assert_eq!(app.cur_buf().selection_range(), Some(((1, 0), (1, 1))));
+    }
+
+    #[test]
+    fn alt_letter_does_not_type_into_dialog() {
+        let ctx = egui::Context::default();
+        let mut app = app_with_text("猫");
+        app.open_search_dialog(SearchDialog::Find);
+        input_frame(&ctx, &mut app, vec![]);
+        input_frame(&ctx, &mut app, vec![Event::Text("cat".into())]);
+        input_frame(
+            &ctx,
+            &mut app,
+            vec![
+                key_event(Key::N, egui::Modifiers::ALT),
+                Event::Text("n".into()),
+            ],
+        );
+        assert_eq!(app.search.query, "cat");
     }
 
     #[test]
