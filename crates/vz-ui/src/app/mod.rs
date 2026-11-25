@@ -109,6 +109,8 @@ enum FilerAction {
     CycleSort,
     BackToEditor,
     Quit,
+    /// 割り当てなし（F キー欄の空欄）
+    Nop,
 }
 
 const APP_VERSION: &str = env!("CARGO_PKG_VERSION");

@@ -194,6 +194,7 @@ impl VzEditorApp {
             FilerAction::Quit => {
                 self.request_quit(ctx);
             }
+            FilerAction::Nop => {}
         }
     }
 

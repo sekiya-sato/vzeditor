@@ -490,7 +490,7 @@ impl VzEditorApp {
         }
     }
 
-    // --- Function Key Guide Bar (F1..F10, 2 blocks of 5 keys) ---
+    // --- Function Key Guide Bar (F1..F10 / F1..F12, blocks of 5+5(+2) keys) ---
 
     pub(super) fn render_fkey_bar(&mut self, ctx: &egui::Context) {
         match self.mode {
@@ -555,8 +555,13 @@ impl VzEditorApp {
             ("F10", "", EditorAction::Nop),
         ];
         let keys_right = if self.is_sakura() { sakura_right } else { keys_right };
+        // F11・F12 は両方式とも割り当てなし（幅に余裕があるときだけ表示）
+        let keys_extra: &[(&str, &str, EditorAction)] =
+            &[("F11", "", EditorAction::Nop), ("F12", "", EditorAction::Nop)];
 
-        if let Some(action) = Self::paint_fkey_bar(ctx, keys_left, keys_right, FKEY_NUM_BG) {
+        if let Some(action) =
+            Self::paint_fkey_bar(ctx, [keys_left, keys_right, keys_extra], FKEY_NUM_BG)
+        {
             self.execute_editor_action(action);
         }
     }
@@ -576,17 +581,23 @@ impl VzEditorApp {
             ("F9", "編集戻", FilerAction::BackToEditor),
             ("F10", "終了", FilerAction::Quit),
         ];
+        let keys_extra: &[(&str, &str, FilerAction)] =
+            &[("F11", "", FilerAction::Nop), ("F12", "", FilerAction::Nop)];
 
-        if let Some(action) = Self::paint_fkey_bar(ctx, keys_left, keys_right, FKEY_NUM_FILER_BG) {
+        if let Some(action) = Self::paint_fkey_bar(
+            ctx,
+            [keys_left, keys_right, keys_extra],
+            FKEY_NUM_FILER_BG,
+        ) {
             self.execute_filer_action(ctx, action);
         }
     }
 
-    /// F キーの案内バー（左右 5 個ずつ）を描き、押されたボタンの動作を返す。
+    /// F キーの案内バー（F1〜F5・F6〜F10・F11〜F12 の 3 ブロック）を描き、押されたボタンの動作を返す。
+    /// F11〜F12 は 12 個がボタンの最小幅で並ぶときだけ表示する。
     pub(super) fn paint_fkey_bar<A: Copy>(
         ctx: &egui::Context,
-        keys_left: &[(&str, &str, A)],
-        keys_right: &[(&str, &str, A)],
+        blocks: [&[(&str, &str, A)]; 3],
         badge_color: Color32,
     ) -> Option<A> {
         let mut clicked_action: Option<A> = None;
@@ -601,18 +612,15 @@ impl VzEditorApp {
             )
             .show(ctx, |ui| {
                 ui.multiply_opacity(window_style::text_alpha());
-                let avail_w = ui.available_width();
-                let block_gap = 18.0_f32;
-                let key_gap = 4.0_f32;
-                let btn_w = ((avail_w - block_gap - key_gap * 8.0) / 10.0).max(56.0);
+                let (block_count, btn_w) = fkey_bar_layout(ui.available_width());
                 let btn_h = ui.available_height().max(24.0);
 
                 ui.horizontal_centered(|ui| {
-                    ui.spacing_mut().item_spacing.x = key_gap;
+                    ui.spacing_mut().item_spacing.x = FKEY_KEY_GAP;
 
-                    for (i, keys) in [keys_left, keys_right].into_iter().enumerate() {
+                    for (i, keys) in blocks.into_iter().take(block_count).enumerate() {
                         if i > 0 {
-                            ui.add_space(block_gap - key_gap);
+                            ui.add_space(FKEY_BLOCK_GAP - FKEY_KEY_GAP);
                         }
                         for &(fkey, label, action) in keys {
                             if Self::paint_fkey_button(
@@ -697,4 +705,43 @@ fn strip_tab(ui: &mut egui::Ui, title: String, active: bool) -> egui::Response {
         .stroke(Stroke::new(1.0_f32, if active { TEXT_CYAN } else { GUTTER_SEP }))
         .corner_radius(CornerRadius::same(2)),
     )
+}
+
+/// F キー案内バーのボタン間隔・ブロック間隔・ボタンの最小幅。
+const FKEY_KEY_GAP: f32 = 4.0;
+const FKEY_BLOCK_GAP: f32 = 18.0;
+const FKEY_BTN_MIN_W: f32 = 56.0;
+
+/// 幅 `avail_w` に並べる F キーのブロック数（2 = F1〜F10、3 = F1〜F12）とボタン幅。
+/// 12 個が最小幅以上で収まるなら F12 まで並べて幅いっぱいに広げ、収まらなければ F10 まで。
+fn fkey_bar_layout(avail_w: f32) -> (usize, f32) {
+    // 12 個: ブロック間 2 か所、ブロック内のすき間 4 + 4 + 1 = 9 か所
+    let w12 = (avail_w - FKEY_BLOCK_GAP * 2.0 - FKEY_KEY_GAP * 9.0) / 12.0;
+    if w12 >= FKEY_BTN_MIN_W {
+        return (3, w12);
+    }
+    // 10 個: ブロック間 1 か所、ブロック内のすき間 4 + 4 = 8 か所
+    let w10 = (avail_w - FKEY_BLOCK_GAP - FKEY_KEY_GAP * 8.0) / 10.0;
+    (2, w10.max(FKEY_BTN_MIN_W))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_fkey_bar_layout_switches_to_f12_when_wide_enough() {
+        // F12 まで並ぶ最小の幅: 56 * 12 + 18 * 2 + 4 * 9 = 744
+        let threshold = FKEY_BTN_MIN_W * 12.0 + FKEY_BLOCK_GAP * 2.0 + FKEY_KEY_GAP * 9.0;
+        assert_eq!(fkey_bar_layout(threshold), (3, FKEY_BTN_MIN_W));
+        let (blocks, w) = fkey_bar_layout(threshold - 1.0);
+        assert_eq!(blocks, 2);
+        assert!(w > FKEY_BTN_MIN_W);
+        // 広いほどボタンも広がる
+        let (blocks, w) = fkey_bar_layout(1200.0);
+        assert_eq!(blocks, 3);
+        assert!((w * 12.0 + FKEY_BLOCK_GAP * 2.0 + FKEY_KEY_GAP * 9.0 - 1200.0).abs() < 0.01);
+        // 狭いときは F10 まで、最小幅で
+        assert_eq!(fkey_bar_layout(300.0), (2, FKEY_BTN_MIN_W));
+    }
 }
