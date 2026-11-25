@@ -581,6 +581,26 @@ impl TextBuffer {
         self.revision = self.revision.wrapping_add(1);
     }
 
+    /// 改行して、現在行の行頭の空白（タブ・半角スペース）を新しい行の先頭に写す（自動インデント）。
+    /// カーソルが行頭の空白の途中にあるときは、カーソルより前の分だけを写す。アンドゥは1回で戻る。
+    pub fn insert_newline_with_indent(&mut self) {
+        self.push_undo_snapshot();
+        self.delete_selection_internal();
+        self.preferred_visual_col = None;
+        let indent: String = self.lines[self.cursor_line]
+            .chars()
+            .take(self.cursor_col)
+            .take_while(|c| matches!(c, '\t' | ' '))
+            .collect();
+        self.insert_newline_internal();
+        if !indent.is_empty() {
+            self.lines[self.cursor_line].insert_str(0, &indent);
+            self.cursor_col = indent.chars().count();
+        }
+        self.dirty = true;
+        self.revision = self.revision.wrapping_add(1);
+    }
+
     fn insert_newline_internal(&mut self) {
         let byte_idx = char_to_byte_idx(&self.lines[self.cursor_line], self.cursor_col);
         let tail = self.lines[self.cursor_line].split_off(byte_idx);
@@ -988,6 +1008,47 @@ mod tests {
         assert!(rev1 > 0);
         buf.insert_newline();
         assert!(buf.revision > rev1);
+    }
+
+    #[test]
+    fn test_insert_newline_with_indent() {
+        let mut buf = TextBuffer::new();
+        buf.insert_text("\t\tこれはテスト");
+        buf.insert_newline_with_indent();
+        assert_eq!(buf.lines, vec!["\t\tこれはテスト", "\t\t"]);
+        assert_eq!(buf.cursor_pos(), (1, 2));
+
+        // アンドゥ1回で改行とインデントがまとめて戻る
+        assert!(buf.undo());
+        assert_eq!(buf.lines, vec!["\t\tこれはテスト"]);
+        assert_eq!(buf.cursor_pos(), (0, 8));
+
+        // スペース混じりはそのまま写す。行の途中なら後ろの文字は新しい行のインデントの後へ
+        let mut buf = TextBuffer::new();
+        buf.insert_text(" \t abc");
+        buf.set_cursor(0, 4);
+        buf.insert_newline_with_indent();
+        assert_eq!(buf.lines, vec![" \t a", " \t bc"]);
+        assert_eq!(buf.cursor_pos(), (1, 3));
+
+        // 行頭の空白の途中ではカーソルより前の分だけ（行頭なら何も入れない）
+        let mut buf = TextBuffer::new();
+        buf.insert_text("\t\tx");
+        buf.set_cursor(0, 1);
+        buf.insert_newline_with_indent();
+        assert_eq!(buf.lines, vec!["\t", "\t\tx"]);
+        buf.set_cursor(1, 0);
+        buf.insert_newline_with_indent();
+        assert_eq!(buf.lines, vec!["\t", "", "\t\tx"]);
+
+        // 範囲選択中は選択を消してから、残った行の行頭の空白を写す
+        let mut buf = TextBuffer::new();
+        buf.insert_text("\tabc\ndef");
+        buf.select_range((0, 2), (1, 1));
+        buf.insert_newline_with_indent();
+        assert_eq!(buf.lines, vec!["\ta", "\tef"]);
+        assert!(buf.undo());
+        assert_eq!(buf.lines, vec!["\tabc", "def"]);
     }
 
     #[test]

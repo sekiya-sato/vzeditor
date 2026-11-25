@@ -451,8 +451,12 @@ impl VzEditorApp {
 
         // --- 修飾キーなしの編集キー ---
         match key {
-            Key::Enter => {
+            // Enter は自動インデント、Shift+Enter は行頭から
+            Key::Enter if shift => {
                 self.cur_buf_mut().insert_newline();
+            }
+            Key::Enter => {
+                self.cur_buf_mut().insert_newline_with_indent();
             }
             Key::Backspace => {
                 self.cur_buf_mut().backspace();

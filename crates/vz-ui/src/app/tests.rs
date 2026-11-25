@@ -1095,6 +1095,52 @@ fn test_sakura_shift_select_and_replace() {
     assert_eq!(app.cur_buf().selected_text().as_deref(), Some("Xdef\nghi"));
 }
 
+/// Enter は行頭の空白を引き継ぎ、Shift+Enter は行頭から始める（両方式共通）。
+#[test]
+fn test_enter_auto_indent_both_schemes() {
+    let ctx = egui::Context::default();
+    let none = mods(false, false);
+    let shift = mods(false, true);
+    for sakura in [false, true] {
+        let mut app = if sakura {
+            make_sakura_app("\t\tこれはテスト")
+        } else {
+            let mut app = make_test_app();
+            let mut buf = TextBuffer::new();
+            buf.insert_text("\t\tこれはテスト");
+            app.buffers = vec![BufferSlot::new(buf)];
+            app
+        };
+        app.cur_buf_mut().move_line_end();
+        run_editor(&ctx, &mut app, none, vec![key_with(Key::Enter, none)]);
+        assert_eq!(app.cur_buf().lines, vec!["\t\tこれはテスト", "\t\t"], "sakura={sakura}");
+        assert_eq!(app.cur_buf().cursor_pos(), (1, 2));
+        run_editor(&ctx, &mut app, none, vec![Event::Text("次".into())]);
+        assert_eq!(app.cur_buf().lines[1], "\t\t次");
+
+        run_editor(&ctx, &mut app, shift, vec![key_with(Key::Enter, shift)]);
+        assert_eq!(app.cur_buf().lines, vec!["\t\tこれはテスト", "\t\t次", ""], "sakura={sakura}");
+        assert_eq!(app.cur_buf().cursor_pos(), (2, 0));
+
+        // 1回の Undo で Enter の改行とインデントがまとめて戻る
+        app.cur_buf_mut().undo();
+        app.cur_buf_mut().undo();
+        app.cur_buf_mut().undo();
+        assert_eq!(app.cur_buf().lines, vec!["\t\tこれはテスト"], "sakura={sakura}");
+    }
+}
+
+#[test]
+fn test_sakura_enter_replaces_selection_with_indent() {
+    let ctx = egui::Context::default();
+    let mut app = make_sakura_app("\tabc\ndef");
+    app.cur_buf_mut().select_range((0, 2), (1, 1));
+    let none = mods(false, false);
+    run_editor(&ctx, &mut app, none, vec![key_with(Key::Enter, none)]);
+    assert_eq!(app.cur_buf().lines, vec!["\ta", "\tef"]);
+    assert!(!app.cur_buf().has_selection());
+}
+
 #[test]
 fn test_sakura_f2_f4_f5() {
     let ctx = egui::Context::default();

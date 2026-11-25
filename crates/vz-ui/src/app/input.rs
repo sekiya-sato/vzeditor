@@ -582,10 +582,10 @@ impl VzEditorApp {
                                 }
                                 true
                             }
-                            // Enter: Ctrl+M
+                            // Enter: Ctrl+M（Enter と同じく自動インデント）
                             Key::M => {
                                 if !in_md_view {
-                                    self.cur_buf_mut().insert_newline();
+                                    self.cur_buf_mut().insert_newline_with_indent();
                                     self.need_scroll_to_cursor = true;
                                 }
                                 true
@@ -665,8 +665,13 @@ impl VzEditorApp {
                                     self.cur_buf_mut().move_page_down(lines);
                                     self.need_scroll_to_cursor = true;
                                 }
-                                Key::Enter => {
+                                // Enter は自動インデント、Shift+Enter は行頭から
+                                Key::Enter if modifiers.shift => {
                                     self.cur_buf_mut().insert_newline();
+                                    self.need_scroll_to_cursor = true;
+                                }
+                                Key::Enter => {
+                                    self.cur_buf_mut().insert_newline_with_indent();
                                     self.need_scroll_to_cursor = true;
                                 }
                                 Key::Backspace => {
