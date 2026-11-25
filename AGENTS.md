@@ -30,6 +30,9 @@
 - 両方式共通のショートカットは Alt / Alt+Shift 系とし、`window_style_key_action` と `test_window_style_keys_do_not_overlap` に加える。
 - egui は Ctrl+X / C / V（Shift 付き含む）、Shift+Del、Ctrl+Ins、Shift+Ins を Cut / Copy / Paste イベントで届ける。`handle_editor_events` のイベント側で扱う。
 - `cargo fmt` は一括実行しない。整形は変更したファイルだけ。
+- ` .clone()  Arc Mutex .unwrap() Box` などの不用意な多用を避ける
+- unsafeによる制約回避、Stringへの頻繁な変換、過剰なジェネリクス、不必要なasync化などは本当に使うべきかを検討
+
 
 ## 開発サイクル
 
