@@ -133,6 +133,26 @@ cargo build --release
 
 ソースは Cargo ワークスペースで、ルートの `vz`（起動）と `crates/` の vz-ui（画面）・vz-platform（OS 固有処理）・vz-config（設定）・vz-core（編集モデル）に分かれています。詳細は [docs/基本設計.md](docs/基本設計.md) を参照してください。
 
+## macOS での検証
+
+開発機（Windows 11）では macOS 版のリンクと実行ができません（macOS SDK は Apple 製ハードウェアでしか使えません）。手元でできるのは型チェックまでで、テスト・ビルド・起動の確認には GitHub Actions の macOS ランナーを使います。
+
+手元の型チェック（`cargo check` / `cargo clippy`）には Clang が要ります。依存の `objc2-exception-helper` が Objective-C のファイルを 1 つコンパイルするためです。Visual Studio Installer で「Windows 用 C++ Clang コンパイラ」を追加し、次のように実行します（パスは VS 2026 Community の例）。
+
+```powershell
+$llvm = 'C:\Program Files\Microsoft Visual Studio\18\Community\VC\Tools\Llvm\x64\bin'
+$env:CC_aarch64_apple_darwin = "$llvm\clang.exe"
+$env:AR_aarch64_apple_darwin = "$llvm\llvm-ar.exe"
+cargo check --all-targets --target aarch64-apple-darwin
+```
+
+- ワークフロー: [.github/workflows/macos-ci.yml](.github/workflows/macos-ci.yml)（手動実行のみ）。Actions タブの「macOS CI」→「Run workflow」で実行し、ランナー（`macos-latest` = Apple Silicon / `macos-15-intel` = Intel）と起動確認の有無を選びます。
+- 実行内容: `cargo check --all-targets` → `cargo clippy --all-targets` → `cargo test` → `cargo build --release` → release ビルドを 15 秒起動して画面を撮る。
+- 結果: 実行ページの Summary に段階ごとの ✅ / ❌ / ⏭ が出ます。すべて通ればジョブは緑で「✅ macOS CI 成功」、どれかが失敗すればジョブは赤で、失敗した段階とエラーの抜粋が出ます。
+- 引き継ぎ: 成果物 `macos-ci-report-…` の `handoff.md`（結果の表・環境・エラー抜粋）を、修正するエージェントや開発者にそのまま渡します。各段階の全ログと起動時の画面も同じ成果物に入っています。
+- ワークフローはリポジトリにファイルを作らず、コミットも push もしません（レポートはランナーの一時フォルダに置きます）。
+- 透過・キー入力・IME・ドラッグ＆ドロップなど、画面を操作する確認は macOS の実機が必要です。実機で確認するまでは「macOS 実機未確認」の扱いです。
+
 ## ライセンス
 
 MIT License（[LICENSE](LICENSE)）。

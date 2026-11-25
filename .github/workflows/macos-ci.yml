@@ -1,0 +1,249 @@
+name: macOS CI
+
+# macOS 実機（GitHub Actions の macOS ランナー）で check / clippy / test / release ビルド / 起動確認を行う。
+# 手動実行専用: GitHub の Actions タブ →「macOS CI」→「Run workflow」。
+#
+# 結果の見方
+#   - 実行ページの Summary に、段階ごとの ✅ / ❌ / ⏭ と、失敗時のエラー抜粋が出る。
+#   - チェックアウト先にはファイルを作らない（レポートはランナーの一時フォルダ、ビルドは target/）。
+#   - 成果物 macos-ci-report-<番号> に handoff.md（エージェントへ渡す引き継ぎ用）・各段階のログ・起動時の画面がある。
+#   - 失敗時は handoff.md をそのまま渡せば、どの段階で何が起きたかが分かる。
+#   - どれか 1 段階でも失敗すると、最後の「判定」でジョブ全体が失敗（赤）になる。
+on:
+  workflow_dispatch:
+    inputs:
+      runner:
+        description: "ランナー（macos-latest は Apple Silicon、macos-15-intel は Intel）"
+        type: choice
+        options:
+          - macos-latest
+          - macos-15-intel
+        default: macos-latest
+      smoke:
+        description: "release ビルドを起動して画面を撮る（起動確認）"
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: macos-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    # 明示すると -eo pipefail になり、tee を挟んでも cargo の失敗が段階の失敗になる
+    shell: bash
+
+env:
+  CARGO_TERM_COLOR: never
+  RUST_BACKTRACE: "1"
+
+jobs:
+  macos:
+    name: macOS (${{ inputs.runner }})
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: 60
+
+    steps:
+      # レポートはチェックアウト先の外（ランナーの一時フォルダ）に置き、作業ツリーにファイルを作らない
+      - name: Prepare report directory
+        run: |
+          echo "REPORT=$RUNNER_TEMP/ci-report" >> "$GITHUB_ENV"
+          mkdir -p "$RUNNER_TEMP/ci-report"
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Cache Cargo registry & build artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Environment
+        run: |
+          {
+            echo "commit: $GITHUB_SHA"
+            echo "ref: $GITHUB_REF_NAME"
+            echo "runner: ${{ inputs.runner }} ($(uname -m))"
+            echo "macOS: $(sw_vers -productVersion) ($(sw_vers -buildVersion))"
+            echo "rustc: $(rustc --version)"
+            echo "cargo: $(cargo --version)"
+            echo "clippy: $(cargo clippy --version)"
+            echo "xcode: $(xcodebuild -version 2>/dev/null | head -1)"
+          } | tee "$REPORT/env.txt"
+
+      - name: cargo check
+        id: check
+        continue-on-error: true
+        run: cargo check --all-targets 2>&1 | tee "$REPORT/check.log"
+
+      - name: cargo clippy
+        id: clippy
+        if: steps.check.outcome == 'success'
+        continue-on-error: true
+        # 原作由来の既存警告があるため -D warnings にはしない（警告数は Summary に出す）
+        run: cargo clippy --all-targets 2>&1 | tee "$REPORT/clippy.log"
+
+      - name: cargo test
+        id: test
+        if: steps.check.outcome == 'success'
+        continue-on-error: true
+        run: cargo test --no-fail-fast 2>&1 | tee "$REPORT/test.log"
+
+      - name: cargo build --release
+        id: build
+        if: steps.check.outcome == 'success'
+        continue-on-error: true
+        run: cargo build --release 2>&1 | tee "$REPORT/build.log"
+
+      - name: Smoke launch (release build)
+        id: smoke
+        if: inputs.smoke && steps.build.outcome == 'success'
+        continue-on-error: true
+        run: |
+          log="$REPORT/smoke.log"
+          ./target/release/vz tests/fixtures/markdown_sample.md >"$log" 2>&1 &
+          pid=$!
+          sleep 15
+          if ! kill -0 "$pid" 2>/dev/null; then
+            set +e; wait "$pid"; code=$?; set -e
+            echo "vz が 15 秒以内に終了した（終了コード $code）" | tee -a "$log"
+            exit 1
+          fi
+          echo "vz は 15 秒後も起動中（pid $pid）" | tee -a "$log"
+          # 画面収録の権限が無いランナーでは撮れないことがある。撮れなくても起動確認は成功とする
+          if screencapture -x "$REPORT/screenshot.png"; then
+            echo "screenshot: $REPORT/screenshot.png" | tee -a "$log"
+          else
+            echo "::warning title=macOS CI::画面を撮れなかった（起動確認自体は成功）"
+          fi
+          kill "$pid" 2>/dev/null || true
+          sleep 2
+          kill -9 "$pid" 2>/dev/null || true
+
+      - name: Summary and handoff report
+        if: always()
+        env:
+          R_CHECK: ${{ steps.check.outcome }}
+          R_CLIPPY: ${{ steps.clippy.outcome }}
+          R_TEST: ${{ steps.test.outcome }}
+          R_BUILD: ${{ steps.build.outcome }}
+          R_SMOKE: ${{ steps.smoke.outcome }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          mkdir -p "$REPORT"
+          icon() {
+            case "$1" in
+              success) echo "✅ 成功" ;;
+              failure) echo "❌ 失敗" ;;
+              skipped|"") echo "⏭ 未実行" ;;
+              *) echo "⚠ $1" ;;
+            esac
+          }
+          # エラー箇所の抜粋（rustc のエラー・テスト失敗・panic）
+          excerpt() {
+            local f="$REPORT/$1.log"
+            [ -f "$f" ] || return 0
+            grep -n -E -A 14 '^error(\[E[0-9]+\])?:|panicked at|^test .* \.\.\. FAILED|^failures:' "$f" | head -n 200 || true
+          }
+
+          # macOS 標準の bash 3.2 でも動く書き方にする（${s^^} などは使わない）
+          failed=""
+          [ "$R_CHECK" = "failure" ] && failed="$failed check"
+          [ "$R_CLIPPY" = "failure" ] && failed="$failed clippy"
+          [ "$R_TEST" = "failure" ] && failed="$failed test"
+          [ "$R_BUILD" = "failure" ] && failed="$failed build"
+          [ "$R_SMOKE" = "failure" ] && failed="$failed smoke"
+          failed="${failed# }"
+
+          warnings="-"
+          [ -f "$REPORT/clippy.log" ] && warnings=$(grep -c -E '^warning' "$REPORT/clippy.log" || true)
+          tests_line="-"
+          [ -f "$REPORT/test.log" ] && tests_line=$(grep -E '^test result:' "$REPORT/test.log" \
+            | awk '{p+=$4; f+=$6; i+=$8} END {printf "passed %d / failed %d / ignored %d", p, f, i}')
+
+          if [ -z "$failed" ]; then
+            verdict="✅ macOS CI 成功（すべての段階が通過）"
+          else
+            verdict="❌ macOS CI 失敗（失敗した段階: $failed）"
+          fi
+
+          report="$REPORT/handoff.md"
+          {
+            echo "# $verdict"
+            echo
+            echo "- 実行: $RUN_URL"
+            sed 's/^/- /' "$REPORT/env.txt" 2>/dev/null || true
+            echo
+            echo "| 段階 | 結果 | 補足 |"
+            echo "| :--- | :--- | :--- |"
+            echo "| cargo check --all-targets | $(icon "$R_CHECK") | |"
+            echo "| cargo clippy --all-targets | $(icon "$R_CLIPPY") | warning 行数: $warnings |"
+            echo "| cargo test | $(icon "$R_TEST") | $tests_line |"
+            echo "| cargo build --release | $(icon "$R_BUILD") | |"
+            echo "| 起動確認（15 秒） | $(icon "$R_SMOKE") | $( [ -f "$REPORT/screenshot.png" ] && echo '画面: screenshot.png' ) |"
+            echo
+            if [ -n "$failed" ]; then
+              echo "## エラー抜粋"
+              for s in $failed; do
+                echo
+                echo "### $s（全文は成果物の $s.log）"
+                echo
+                echo '```text'
+                if [ "$s" = "smoke" ]; then
+                  tail -n 60 "$REPORT/smoke.log" 2>/dev/null || echo "(ログなし)"
+                else
+                  out=$(excerpt "$s")
+                  if [ -n "$out" ]; then echo "$out"; else tail -n 80 "$REPORT/$s.log" 2>/dev/null || echo "(ログなし)"; fi
+                fi
+                echo '```'
+              done
+              echo
+              echo "## 引き継ぎ"
+              echo
+              echo "このファイルをエージェントに渡し、「macOS CI の失敗を直して」と依頼する。"
+              echo "手元（Windows）では Clang を指定して \`cargo check --all-targets --target aarch64-apple-darwin\` で型チェックできる（README「macOS での検証」）。test・build・起動は、修正後にこのワークフローを再実行して確かめる。"
+            fi
+          } > "$report"
+
+          cat "$report" >> "$GITHUB_STEP_SUMMARY"
+          cat "$report"
+          if [ -n "$failed" ]; then
+            for s in $failed; do echo "::error title=macOS CI::$s が失敗。Summary と成果物の handoff.md を参照"; done
+          else
+            echo "::notice title=macOS CI::すべての段階が成功"
+          fi
+
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-ci-report-${{ github.run_number }}-${{ inputs.runner }}
+          path: ${{ runner.temp }}/ci-report/
+          retention-days: 14
+
+      - name: Upload binary
+        if: steps.build.outcome == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: vz-${{ inputs.runner }}-${{ github.run_number }}
+          path: target/release/vz
+          retention-days: 7
+
+      - name: Verdict
+        if: always()
+        env:
+          OUTCOMES: >-
+            ${{ steps.check.outcome }} ${{ steps.clippy.outcome }} ${{ steps.test.outcome }}
+            ${{ steps.build.outcome }} ${{ steps.smoke.outcome }}
+        run: |
+          case " $OUTCOMES " in
+            *" failure "*) echo "❌ 失敗した段階あり（Summary 参照）"; exit 1 ;;
+          esac
+          if [ "${{ steps.check.outcome }}" != "success" ]; then echo "❌ cargo check が実行されていない"; exit 1; fi
+          echo "✅ macOS CI 成功"

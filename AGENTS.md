@@ -52,7 +52,7 @@
 
 - Windows は MSVC ツールチェーン（`stable-x86_64-pc-windows-msvc` と Visual Studio の C++ デスクトップ開発）。Git Bash では coreutils の `link.exe` が優先されリンクに失敗するので PowerShell を使う。
 - `cargo` が見つからなければ `$env:PATH = "$env:USERPROFILE\.cargo\bin;$env:PATH"`。
-- 他 OS の型チェックは `cargo check --all-targets --target x86_64-unknown-linux-gnu`（macOS は `aarch64-apple-darwin`）。GNU ツールチェーンは `dlltool` が要り失敗するので使わない。macOS は wry（objc2 の `exception`）が C コンパイラを要するため、clang が無い Windows では型チェックできない。
+- 他 OS の型チェックは `cargo check --all-targets --target x86_64-unknown-linux-gnu`（macOS は `aarch64-apple-darwin`）。GNU ツールチェーンは `dlltool` が要り失敗するので使わない。macOS は `objc2-exception-helper` が Clang を要するので、VS の「Windows 用 C++ Clang コンパイラ」を入れ、`$env:CC_aarch64_apple_darwin` / `$env:AR_aarch64_apple_darwin` に `VC\Tools\Llvm\x64\bin` の `clang.exe` / `llvm-ar.exe` を指定して実行する（README「macOS での検証」）。テスト・ビルド・起動は `.github/workflows/macos-ci.yml`（人が手動実行）で確かめる。
 - `cargo` はルートで実行すれば全クレートが対象（`default-members`）。特定のクレートだけなら `-p vz-core` など。
 - ビルド日時は `crates/vz-ui/build.rs` が `VZ_BUILD_AT` として埋め込み、About に表示する。
 
