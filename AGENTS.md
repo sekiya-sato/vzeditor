@@ -70,7 +70,7 @@
 - 透過の確認画像はデスクトップが写るので確認後に削除する。確認で変えた `%APPDATA%\vzeditor\settings.ini` は元に戻す。
 - 次はユーザーに確認を依頼し、エージェントは試さない: ドラッグ＆ドロップ（合成では成立しないことがある）、Alt+C の送信・新規セッション・GitHub Desktop の Push（実際に送信・Push される）。
 - ブラウザ（WebView2）の中のキーは、SendKeys の合成入力だと `KeyboardEvent.code` が空になるなど実キーと違う。ページ内のキー操作の判定は `keyCode` も見る。
-- 未確認の OS は README・報告に明記する（現状の実機確認は Windows 11 のみ）。
+- 未確認の OS は README・報告に明記する（現状: Windows 11 は実機、Linux は WSL2、macOS は GitHub Actions のビルド・テスト・起動のみ）。
 
 ## Release 手順（Windows 版）
 

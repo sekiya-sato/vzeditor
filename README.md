@@ -24,16 +24,16 @@ We thank the original author and contributors for their work.
 
 開発中です。独自機能の追加とクロスプラットフォーム対応を進めています。
 
-| OS | 状況 |
-| :--- | :--- |
-| Windows 11 | 動作確認済み |
-| Linux（Ubuntu など） | 原作は対応。フォーク後の機能は実機未確認 |
-| macOS | ビルド対象。実機未確認 |
+| OS | 状況 | 確認方法 |
+| :--- | :--- | :--- |
+| Windows 11 | 動作確認済み | 実機で操作して確認 |
+| Linux（Ubuntu など） | 動作確認済み（WSL2） | Windows 11 の WSL2（WSLg）上で確認。ネイティブの Linux 実機は未確認 |
+| macOS | ビルド・テスト・起動を確認 | GitHub Actions の macOS ランナー（Apple Silicon）で check・clippy・test・release ビルド・15 秒の起動を確認（[macOS での検証](#macos-での検証)）。実機での画面操作は未確認 |
 
 ## フォーク元との関係
 
 - このリポジトリ（[sekiya-sato/vzeditor](https://github.com/sekiya-sato/vzeditor)）は [TouryuTamane/lz-editor](https://github.com/TouryuTamane/lz-editor) のフォークです。フォーク元のコミット `adab5d2` までの履歴を含み、それ以降の変更がこのリポジトリ独自のものです。
-- フォーク後に追加・変更した機能は Windows 11 でしか動作確認していません。Linux / macOS の実機では未確認です。
+- フォーク後に追加・変更した機能は、Windows 11 の実機と WSL2 の Linux で動作確認しています。macOS は GitHub Actions でのビルド・テスト・起動の確認のみで、実機の画面操作は未確認です。
 - 実行ファイル名は `lz` から `vz` に、パッケージ名は `vzeditor` に変えています。原作と同時にインストールしても衝突しません。
 - デザインはvzeditorを踏襲します。ただしうろ覚えなので違うところもあるかもしれません。
 - 不具合報告や要望は、原作由来の部分も含めてこのリポジトリの Issue へお願いします。
