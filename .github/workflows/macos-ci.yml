@@ -112,10 +112,10 @@ jobs:
           sleep 15
           if ! kill -0 "$pid" 2>/dev/null; then
             set +e; wait "$pid"; code=$?; set -e
-            echo "vz が 15 秒以内に終了した（終了コード $code）" | tee -a "$log"
+            echo "vz が 15 秒以内に終了した（終了コード ${code}）" | tee -a "$log"
             exit 1
           fi
-          echo "vz は 15 秒後も起動中（pid $pid）" | tee -a "$log"
+          echo "vz は 15 秒後も起動中（pid ${pid}）" | tee -a "$log"
           # 画面収録の権限が無いランナーでは撮れないことがある。撮れなくても起動確認は成功とする
           if screencapture -x "$REPORT/screenshot.png"; then
             echo "screenshot: $REPORT/screenshot.png" | tee -a "$log"
@@ -170,7 +170,7 @@ jobs:
           if [ -z "$failed" ]; then
             verdict="✅ macOS CI 成功（すべての段階が通過）"
           else
-            verdict="❌ macOS CI 失敗（失敗した段階: $failed）"
+            verdict="❌ macOS CI 失敗（失敗した段階: ${failed}）"
           fi
 
           report="$REPORT/handoff.md"
@@ -192,7 +192,7 @@ jobs:
               echo "## エラー抜粋"
               for s in $failed; do
                 echo
-                echo "### $s（全文は成果物の $s.log）"
+                echo "### ${s}（全文は成果物の $s.log）"
                 echo
                 echo '```text'
                 if [ "$s" = "smoke" ]; then
