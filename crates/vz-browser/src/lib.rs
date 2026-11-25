@@ -189,6 +189,12 @@ impl EmbeddedBrowser {
         self.visible
     }
 
+    /// キー入力を親ウィンドウ（vz）へ戻す。
+    pub fn focus_parent(&self) {
+        #[cfg(any(windows, target_os = "macos"))]
+        let _ = self.view.focus_parent();
+    }
+
     /// キー入力をページへ渡す。
     pub fn focus(&self) {
         #[cfg(any(windows, target_os = "macos"))]

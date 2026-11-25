@@ -131,27 +131,30 @@ impl VzEditorApp {
                             if btn(ui, "再読込", "再読み込み (F5)") {
                                 nav = Some(0);
                             }
-                            let right_w = 230.0;
-                            let edit = ui.add(
-                                egui::TextEdit::singleline(&mut self.browser_url_input)
-                                    .font(font.clone())
-                                    .hint_text("URL・ファイルのパス・localhost:3000")
-                                    .desired_width((ui.available_width() - right_w).max(120.0)),
-                            );
-                            if edit.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter)) {
-                                go = true;
-                            }
-                            if btn(ui, "開く", "URL 欄の内容を開く (Enter)") {
-                                go = true;
-                            }
-                            if current_file.is_some()
-                                && btn(ui, "編集中のファイル", "エディターで開いているファイルを表示")
-                            {
-                                open_current = true;
-                            }
-                            if btn(ui, "外部ブラウザ", "既定のブラウザで開く") {
-                                open_external = true;
-                            }
+                            // 右端のボタンを先に置き、URL 欄は残りの幅いっぱいにする（ボタンがはみ出さない）
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                if btn(ui, "外部ブラウザ", "既定のブラウザで開く") {
+                                    open_external = true;
+                                }
+                                if current_file.is_some()
+                                    && btn(ui, "編集中のファイル", "エディターで開いているファイルを表示")
+                                {
+                                    open_current = true;
+                                }
+                                if btn(ui, "開く", "URL 欄の内容を開く (Enter)") {
+                                    go = true;
+                                }
+                                let edit = ui.add(
+                                    egui::TextEdit::singleline(&mut self.browser_url_input)
+                                        .font(font.clone())
+                                        .hint_text("URL・ファイルのパス・localhost:3000")
+                                        .desired_width(ui.available_width().max(80.0)),
+                                );
+                                self.browser_url_editing = edit.has_focus();
+                                if edit.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter)) {
+                                    go = true;
+                                }
+                            });
                         });
                     });
 
@@ -251,6 +254,19 @@ impl VzEditorApp {
             browser.focus();
             self.browser_focus_page = false;
         }
+        // ページの外（URL 欄・タブ・メニューなど）をクリックしたら、キー入力を vz へ戻す。
+        // WebView は別ウィンドウなので、そのままではクリック後もキーがページへ行ってしまう
+        if want {
+            let clicked_outside = ctx.input(|i| {
+                i.pointer.any_pressed()
+                    && i.pointer
+                        .interact_pos()
+                        .is_some_and(|p| rect.is_some_and(|r| !r.contains(p)))
+            });
+            if clicked_outside {
+                browser.focus_parent();
+            }
+        }
 
         let mut shortcut: Option<char> = None;
         for ev in browser.poll_events() {
@@ -260,7 +276,11 @@ impl VzEditorApp {
                     self.status_message = format!("読み込み中: {url}");
                 }
                 BrowserEvent::Loaded(url) => {
-                    if !url.starts_with("data:") && !url.starts_with("about:") {
+                    // 入力中の URL 欄は書き換えない
+                    if !self.browser_url_editing
+                        && !url.starts_with("data:")
+                        && !url.starts_with("about:")
+                    {
                         self.browser_url_input = url;
                     }
                     self.status_message = "読み込み完了".to_string();

@@ -424,6 +424,8 @@ pub struct VzEditorApp {
     browser_error: Option<String>,
     /// 次に表示したときにページへキー入力を渡す
     browser_focus_page: bool,
+    /// URL 欄に入力中（ページの読み込みで書き換えない）
+    browser_url_editing: bool,
 }
 
 impl VzEditorApp {
@@ -521,6 +523,7 @@ impl VzEditorApp {
             browser_view_rect: None,
             browser_error: None,
             browser_focus_page: false,
+            browser_url_editing: false,
         };
         let session_dir = session::session_dir();
         if restore {

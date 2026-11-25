@@ -58,6 +58,7 @@ fn make_test_app() -> VzEditorApp {
         browser_view_rect: None,
         browser_error: None,
         browser_focus_page: false,
+        browser_url_editing: false,
     }
 }
 
@@ -1255,4 +1256,23 @@ fn test_browser_url_input_is_normalized() {
     app.browser_url_input = "not a url".to_string();
     app.navigate_browser_input();
     assert!(app.status_message.contains("URL を解釈できません"));
+}
+
+#[test]
+fn test_buffer_strip_and_browser_screen_render_headless() {
+    let mut app = make_test_app();
+    app.toggle_browser();
+    let ctx = egui::Context::default();
+    let raw_input = egui::RawInput {
+        screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(1024.0, 680.0))),
+        ..Default::default()
+    };
+    let _ = ctx.run(raw_input, |ctx| {
+        app.render_status_bar(ctx);
+        app.render_buffer_strip(ctx);
+        app.render_browser_canvas(ctx);
+    });
+    // ブラウザの領域がツールバーの下に決まる
+    let rect = app.browser_view_rect.expect("view rect");
+    assert!(rect.min.y > 24.0 && rect.width() > 500.0, "{rect:?}");
 }

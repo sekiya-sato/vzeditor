@@ -406,12 +406,17 @@ impl VzEditorApp {
         }
     }
 
-    /// Compact multi-buffer strip displayed under the status bar in Editor mode when 2+ files are open.
+    /// バッファ帯（ファイルが 2 件以上、またはターミナル・ブラウザを開いたとき）。
+    /// ファイルのタブの後ろにターミナル・ブラウザのタブを並べる（各 1 つ）。
     pub(super) fn render_buffer_strip(&mut self, ctx: &egui::Context) {
-        if self.mode != AppMode::Editor || self.buffers.len() < 2 {
+        let has_terminal = self.terminal.is_some();
+        let has_browser = self.browser.is_some() || self.mode == AppMode::Browser;
+        if self.mode == AppMode::Filer || (self.buffers.len() < 2 && !has_terminal && !has_browser) {
             return;
         }
+        let in_editor = self.mode == AppMode::Editor;
         let mut selected_idx: Option<usize> = None;
+        let mut tool_clicked: Option<AppMode> = None;
 
         egui::TopBottomPanel::top("buffer_strip")
             .exact_height(24.0)
@@ -432,7 +437,6 @@ impl VzEditorApp {
                     ui.add_space(4.0);
 
                     for (idx, slot) in self.buffers.iter().enumerate() {
-                        let is_active = idx == self.active_buf;
                         let dirty_mark = if slot.buffer.dirty { "*" } else { "" };
                         let view_mark = if slot.markdown_view { "[V]" } else { "" };
                         let title = format!(
@@ -442,36 +446,51 @@ impl VzEditorApp {
                             dirty_mark,
                             view_mark
                         );
-                        let resp = ui.add(
-                            egui::Button::new(
-                                egui::RichText::new(title)
-                                    .font(FontId::monospace(12.5))
-                                    .color(if is_active {
-                                        TEXT_WHITE
-                                    } else {
-                                        TEXT_DIM_CYAN
-                                    }),
-                            )
-                            .fill(if is_active {
-                                BG_TAB_ACTIVE
-                            } else {
-                                BG_TAB_INACTIVE
-                            })
-                            .stroke(Stroke::new(
-                                1.0_f32,
-                                if is_active { TEXT_CYAN } else { GUTTER_SEP },
-                            ))
-                            .corner_radius(CornerRadius::same(2)),
-                        );
-                        if resp.clicked() {
+                        if strip_tab(ui, title, in_editor && idx == self.active_buf).clicked() {
                             selected_idx = Some(idx);
+                        }
+                    }
+
+                    if has_terminal || has_browser {
+                        ui.add_space(6.0);
+                        ui.label(egui::RichText::new("|").font(FontId::monospace(12.0)).color(GUTTER_SEP));
+                        ui.add_space(2.0);
+                    }
+                    if let Some(term) = &self.terminal {
+                        let label = if term.is_running() {
+                            "ターミナル"
+                        } else {
+                            "ターミナル(終了)"
+                        };
+                        let resp = strip_tab(ui, label.to_string(), self.mode == AppMode::Terminal);
+                        if resp.on_hover_text(format!("Alt+K  {}", term.program())).clicked() {
+                            tool_clicked = Some(AppMode::Terminal);
+                        }
+                    }
+                    if has_browser {
+                        let name = if self.browser_title.is_empty() {
+                            "ブラウザ".to_string()
+                        } else {
+                            format!("ブラウザ:{}", truncate_display_right(&self.browser_title, 24))
+                        };
+                        let resp = strip_tab(ui, name, self.mode == AppMode::Browser);
+                        if resp.on_hover_text("Alt+B").clicked() {
+                            tool_clicked = Some(AppMode::Browser);
                         }
                     }
                 });
             });
 
         if let Some(idx) = selected_idx {
+            if self.mode != AppMode::Editor {
+                self.enter_editor();
+            }
             self.switch_buffer_to(idx);
+        }
+        match tool_clicked {
+            Some(AppMode::Terminal) if self.mode != AppMode::Terminal => self.toggle_terminal(ctx),
+            Some(AppMode::Browser) if self.mode != AppMode::Browser => self.toggle_browser(),
+            _ => {}
         }
     }
 
@@ -668,4 +687,18 @@ impl VzEditorApp {
     }
 
     // --- Main Center View (Editor, Markdown View, or 2-Pane Filer) ---
+}
+
+/// バッファ帯のタブ 1 つ。
+fn strip_tab(ui: &mut egui::Ui, title: String, active: bool) -> egui::Response {
+    ui.add(
+        egui::Button::new(
+            egui::RichText::new(title)
+                .font(FontId::monospace(12.5))
+                .color(if active { TEXT_WHITE } else { TEXT_DIM_CYAN }),
+        )
+        .fill(if active { BG_TAB_ACTIVE } else { BG_TAB_INACTIVE })
+        .stroke(Stroke::new(1.0_f32, if active { TEXT_CYAN } else { GUTTER_SEP }))
+        .corner_radius(CornerRadius::same(2)),
+    )
 }
