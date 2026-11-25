@@ -110,6 +110,7 @@ enum EditorAction {
     Copy,
     Paste,
     BeginSelect,
+    CloseBuffer,
     /// 割り当てなし（F キー欄の空欄）
     Nop,
 }
@@ -211,6 +212,7 @@ enum MenuAction {
     DeleteLine,
     MoveLineStart,
     MoveLineEnd,
+    ToggleOverwrite,
     // Tools
     ToggleMarkdownView,
     FontZoomIn,
@@ -503,6 +505,8 @@ pub struct VzEditorApp {
     key_scheme: KeyScheme,
     /// サクラの F6「範囲選択開始」: 移動キーで選択を広げるモード
     select_mode: bool,
+    /// Ins キーで切り替える上書きモード（false = 挿入）。保存しない
+    overwrite_mode: bool,
     /// フレームの最後にクリップボードへ書き出す文字列（ctx を持たない処理から使う）
     clipboard_out: Option<String>,
 
@@ -601,6 +605,7 @@ impl VzEditorApp {
             pending_send: None,
             key_scheme: settings.key_scheme,
             select_mode: false,
+            overwrite_mode: false,
             clipboard_out: None,
             quit_request: None,
             last_disk_check: std::time::Instant::now(),
@@ -983,6 +988,25 @@ impl VzEditorApp {
         self.status_message = msg.to_string();
     }
 
+    /// 文字入力・IME 確定。上書きモードならカーソル位置の文字を置き換える（貼り付けは常に挿入）。
+    fn type_text(&mut self, text: &str) {
+        if self.overwrite_mode {
+            self.cur_buf_mut().overwrite_text(text);
+        } else {
+            self.cur_buf_mut().insert_text(text);
+        }
+    }
+
+    /// Ins: 挿入 / 上書きを切り替える（両方式共通）。
+    fn toggle_overwrite_mode(&mut self) {
+        self.overwrite_mode = !self.overwrite_mode;
+        self.status_message = if self.overwrite_mode {
+            "上書きモード (Ins で挿入に戻す)".to_string()
+        } else {
+            "挿入モード".to_string()
+        };
+    }
+
     /// 貼り付け（選択中は置き換え）。
     fn sakura_paste_text(&mut self, text: &str) {
         if self.view_mode_guard() || text.is_empty() {
@@ -1121,42 +1145,18 @@ impl VzEditorApp {
                 self.sakura_paste_from_clipboard();
                 return true;
             }
-            (Key::F4, true, false) => {
+            // F4 / Ctrl+F4: 現在のバッファを閉じる（F5 は割り当てなし）
+            (Key::F4, _, false) => {
                 self.close_current_buffer();
                 return true;
             }
-            // F2〜F5 は VZ 互換と同じ（新規 / 開く / 行頭 / 行末）
+            // F2 / F3 は VZ 互換と同じ（新規 / 開く）
             (Key::F2, false, false) => {
                 self.execute_editor_action(EditorAction::NewBuffer);
                 return true;
             }
             (Key::F3, false, false) => {
                 self.execute_editor_action(EditorAction::OpenFile);
-                return true;
-            }
-            (Key::F4 | Key::F5, false, _) => {
-                if in_md_view {
-                    self.execute_editor_action(if key == Key::F4 {
-                        EditorAction::MoveLineStart
-                    } else {
-                        EditorAction::MoveLineEnd
-                    });
-                } else {
-                    // Home / End と同じく、Shift または選択モードなら範囲選択
-                    let extend = shift || self.select_mode;
-                    let buf = self.cur_buf_mut();
-                    if extend {
-                        buf.begin_selection_if_none();
-                    } else {
-                        buf.clear_selection();
-                    }
-                    if key == Key::F4 {
-                        buf.move_line_start();
-                    } else {
-                        buf.move_line_end();
-                    }
-                    self.need_scroll_to_cursor = true;
-                }
                 return true;
             }
             (Key::F10, false, true) => {
@@ -1346,7 +1346,7 @@ impl VzEditorApp {
                 self.cur_buf_mut().insert_text("\t");
             }
             Key::Insert => {
-                self.status_message = "挿入 / 上書きの切替はまだ対応していません".to_string();
+                self.toggle_overwrite_mode();
                 return true;
             }
             _ => return false,
@@ -2545,7 +2545,7 @@ impl VzEditorApp {
                 },
                 MenuEntry::Item {
                     label: "現在のバッファを閉じる",
-                    shortcut: "Ctrl+F4",
+                    shortcut: sc("Ctrl+F4 / F4", "Ctrl+F4"),
                     action: MenuAction::CloseBuffer,
                     enabled: true,
                 },
@@ -2642,6 +2642,17 @@ impl VzEditorApp {
                     shortcut: sc("End", "^Q^D / F5"),
                     action: MenuAction::MoveLineEnd,
                     enabled: in_editor,
+                },
+                MenuEntry::Separator,
+                MenuEntry::Item {
+                    label: if self.overwrite_mode {
+                        "挿入モードに戻す"
+                    } else {
+                        "上書きモードにする"
+                    },
+                    shortcut: "Ins",
+                    action: MenuAction::ToggleOverwrite,
+                    enabled: can_edit,
                 },
             ],
             TopMenu::Tools => vec![
@@ -2852,6 +2863,7 @@ impl VzEditorApp {
             MenuAction::DeleteLine => self.execute_editor_action(EditorAction::DeleteLine),
             MenuAction::MoveLineStart => self.execute_editor_action(EditorAction::MoveLineStart),
             MenuAction::MoveLineEnd => self.execute_editor_action(EditorAction::MoveLineEnd),
+            MenuAction::ToggleOverwrite => self.toggle_overwrite_mode(),
             MenuAction::ToggleMarkdownView => {
                 if self.mode == AppMode::Editor {
                     self.toggle_markdown_view();
@@ -3028,6 +3040,7 @@ impl VzEditorApp {
             EditorAction::Copy => self.sakura_copy(),
             EditorAction::Paste => self.sakura_paste_from_clipboard(),
             EditorAction::BeginSelect => self.toggle_select_mode(),
+            EditorAction::CloseBuffer => self.close_current_buffer(),
             EditorAction::Nop => {}
         }
     }
@@ -3180,7 +3193,7 @@ impl VzEditorApp {
                         if !in_md_view && !text.is_empty() {
                             self.prefix = PrefixKey::None;
                             self.select_mode = false;
-                            self.cur_buf_mut().insert_text(&text);
+                            self.type_text(&text);
                             self.need_scroll_to_cursor = true;
                         }
                     }
@@ -3603,6 +3616,9 @@ impl VzEditorApp {
                                     self.cur_buf_mut().insert_text("\t");
                                     self.need_scroll_to_cursor = true;
                                 }
+                                Key::Insert => {
+                                    self.toggle_overwrite_mode();
+                                }
                                 _ => {}
                             }
                         }
@@ -3624,7 +3640,7 @@ impl VzEditorApp {
                     if !filtered.is_empty() {
                         // 選択中は置き換え（サクラ互換）。F6 の選択モードも終える
                         self.select_mode = false;
-                        self.cur_buf_mut().insert_text(&filtered);
+                        self.type_text(&filtered);
                         self.need_scroll_to_cursor = true;
                     }
                 }
@@ -4625,7 +4641,15 @@ impl VzEditorApp {
             ]
         };
 
-        // サクラ互換の F キー（F1〜F5 は VZ 互換と同じ。未対応のキーは空欄）
+        // サクラ互換の F キー（F1〜F3 は VZ 互換と同じ。未対応のキーは空欄）
+        let sakura_left: &[(&str, &str, EditorAction)] = &[
+            ("F1", "ヘルプ", EditorAction::ToggleHelp),
+            ("F2", "新規", EditorAction::NewBuffer),
+            ("F3", "開く", EditorAction::OpenFile),
+            ("F4", "閉じる", EditorAction::CloseBuffer),
+            ("F5", "", EditorAction::Nop),
+        ];
+        let keys_left = if self.is_sakura() { sakura_left } else { keys_left };
         let sakura_right: &[(&str, &str, EditorAction)] = &[
             ("F6", "選択", EditorAction::BeginSelect),
             ("F7", "切取", EditorAction::Cut),
@@ -5302,7 +5326,14 @@ impl VzEditorApp {
                 if editor_rect.intersects(cursor_rect) && self.inline_prompt.is_none() {
                     let t = ctx.input(|i| i.time);
                     let blink_on = !self.ime_preedit.is_empty() || ((t * 1.8) as u64).is_multiple_of(2);
-                    if blink_on {
+                    if blink_on && self.overwrite_mode && self.ime_preedit.is_empty() {
+                        // 上書きモード: 文字の下半分を塗りつぶす
+                        let half = Rect::from_min_max(
+                            Pos2::new(cursor_rect.min.x, cursor_rect.center().y),
+                            cursor_rect.max,
+                        );
+                        editor_painter.rect_filled(half, CornerRadius::ZERO, CURSOR_FILL);
+                    } else if blink_on {
                         editor_painter.rect_filled(cursor_rect, CornerRadius::ZERO, CURSOR_FILL);
                         editor_painter.line_segment(
                             [
@@ -5821,9 +5852,9 @@ impl VzEditorApp {
                 let rows: &[(&str, &str)] = match self.mode {
                     AppMode::Editor if self.key_scheme == KeyScheme::Sakura => &[
                         ("Ctrl+N / Ctrl+O", "新規作成 / 開く (F2 / F3)"),
-                        ("F4 / F5", "行頭 / 行末 (ビュー時は先頭 / 末尾。Shift で範囲選択)"),
                         ("Ctrl+S / Ctrl+Shift+S", "上書き保存 / 名前を付けて保存"),
-                        ("Ctrl+F4", "ファイル（現在のバッファ）を閉じる"),
+                        ("F4 / Ctrl+F4", "ファイル（現在のバッファ）を閉じる"),
+                        ("Ins", "挿入 / 上書きの切替 (上書き時はカーソルが下半分)"),
                         ("Ctrl+Z / Ctrl+Y", "元に戻す / やり直し"),
                         ("Ctrl+X / Ctrl+C / Ctrl+V", "切り取り / コピー / 貼り付け (F7 / F8 / F9)"),
                         ("Shift+移動キー / F6", "範囲選択 / 範囲選択開始"),
@@ -5852,6 +5883,7 @@ impl VzEditorApp {
                         ("Ctrl+Y", "現在行の削除"),
                         ("Ctrl+G / Delete", "カーソル位置の1文字削除"),
                         ("BackSpace / Ctrl+H", "前1文字削除"),
+                        ("Ins", "挿入 / 上書きの切替 (上書き時はカーソルが下半分)"),
                         ("Ctrl+W / Ctrl+Shift+W", "複数バッファ（裏画面）切替"),
                         ("Ctrl+P / Ctrl+K+V / Alt+P", "Markdown 編集 / ビュー（プレビュー）切替"),
                         ("Ctrl++ / Ctrl+- / Ctrl+0", "フォントサイズ拡大 / 縮小 / リセット"),
@@ -7055,6 +7087,7 @@ mod tests {
             pending_send: None,
             key_scheme: KeyScheme::Vz,
             select_mode: false,
+            overwrite_mode: false,
             clipboard_out: None,
             quit_request: None,
             last_disk_check: std::time::Instant::now(),
@@ -8057,29 +8090,58 @@ mod tests {
     }
 
     #[test]
-    fn test_sakura_f2_to_f5_same_as_vz() {
+    fn test_sakura_f2_f4_f5() {
         let ctx = egui::Context::default();
         let mut app = make_sakura_app("abcdef\nghi");
+        app.cur_buf_mut().dirty = false;
         let none = mods(false, false);
-        let shift = mods(false, true);
 
-        // F5 / F4: 行末 / 行頭（選択なし）
+        // F5: 割り当てなし（カーソルも内容も変わらない）
         run_editor(&ctx, &mut app, none, vec![key_with(Key::F5, none)]);
-        assert_eq!(app.cur_buf().cursor_pos(), (0, 6));
-        assert!(!app.cur_buf().has_selection());
-        run_editor(&ctx, &mut app, none, vec![key_with(Key::F4, none)]);
         assert_eq!(app.cur_buf().cursor_pos(), (0, 0));
-
-        // Shift+F5 は範囲選択
-        run_editor(&ctx, &mut app, shift, vec![key_with(Key::F5, shift)]);
-        assert_eq!(app.cur_buf().selected_text().as_deref(), Some("abcdef"));
-        run_editor(&ctx, &mut app, none, vec![key_with(Key::F4, none)]);
-        assert!(!app.cur_buf().has_selection());
+        assert_eq!(app.cur_buf().lines, vec!["abcdef", "ghi"]);
 
         // F2: 新規バッファ
         run_editor(&ctx, &mut app, none, vec![key_with(Key::F2, none)]);
         assert_eq!(app.buffers.len(), 2);
         assert_eq!(app.active_buf, 1);
+
+        // F4: 現在のバッファを閉じる（Ctrl+F4 と同じ）
+        run_editor(&ctx, &mut app, none, vec![key_with(Key::F4, none)]);
+        assert_eq!(app.buffers.len(), 1);
+        assert_eq!(app.cur_buf().lines, vec!["abcdef", "ghi"]);
+    }
+
+    #[test]
+    fn test_insert_key_toggles_overwrite_in_both_schemes() {
+        for sakura in [false, true] {
+            let ctx = egui::Context::default();
+            let mut app = make_sakura_app("abcdef\nghi");
+            if !sakura {
+                app.key_scheme = KeyScheme::Vz;
+            }
+            let none = mods(false, false);
+            run_editor(&ctx, &mut app, none, vec![key_with(Key::Insert, none)]);
+            assert!(app.overwrite_mode, "sakura={sakura}");
+
+            // 上書き: カーソル位置の文字を置き換え、行末を越えたら追加する（改行は消さない）
+            run_editor(&ctx, &mut app, none, vec![Event::Text("XY".into())]);
+            assert_eq!(app.cur_buf().lines, vec!["XYcdef", "ghi"]);
+            app.cur_buf_mut().set_cursor(0, 5);
+            run_editor(&ctx, &mut app, none, vec![Event::Text("123".into())]);
+            assert_eq!(app.cur_buf().lines, vec!["XYcde123", "ghi"]);
+
+            // 貼り付けは挿入
+            app.cur_buf_mut().set_cursor(1, 0);
+            run_editor(&ctx, &mut app, none, vec![Event::Paste("P".into())]);
+            assert_eq!(app.cur_buf().lines[1], "Pghi");
+
+            // もう一度 Ins で挿入に戻る
+            run_editor(&ctx, &mut app, none, vec![key_with(Key::Insert, none)]);
+            assert!(!app.overwrite_mode);
+            run_editor(&ctx, &mut app, none, vec![Event::Text("Z".into())]);
+            assert_eq!(app.cur_buf().lines[1], "PZghi");
+        }
     }
 
     #[test]

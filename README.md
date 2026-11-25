@@ -77,12 +77,13 @@ git merge upstream/main
 | :--- | :--- | :--- |
 | 新規 / 開く | `Ctrl+N`・`F2` / `Ctrl+O`・`F3` | `F2` / `F3` |
 | 上書き保存 / 名前を付けて保存 | `Ctrl+S` / `Ctrl+Shift+S` | `F10`・`Ctrl+K` → `D` / メニュー |
-| ファイル（現在のバッファ）を閉じる | `Ctrl+F4`（未保存なら確認） | 同左 |
+| ファイル（現在のバッファ）を閉じる | `Ctrl+F4`・`F4`（未保存なら確認） | `Ctrl+F4`（未保存なら確認） |
+| 挿入 / 上書きの切替 | `Ins`（上書き時はカーソルが文字の下半分） | 同左 |
 | 元に戻す / やり直し | `Ctrl+Z` / `Ctrl+Y` | メニュー |
 | 切り取り / コピー / 貼り付け | `Ctrl+X`・`F7` / `Ctrl+C`・`F8` / `Ctrl+V`・`F9`（選択なしは現在行） | なし / なし / `Ctrl+V` |
 | 範囲選択 | `Shift`+移動キー、`F6`、`Ctrl+A`、`Ctrl+W`、マウス | なし |
 | 行の切り取り / 削除 | `Ctrl+E` / `Ctrl+Shift+E` | なし / `Ctrl+Y`・`F6` |
-| カーソル移動 | 矢印、`Ctrl+←→` 単語、`Home`・`F4` / `End`・`F5`、`Ctrl+Home` / `End` | ダイヤモンドカーソル `Ctrl+E/S/D/X`、`Ctrl+A` / `Ctrl+F`・`F7` / `F8` 単語、`Ctrl+R` 前ページ、`F4` / `F5` 行頭・行末、`Ctrl+Q` → `S/D/R/C` |
+| カーソル移動 | 矢印、`Ctrl+←→` 単語、`Home` / `End`、`Ctrl+Home` / `End` | ダイヤモンドカーソル `Ctrl+E/S/D/X`、`Ctrl+A` / `Ctrl+F`・`F7` / `F8` 単語、`Ctrl+R` 前ページ、`F4` / `F5` 行頭・行末、`Ctrl+Q` → `S/D/R/C` |
 | バッファ切替 | `Ctrl+Tab` / `Ctrl+Shift+Tab` | `Ctrl+W` / `Ctrl+Shift+W` |
 | 2画面ファイラー | `Esc`（選択中は選択解除） | `Esc`・`F9`・`Ctrl+K` → `Q` |
 | Markdown 編集 / ビュー切替 | `Ctrl+Shift+V`・`Ctrl+P` | `Ctrl+P`・`Alt+P`・`Ctrl+K` → `V` |

@@ -529,6 +529,26 @@ impl TextBuffer {
         self.insert_text_internal(text);
     }
 
+    /// 上書きモードの文字入力。カーソル位置から入力文字数ぶんを置き換える（改行は上書きしない）。
+    /// 選択中は挿入と同じく選択範囲を置き換える。
+    pub fn overwrite_text(&mut self, text: &str) {
+        if text.is_empty() {
+            return;
+        }
+        self.push_undo_snapshot();
+        if !self.delete_selection_internal() {
+            let first_len = normalize_newlines(text)
+                .split('\n')
+                .next()
+                .map_or(0, |s| s.chars().count());
+            let line = &mut self.lines[self.cursor_line];
+            let start = char_to_byte_idx(line, self.cursor_col);
+            let end = char_to_byte_idx(line, self.cursor_col + first_len);
+            line.replace_range(start..end, "");
+        }
+        self.insert_text_internal(text);
+    }
+
     fn insert_text_internal(&mut self, text: &str) {
         self.preferred_visual_col = None;
         let normalized = normalize_newlines(text);
@@ -877,6 +897,25 @@ mod tests {
         // 改行コードをそろえる（CR が無ければコピーしない）
         assert_eq!(normalize_newlines("a\r\nb\rc"), "a\nb\nc");
         assert!(matches!(normalize_newlines("a\nb"), Cow::Borrowed(_)));
+    }
+
+    #[test]
+    fn test_overwrite_text() {
+        let mut buf = TextBuffer::new();
+        buf.insert_text("あいう\nxyz");
+        buf.set_cursor(0, 1);
+        buf.overwrite_text("AB");
+        assert_eq!(buf.lines, vec!["あAB", "xyz"]);
+        // 行末を越えた分は追加し、改行は消さない
+        buf.overwrite_text("CD");
+        assert_eq!(buf.lines, vec!["あABCD", "xyz"]);
+        // アンドゥは1回で戻る
+        assert!(buf.undo());
+        assert_eq!(buf.lines, vec!["あAB", "xyz"]);
+        // 選択中は選択範囲だけを置き換える
+        buf.select_range((1, 0), (1, 1));
+        buf.overwrite_text("Q");
+        assert_eq!(buf.lines, vec!["あAB", "Qyz"]);
     }
 
     #[test]
