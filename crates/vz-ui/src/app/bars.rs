@@ -457,12 +457,8 @@ impl VzEditorApp {
                         ui.add_space(2.0);
                     }
                     if let Some(term) = &self.terminal {
-                        let label = if term.is_running() {
-                            "ターミナル"
-                        } else {
-                            "ターミナル(終了)"
-                        };
-                        let resp = strip_tab(ui, label.to_string(), self.mode == AppMode::Terminal);
+                        // シェルが終了したターミナルは poll_terminal が閉じるので、ここに来るのは動作中だけ
+                        let resp = strip_tab(ui, "ターミナル".to_string(), self.mode == AppMode::Terminal);
                         if resp.on_hover_text(format!("Alt+K  {}", term.program())).clicked() {
                             tool_clicked = Some(AppMode::Terminal);
                         }

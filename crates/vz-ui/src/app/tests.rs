@@ -1336,3 +1336,24 @@ fn tool_session_entry(kind: EntryKind, active: bool, path: Option<PathBuf>) -> S
         path,
     }
 }
+
+#[test]
+fn test_terminal_closes_when_shell_exits() {
+    let shell = if cfg!(windows) {
+        vz_terminal::ShellCommand { program: "cmd.exe".into(), args: vec!["/c".into(), "exit 0".into()] }
+    } else {
+        vz_terminal::ShellCommand { program: "/bin/sh".into(), args: vec!["-c".into(), "exit 0".into()] }
+    };
+    let mut app = make_test_app();
+    app.terminal = Some(vz_terminal::Terminal::spawn(&shell, &std::env::temp_dir(), 24, 80, || {}).expect("spawn"));
+    app.mode = AppMode::Terminal;
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while app.terminal.is_some() && std::time::Instant::now() < deadline {
+        app.poll_terminal();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    // ターミナルを閉じて（タブも消え）エディターへ戻る
+    assert!(app.terminal.is_none());
+    assert_eq!(app.mode, AppMode::Editor);
+    assert!(app.status_message.contains("ターミナルを閉じました"));
+}

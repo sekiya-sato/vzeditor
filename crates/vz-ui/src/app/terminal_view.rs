@@ -101,13 +101,15 @@ impl VzEditorApp {
         let Some(term) = self.terminal.as_mut() else {
             return;
         };
-        let was_running = term.is_running();
         term.poll();
-        if was_running && !term.is_running() {
-            self.status_message = format!(
-                "シェルが終了しました（終了コード {}）。Enter で再起動 / Alt+K で戻る",
-                term.exit_code().unwrap_or(0)
-            );
+        // exit などでシェルが終了したら、ターミナルを閉じてタブも消す（次の Alt+K で新しく起動する）
+        if let Some(code) = term.exit_code() {
+            self.terminal = None;
+            if self.mode == AppMode::Terminal {
+                self.leave_tool_mode();
+            }
+            self.status_message =
+                format!("シェルが終了したため、ターミナルを閉じました（終了コード {code}）");
         }
     }
 
@@ -115,26 +117,6 @@ impl VzEditorApp {
         let events = ctx.input(|i| i.events.clone());
         let modifiers_now = ctx.input(|i| i.modifiers);
 
-        // 終了後は Enter で同じフォルダから起動し直す
-        if !self.terminal.as_ref().is_some_and(Terminal::is_running) {
-            let enter = events.iter().any(|e| {
-                matches!(
-                    e,
-                    Event::Key {
-                        key: Key::Enter,
-                        pressed: true,
-                        ..
-                    }
-                )
-            });
-            if enter {
-                let cwd = self.terminal_work_dir();
-                if self.start_terminal(ctx, &cwd) {
-                    self.status_message = "ターミナルを再起動しました".to_string();
-                }
-            }
-            return;
-        }
         let Some(term) = self.terminal.as_mut() else {
             return;
         };
