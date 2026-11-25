@@ -215,8 +215,11 @@ impl VzEditorApp {
                 );
 
                 ui.add_space(10.0);
+                // 2つの表の1列目の幅をそろえる（License / Copyright と Based on / Repository）
+                const LABEL_WIDTH: f32 = 90.0;
                 egui::Grid::new("about_meta_grid")
                     .num_columns(2)
+                    .min_col_width(LABEL_WIDTH)
                     .spacing([12.0, 4.0])
                     .show(ui, |ui| {
                         ui.label(
@@ -244,7 +247,14 @@ impl VzEditorApp {
                             .color(TEXT_WHITE),
                         );
                         ui.end_row();
+                    });
 
+                ui.add_space(10.0);
+                egui::Grid::new("about_link_grid")
+                    .num_columns(2)
+                    .min_col_width(LABEL_WIDTH)
+                    .spacing([12.0, 4.0])
+                    .show(ui, |ui| {
                         ui.label(
                             egui::RichText::new("Based on:")
                                 .font(FontId::monospace(12.5))
@@ -277,7 +287,9 @@ impl VzEditorApp {
                     });
 
                 ui.add_space(14.0);
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                // 行の高さをボタン1つ分にする（with_layout は残りの高さを全部使い、ダイアログが縦に伸びる）
+                let row = Vec2::new(ui.available_width(), ui.spacing().interact_size.y);
+                ui.allocate_ui_with_layout(row, egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if ui.button("閉じる (ESC / Enter / クリック)").clicked()
                         || ui.input(|i| i.key_pressed(Key::Escape) || i.key_pressed(Key::Enter))
                     {
