@@ -79,7 +79,10 @@ impl VzEditorApp {
             (text, "選択範囲をコピーしました")
         } else {
             let (start, end) = self.selection_or_line_range();
-            (self.cur_buf().text_in_range(start, end), "現在行をコピーしました")
+            (
+                self.cur_buf().text_in_range(start, end),
+                "現在行をコピーしました",
+            )
         };
         self.copy_to_clipboard(text);
         self.select_mode = false;
@@ -139,7 +142,13 @@ impl VzEditorApp {
     }
 
     /// 範囲を切り取る（delete_only なら削除のみ）。
-    pub(super) fn sakura_cut_range(&mut self, start: TextPos, end: TextPos, delete_only: bool, what: &str) {
+    pub(super) fn sakura_cut_range(
+        &mut self,
+        start: TextPos,
+        end: TextPos,
+        delete_only: bool,
+        what: &str,
+    ) {
         if self.view_mode_guard() {
             return;
         }
@@ -208,7 +217,12 @@ impl VzEditorApp {
     /// サクラエディタ互換のキー処理（エディター画面）。処理したら true。
     /// Ctrl+X / C / V、Shift+Del、Ctrl+Ins、Shift+Ins は egui が Cut / Copy / Paste イベントに
     /// 変換するため、ここではなく handle_editor_events で扱う。
-    pub(super) fn handle_sakura_key(&mut self, key: Key, modifiers: egui::Modifiers, in_md_view: bool) -> bool {
+    pub(super) fn handle_sakura_key(
+        &mut self,
+        key: Key,
+        modifiers: egui::Modifiers,
+        in_md_view: bool,
+    ) -> bool {
         let ctrl = modifiers.ctrl || modifiers.command;
         let shift = modifiers.shift;
         if modifiers.alt {
@@ -285,8 +299,20 @@ impl VzEditorApp {
                 self.sakura_duplicate_line();
                 return true;
             }
-            (Key::F2 | Key::F3 | Key::F4 | Key::F5 | Key::F6 | Key::F7 | Key::F9 | Key::F10
-            | Key::F11 | Key::F12, _, _) => {
+            (
+                Key::F2
+                | Key::F3
+                | Key::F4
+                | Key::F5
+                | Key::F6
+                | Key::F7
+                | Key::F9
+                | Key::F10
+                | Key::F11
+                | Key::F12,
+                _,
+                _,
+            ) => {
                 self.status_message = format!("{key:?} はサクラ互換でまだ対応していません");
                 return true;
             }

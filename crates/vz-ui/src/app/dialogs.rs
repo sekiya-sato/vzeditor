@@ -307,7 +307,12 @@ impl VzEditorApp {
     }
 
     /// ファイラーのコピー・移動・削除の後始末（マーク解除、両ペイン更新、結果の表示）。
-    pub(super) fn finish_filer_op(&mut self, op_name: &str, ok_count: usize, last_err: Option<String>) {
+    pub(super) fn finish_filer_op(
+        &mut self,
+        op_name: &str,
+        ok_count: usize,
+        last_err: Option<String>,
+    ) {
         self.filer.active_pane_mut().marked.clear();
         self.filer.refresh_both();
         self.status_message = match last_err {
@@ -331,39 +336,38 @@ impl VzEditorApp {
             } => {
                 let mut do_submit = false;
                 let mut do_cancel = false;
-                modal_window(ctx, "リネーム (F2)", TEXT_CYAN)
-                    .show(ctx, |ui| {
-                        ui.set_min_width(420.0);
-                        ui.label(
-                            egui::RichText::new(format!("対象: {}", src.display()))
-                                .font(FontId::monospace(12.5))
-                                .color(TEXT_DIM_CYAN),
-                        );
-                        ui.add_space(4.0);
-                        let resp = ui.add(
-                            egui::TextEdit::singleline(input)
-                                .font(FontId::monospace(14.0))
-                                .desired_width(400.0),
-                        );
-                        if *just_opened {
-                            resp.request_focus();
-                            *just_opened = false;
-                        }
-                        if resp.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter)) {
+                modal_window(ctx, "リネーム (F2)", TEXT_CYAN).show(ctx, |ui| {
+                    ui.set_min_width(420.0);
+                    ui.label(
+                        egui::RichText::new(format!("対象: {}", src.display()))
+                            .font(FontId::monospace(12.5))
+                            .color(TEXT_DIM_CYAN),
+                    );
+                    ui.add_space(4.0);
+                    let resp = ui.add(
+                        egui::TextEdit::singleline(input)
+                            .font(FontId::monospace(14.0))
+                            .desired_width(400.0),
+                    );
+                    if *just_opened {
+                        resp.request_focus();
+                        *just_opened = false;
+                    }
+                    if resp.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter)) {
+                        do_submit = true;
+                    }
+                    ui.add_space(8.0);
+                    ui.horizontal(|ui| {
+                        if ui.button("変更 (Enter)").clicked() {
                             do_submit = true;
                         }
-                        ui.add_space(8.0);
-                        ui.horizontal(|ui| {
-                            if ui.button("変更 (Enter)").clicked() {
-                                do_submit = true;
-                            }
-                            if ui.button("キャンセル (ESC)").clicked()
-                                || ui.input(|i| i.key_pressed(Key::Escape))
-                            {
-                                do_cancel = true;
-                            }
-                        });
+                        if ui.button("キャンセル (ESC)").clicked()
+                            || ui.input(|i| i.key_pressed(Key::Escape))
+                        {
+                            do_cancel = true;
+                        }
                     });
+                });
 
                 if do_submit {
                     keep_modal = false;
@@ -391,40 +395,39 @@ impl VzEditorApp {
             } => {
                 let mut do_submit = false;
                 let mut do_cancel = false;
-                modal_window(ctx, "新規ファイル作成 (F3)", TEXT_CYAN)
-                    .show(ctx, |ui| {
-                        ui.set_min_width(420.0);
-                        ui.label(
-                            egui::RichText::new(format!("作成先: {}", dir.display()))
-                                .font(FontId::monospace(12.5))
-                                .color(TEXT_DIM_CYAN),
-                        );
-                        ui.add_space(4.0);
-                        let resp = ui.add(
-                            egui::TextEdit::singleline(input)
-                                .hint_text("新しいファイル名を入力 (例: memo.txt)")
-                                .font(FontId::monospace(14.0))
-                                .desired_width(400.0),
-                        );
-                        if *just_opened {
-                            resp.request_focus();
-                            *just_opened = false;
-                        }
-                        if resp.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter)) {
+                modal_window(ctx, "新規ファイル作成 (F3)", TEXT_CYAN).show(ctx, |ui| {
+                    ui.set_min_width(420.0);
+                    ui.label(
+                        egui::RichText::new(format!("作成先: {}", dir.display()))
+                            .font(FontId::monospace(12.5))
+                            .color(TEXT_DIM_CYAN),
+                    );
+                    ui.add_space(4.0);
+                    let resp = ui.add(
+                        egui::TextEdit::singleline(input)
+                            .hint_text("新しいファイル名を入力 (例: memo.txt)")
+                            .font(FontId::monospace(14.0))
+                            .desired_width(400.0),
+                    );
+                    if *just_opened {
+                        resp.request_focus();
+                        *just_opened = false;
+                    }
+                    if resp.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter)) {
+                        do_submit = true;
+                    }
+                    ui.add_space(8.0);
+                    ui.horizontal(|ui| {
+                        if ui.button("作成して開く (Enter)").clicked() {
                             do_submit = true;
                         }
-                        ui.add_space(8.0);
-                        ui.horizontal(|ui| {
-                            if ui.button("作成して開く (Enter)").clicked() {
-                                do_submit = true;
-                            }
-                            if ui.button("キャンセル (ESC)").clicked()
-                                || ui.input(|i| i.key_pressed(Key::Escape))
-                            {
-                                do_cancel = true;
-                            }
-                        });
+                        if ui.button("キャンセル (ESC)").clicked()
+                            || ui.input(|i| i.key_pressed(Key::Escape))
+                        {
+                            do_cancel = true;
+                        }
                     });
+                });
 
                 if do_submit {
                     keep_modal = false;
@@ -450,40 +453,39 @@ impl VzEditorApp {
             } => {
                 let mut do_submit = false;
                 let mut do_cancel = false;
-                modal_window(ctx, "新規フォルダ作成 (F7)", TEXT_CYAN)
-                    .show(ctx, |ui| {
-                        ui.set_min_width(420.0);
-                        ui.label(
-                            egui::RichText::new(format!("作成先: {}", dir.display()))
-                                .font(FontId::monospace(12.5))
-                                .color(TEXT_DIM_CYAN),
-                        );
-                        ui.add_space(4.0);
-                        let resp = ui.add(
-                            egui::TextEdit::singleline(input)
-                                .hint_text("新しいフォルダ名を入力")
-                                .font(FontId::monospace(14.0))
-                                .desired_width(400.0),
-                        );
-                        if *just_opened {
-                            resp.request_focus();
-                            *just_opened = false;
-                        }
-                        if resp.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter)) {
+                modal_window(ctx, "新規フォルダ作成 (F7)", TEXT_CYAN).show(ctx, |ui| {
+                    ui.set_min_width(420.0);
+                    ui.label(
+                        egui::RichText::new(format!("作成先: {}", dir.display()))
+                            .font(FontId::monospace(12.5))
+                            .color(TEXT_DIM_CYAN),
+                    );
+                    ui.add_space(4.0);
+                    let resp = ui.add(
+                        egui::TextEdit::singleline(input)
+                            .hint_text("新しいフォルダ名を入力")
+                            .font(FontId::monospace(14.0))
+                            .desired_width(400.0),
+                    );
+                    if *just_opened {
+                        resp.request_focus();
+                        *just_opened = false;
+                    }
+                    if resp.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter)) {
+                        do_submit = true;
+                    }
+                    ui.add_space(8.0);
+                    ui.horizontal(|ui| {
+                        if ui.button("作成 (Enter)").clicked() {
                             do_submit = true;
                         }
-                        ui.add_space(8.0);
-                        ui.horizontal(|ui| {
-                            if ui.button("作成 (Enter)").clicked() {
-                                do_submit = true;
-                            }
-                            if ui.button("キャンセル (ESC)").clicked()
-                                || ui.input(|i| i.key_pressed(Key::Escape))
-                            {
-                                do_cancel = true;
-                            }
-                        });
+                        if ui.button("キャンセル (ESC)").clicked()
+                            || ui.input(|i| i.key_pressed(Key::Escape))
+                        {
+                            do_cancel = true;
+                        }
                     });
+                });
 
                 if do_submit {
                     keep_modal = false;
@@ -512,35 +514,34 @@ impl VzEditorApp {
                 let mut do_exec = false;
                 let mut do_cancel = false;
 
-                modal_window(ctx, format!("ファイル{op_name}確認"), TEXT_CYAN)
-                    .show(ctx, |ui| {
-                        ui.set_min_width(440.0);
+                modal_window(ctx, format!("ファイル{op_name}確認"), TEXT_CYAN).show(ctx, |ui| {
+                    ui.set_min_width(440.0);
+                    ui.label(
+                        egui::RichText::new(format!(
+                            "{}件の項目を反対側ペインへ{op_name}しますか？",
+                            targets.len()
+                        ))
+                        .font(FontId::monospace(14.0))
+                        .color(TEXT_WHITE),
+                    );
+                    ui.add_space(4.0);
+                    ui.label(
+                        egui::RichText::new(format!("宛先: {}", dst_dir.display()))
+                            .font(FontId::monospace(13.0))
+                            .color(TEXT_CYAN),
+                    );
+                    ui.add_space(4.0);
+                    for entry in targets.iter().take(6) {
                         ui.label(
-                            egui::RichText::new(format!(
-                                "{}件の項目を反対側ペインへ{op_name}しますか？",
-                                targets.len()
-                            ))
-                            .font(FontId::monospace(14.0))
-                            .color(TEXT_WHITE),
+                            egui::RichText::new(format!("  - {}", entry.name))
+                                .font(FontId::monospace(12.5))
+                                .color(TEXT_AMBER),
                         );
-                        ui.add_space(4.0);
-                        ui.label(
-                            egui::RichText::new(format!("宛先: {}", dst_dir.display()))
-                                .font(FontId::monospace(13.0))
-                                .color(TEXT_CYAN),
-                        );
-                        ui.add_space(4.0);
-                        for entry in targets.iter().take(6) {
-                            ui.label(
-                                egui::RichText::new(format!("  - {}", entry.name))
-                                    .font(FontId::monospace(12.5))
-                                    .color(TEXT_AMBER),
-                            );
-                        }
-                        more_items_label(ui, targets.len());
-                        ui.add_space(10.0);
-                        (do_exec, do_cancel) = yes_no_row(ui, "実行 (Enter / Y)");
-                    });
+                    }
+                    more_items_label(ui, targets.len());
+                    ui.add_space(10.0);
+                    (do_exec, do_cancel) = yes_no_row(ui, "実行 (Enter / Y)");
+                });
 
                 if do_exec {
                     keep_modal = false;
@@ -575,30 +576,29 @@ impl VzEditorApp {
                 let mut do_exec = false;
                 let mut do_cancel = false;
 
-                modal_window(ctx, "削除確認 (F6)", TEXT_AMBER)
-                    .show(ctx, |ui| {
-                        ui.set_min_width(420.0);
+                modal_window(ctx, "削除確認 (F6)", TEXT_AMBER).show(ctx, |ui| {
+                    ui.set_min_width(420.0);
+                    ui.label(
+                        egui::RichText::new(format!(
+                            "以下の {}件 を完全に削除します。よろしいですか？",
+                            targets.len()
+                        ))
+                        .font(FontId::monospace(14.0))
+                        .color(TEXT_AMBER),
+                    );
+                    ui.add_space(4.0);
+                    for entry in targets.iter().take(6) {
+                        let kind = if entry.is_dir { "[DIR] " } else { "" };
                         ui.label(
-                            egui::RichText::new(format!(
-                                "以下の {}件 を完全に削除します。よろしいですか？",
-                                targets.len()
-                            ))
-                            .font(FontId::monospace(14.0))
-                            .color(TEXT_AMBER),
+                            egui::RichText::new(format!("  - {kind}{}", entry.name))
+                                .font(FontId::monospace(13.0))
+                                .color(TEXT_WHITE),
                         );
-                        ui.add_space(4.0);
-                        for entry in targets.iter().take(6) {
-                            let kind = if entry.is_dir { "[DIR] " } else { "" };
-                            ui.label(
-                                egui::RichText::new(format!("  - {kind}{}", entry.name))
-                                    .font(FontId::monospace(13.0))
-                                    .color(TEXT_WHITE),
-                            );
-                        }
-                        more_items_label(ui, targets.len());
-                        ui.add_space(10.0);
-                        (do_exec, do_cancel) = yes_no_row(ui, "削除実行 (Enter / Y)");
-                    });
+                    }
+                    more_items_label(ui, targets.len());
+                    ui.add_space(10.0);
+                    (do_exec, do_cancel) = yes_no_row(ui, "削除実行 (Enter / Y)");
+                });
 
                 if do_exec {
                     keep_modal = false;
@@ -621,19 +621,18 @@ impl VzEditorApp {
                 let mut do_close = false;
                 let mut do_cancel = false;
                 let target_idx = *buf_idx;
-                modal_window(ctx, "バッファを閉じる確認", TEXT_AMBER)
-                    .show(ctx, |ui| {
-                        ui.set_min_width(380.0);
-                        ui.label(
-                            egui::RichText::new(format!(
-                                "「{name}」には未保存の変更があります。保存せず閉じますか？"
-                            ))
-                            .font(FontId::monospace(13.5))
-                            .color(TEXT_AMBER),
-                        );
-                        ui.add_space(10.0);
-                        (do_close, do_cancel) = yes_no_row(ui, "保存せず閉じる (Enter / Y)");
-                    });
+                modal_window(ctx, "バッファを閉じる確認", TEXT_AMBER).show(ctx, |ui| {
+                    ui.set_min_width(380.0);
+                    ui.label(
+                        egui::RichText::new(format!(
+                            "「{name}」には未保存の変更があります。保存せず閉じますか？"
+                        ))
+                        .font(FontId::monospace(13.5))
+                        .color(TEXT_AMBER),
+                    );
+                    ui.add_space(10.0);
+                    (do_close, do_cancel) = yes_no_row(ui, "保存せず閉じる (Enter / Y)");
+                });
 
                 if do_close {
                     keep_modal = false;
@@ -648,41 +647,40 @@ impl VzEditorApp {
                 let mut do_save_quit = false;
                 let mut do_quit = false;
                 let mut do_cancel = false;
-                modal_window(ctx, "終了確認 - 未保存の変更", TEXT_AMBER)
-                    .show(ctx, |ui| {
-                        ui.set_min_width(380.0);
+                modal_window(ctx, "終了確認 - 未保存の変更", TEXT_AMBER).show(ctx, |ui| {
+                    ui.set_min_width(380.0);
+                    ui.label(
+                        egui::RichText::new("次のバッファに未保存の変更があります。保存しますか？")
+                            .font(FontId::monospace(13.5))
+                            .color(TEXT_AMBER),
+                    );
+                    ui.add_space(6.0);
+                    for slot in self.buffers.iter().filter(|s| s.buffer.dirty) {
                         ui.label(
-                            egui::RichText::new("次のバッファに未保存の変更があります。保存しますか？")
-                                .font(FontId::monospace(13.5))
-                                .color(TEXT_AMBER),
+                            egui::RichText::new(format!("  * {}", slot.buffer.display_name()))
+                                .font(FontId::monospace(13.0))
+                                .color(TEXT_WHITE),
                         );
-                        ui.add_space(6.0);
-                        for slot in self.buffers.iter().filter(|s| s.buffer.dirty) {
-                            ui.label(
-                                egui::RichText::new(format!("  * {}", slot.buffer.display_name()))
-                                    .font(FontId::monospace(13.0))
-                                    .color(TEXT_WHITE),
-                            );
+                    }
+                    ui.add_space(10.0);
+                    ui.horizontal(|ui| {
+                        if ui.button("保存して終了 (Enter / Y)").clicked()
+                            || ui.input(|i| i.key_pressed(Key::Enter) || i.key_pressed(Key::Y))
+                        {
+                            do_save_quit = true;
                         }
-                        ui.add_space(10.0);
-                        ui.horizontal(|ui| {
-                            if ui.button("保存して終了 (Enter / Y)").clicked()
-                                || ui.input(|i| i.key_pressed(Key::Enter) || i.key_pressed(Key::Y))
-                            {
-                                do_save_quit = true;
-                            }
-                            if ui.button("保存せず終了 (N)").clicked()
-                                || ui.input(|i| i.key_pressed(Key::N))
-                            {
-                                do_quit = true;
-                            }
-                            if ui.button("キャンセル (ESC)").clicked()
-                                || ui.input(|i| i.key_pressed(Key::Escape))
-                            {
-                                do_cancel = true;
-                            }
-                        });
+                        if ui.button("保存せず終了 (N)").clicked()
+                            || ui.input(|i| i.key_pressed(Key::N))
+                        {
+                            do_quit = true;
+                        }
+                        if ui.button("キャンセル (ESC)").clicked()
+                            || ui.input(|i| i.key_pressed(Key::Escape))
+                        {
+                            do_cancel = true;
+                        }
                     });
+                });
 
                 if do_save_quit {
                     keep_modal = false;
@@ -697,7 +695,11 @@ impl VzEditorApp {
                 }
             }
 
-            FilerModal::ConfirmReload { buf_idx, stamp, shown } => {
+            FilerModal::ConfirmReload {
+                buf_idx,
+                stamp,
+                shown,
+            } => {
                 let (idx, stamp) = (*buf_idx, *stamp);
                 // 表示直後の打鍵（入力中の Enter や Y）では答えない
                 let keys_ok = shown.elapsed() >= std::time::Duration::from_millis(400);
@@ -709,7 +711,11 @@ impl VzEditorApp {
                     .map(|s| {
                         (
                             s.buffer.display_name(),
-                            s.buffer.file_path.as_ref().map(|p| p.display().to_string()).unwrap_or_default(),
+                            s.buffer
+                                .file_path
+                                .as_ref()
+                                .map(|p| p.display().to_string())
+                                .unwrap_or_default(),
                             s.buffer.dirty,
                         )
                     })
@@ -870,36 +876,35 @@ impl VzEditorApp {
             } else {
                 "ファイルを開く (ファイルパスを入力)"
             };
-            modal_window(ctx, title, TEXT_CYAN)
-                .show(ctx, |ui| {
-                    ui.set_min_width(440.0);
-                    let resp = ui.add(
-                        egui::TextEdit::singleline(&mut prompt.path_input)
-                            .font(FontId::monospace(14.0))
-                            .desired_width(420.0),
-                    );
-                    if prompt.just_opened {
-                        resp.request_focus();
-                        prompt.just_opened = false;
-                    }
+            modal_window(ctx, title, TEXT_CYAN).show(ctx, |ui| {
+                ui.set_min_width(440.0);
+                let resp = ui.add(
+                    egui::TextEdit::singleline(&mut prompt.path_input)
+                        .font(FontId::monospace(14.0))
+                        .desired_width(420.0),
+                );
+                if prompt.just_opened {
+                    resp.request_focus();
+                    prompt.just_opened = false;
+                }
 
-                    ui.add_space(8.0);
-                    ui.horizontal(|ui| {
-                        if ui.button("実行 (Enter)").clicked()
-                            || (resp.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter)))
-                        {
-                            let trimmed = prompt.path_input.trim();
-                            if !trimmed.is_empty() {
-                                submit_path = Some((prompt.is_save, PathBuf::from(trimmed)));
-                            }
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    if ui.button("実行 (Enter)").clicked()
+                        || (resp.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter)))
+                    {
+                        let trimmed = prompt.path_input.trim();
+                        if !trimmed.is_empty() {
+                            submit_path = Some((prompt.is_save, PathBuf::from(trimmed)));
                         }
-                        if ui.button("キャンセル (ESC)").clicked()
-                            || ui.input(|i| i.key_pressed(Key::Escape))
-                        {
-                            cancel = true;
-                        }
-                    });
+                    }
+                    if ui.button("キャンセル (ESC)").clicked()
+                        || ui.input(|i| i.key_pressed(Key::Escape))
+                    {
+                        cancel = true;
+                    }
                 });
+            });
         }
 
         if let Some((is_save, path)) = submit_path {

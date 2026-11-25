@@ -46,8 +46,8 @@ impl VzEditorApp {
         self.show_help = false;
         self.filer.refresh_both();
         self.mode = AppMode::Filer;
-        self.status_message = "2画面ファイラー (Tab/←→:窓切替  Space:マーク  Enter:開く  ESC:エディタ戻)"
-            .to_string();
+        self.status_message =
+            "2画面ファイラー (Tab/←→:窓切替  Space:マーク  Enter:開く  ESC:エディタ戻)".to_string();
     }
 
     pub(super) fn enter_editor(&mut self) {
@@ -205,7 +205,11 @@ impl VzEditorApp {
             egui::Id::new("vz_drop_overlay"),
         ));
         let rect = ctx.screen_rect();
-        painter.rect_filled(rect, CornerRadius::ZERO, Color32::from_rgba_unmultiplied(8, 24, 56, 210));
+        painter.rect_filled(
+            rect,
+            CornerRadius::ZERO,
+            Color32::from_rgba_unmultiplied(8, 24, 56, 210),
+        );
         painter.rect_stroke(
             rect.shrink(10.0),
             CornerRadius::same(6),
@@ -245,7 +249,11 @@ impl VzEditorApp {
 
         match TextBuffer::from_file(&path) {
             Ok(buf) => {
-                let hint = if buf.is_markdown() { " (^PでMDビュー切替)" } else { "" };
+                let hint = if buf.is_markdown() {
+                    " (^PでMDビュー切替)"
+                } else {
+                    ""
+                };
                 self.add_buffer(buf);
                 self.status_message = format!(
                     "開きました [{}/{}]: {}{hint}",
@@ -306,7 +314,12 @@ impl VzEditorApp {
     pub(super) fn update_open_buffer_path(&mut self, old_path: &Path, new_path: &Path) {
         let canon_old = canonical_or_self(old_path);
         for slot in &mut self.buffers {
-            if slot.buffer.file_path.as_deref().is_some_and(|p| same_file(p, old_path, &canon_old)) {
+            if slot
+                .buffer
+                .file_path
+                .as_deref()
+                .is_some_and(|p| same_file(p, old_path, &canon_old))
+            {
                 slot.buffer.file_path = Some(new_path.to_path_buf());
             }
         }
@@ -388,7 +401,10 @@ impl VzEditorApp {
                 format!("[ターミナル] {name} - VZ Editor")
             }
             AppMode::Browser => {
-                let name = self.active_browser_tab().map(|t| t.label()).unwrap_or_default();
+                let name = self
+                    .active_browser_tab()
+                    .map(|t| t.label())
+                    .unwrap_or_default();
                 format!("[ブラウザ] {name} - VZ Editor")
             }
         }
@@ -561,8 +577,10 @@ impl VzEditorApp {
                 }
                 self.switch_buffer_to(idx);
                 self.trigger_save_as();
-                self.status_message =
-                    format!("終了前に保存: {} の保存先を選択中...", self.cur_buf().display_name());
+                self.status_message = format!(
+                    "終了前に保存: {} の保存先を選択中...",
+                    self.cur_buf().display_name()
+                );
             }
             QuitSaveStep::Failed => {
                 self.quit_after_save = false;

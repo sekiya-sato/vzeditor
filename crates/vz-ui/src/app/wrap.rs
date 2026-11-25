@@ -87,7 +87,11 @@ impl WrapLayout {
         let Some(b) = self.breaks.get(line) else {
             return (0, len);
         };
-        let start = if seg == 0 { 0 } else { b.get(seg - 1).copied().unwrap_or(len) };
+        let start = if seg == 0 {
+            0
+        } else {
+            b.get(seg - 1).copied().unwrap_or(len)
+        };
         let end = b.get(seg).copied().unwrap_or(len);
         (start.min(len), end.min(len).max(start.min(len)))
     }
@@ -116,8 +120,16 @@ impl VzEditorApp {
     /// 現在のバッファの折り返し行割り（幅 `cols`）を、必要なら作り直して返す。
     pub(super) fn ensure_wrap_layout(&mut self, cols: usize) {
         let slot = &mut self.buffers[self.active_buf];
-        if !slot.wrap.as_ref().is_some_and(|w| w.is_valid_for(&slot.buffer, cols)) {
-            slot.wrap = Some(WrapLayout::build(&slot.buffer.lines, cols, slot.buffer.revision));
+        if !slot
+            .wrap
+            .as_ref()
+            .is_some_and(|w| w.is_valid_for(&slot.buffer, cols))
+        {
+            slot.wrap = Some(WrapLayout::build(
+                &slot.buffer.lines,
+                cols,
+                slot.buffer.revision,
+            ));
         }
     }
 

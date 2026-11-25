@@ -145,10 +145,15 @@ impl VzEditorApp {
                         None => (0, len),
                     }
                 };
-                let is_last_seg =
-                    |line_idx: usize, seg: usize| wrap.as_ref().is_none_or(|w| w.is_last_seg(line_idx, seg));
-                let cursor_seg = wrap.as_ref().map_or(0, |w| w.seg_of(cursor_line, cursor_col));
-                let cursor_row = wrap.as_ref().map_or(cursor_line, |w| w.row_of(cursor_line, cursor_col));
+                let is_last_seg = |line_idx: usize, seg: usize| {
+                    wrap.as_ref().is_none_or(|w| w.is_last_seg(line_idx, seg))
+                };
+                let cursor_seg = wrap
+                    .as_ref()
+                    .map_or(0, |w| w.seg_of(cursor_line, cursor_col));
+                let cursor_row = wrap
+                    .as_ref()
+                    .map_or(cursor_line, |w| w.row_of(cursor_line, cursor_col));
                 let (cursor_seg_start, _) =
                     seg_range(cursor_line, cursor_seg, cursor_line_str.chars().count());
                 let cursor_seg_byte = char_to_byte_idx(&cursor_line_str, cursor_seg_start);
@@ -223,7 +228,11 @@ impl VzEditorApp {
                 let total_content_h = (total_rows as f32 + 2.0) * self.line_height;
                 let max_scroll_y = (total_content_h - viewport_h).max(0.0);
                 scroll_y = scroll_y.clamp(0.0, max_scroll_y);
-                scroll_x = if wrap.is_some() { 0.0 } else { scroll_x.max(0.0) };
+                scroll_x = if wrap.is_some() {
+                    0.0
+                } else {
+                    scroll_x.max(0.0)
+                };
 
                 // マウス: クリックでカーソル移動。サクラ互換ではドラッグ・Shift+クリックで範囲選択、
                 // ダブルクリックで単語、トリプルクリックで行を選択する。
@@ -255,35 +264,35 @@ impl VzEditorApp {
                         };
                         let target_col = seg_start
                             + ui.fonts(|f| {
-                            let mut best_col = 0usize;
-                            let mut best_dist = click_x;
-                            let mut acc = String::new();
-                            for (idx, c) in line_str
-                                .chars()
-                                .skip(seg_start)
-                                .take(seg_limit - seg_start)
-                                .enumerate()
-                            {
-                                if c == '\t' {
-                                    acc.push_str("    ");
-                                } else {
-                                    acc.push(c);
+                                let mut best_col = 0usize;
+                                let mut best_dist = click_x;
+                                let mut acc = String::new();
+                                for (idx, c) in line_str
+                                    .chars()
+                                    .skip(seg_start)
+                                    .take(seg_limit - seg_start)
+                                    .enumerate()
+                                {
+                                    if c == '\t' {
+                                        acc.push_str("    ");
+                                    } else {
+                                        acc.push(c);
+                                    }
+                                    let w = f
+                                        .layout_no_wrap(acc.clone(), font_id.clone(), TEXT_WHITE)
+                                        .size()
+                                        .x;
+                                    let dist = (w - click_x).abs();
+                                    if dist < best_dist {
+                                        best_dist = dist;
+                                        best_col = idx + 1;
+                                    }
+                                    if w > click_x + this.font_size * 2.0 {
+                                        break;
+                                    }
                                 }
-                                let w = f
-                                    .layout_no_wrap(acc.clone(), font_id.clone(), TEXT_WHITE)
-                                    .size()
-                                    .x;
-                                let dist = (w - click_x).abs();
-                                if dist < best_dist {
-                                    best_dist = dist;
-                                    best_col = idx + 1;
-                                }
-                                if w > click_x + this.font_size * 2.0 {
-                                    break;
-                                }
-                            }
-                            best_col
-                        });
+                                best_col
+                            });
                         (target_line, target_col)
                     };
 
@@ -341,13 +350,21 @@ impl VzEditorApp {
 
                 // Paint background & gutter
                 let painter = ui.painter_at(avail_rect);
-                window_style::bg_painter(&painter).rect_filled(avail_rect, CornerRadius::ZERO, bg(BG_NAVY));
+                window_style::bg_painter(&painter).rect_filled(
+                    avail_rect,
+                    CornerRadius::ZERO,
+                    bg(BG_NAVY),
+                );
 
                 let gutter_rect = Rect::from_min_max(
                     avail_rect.min,
                     Pos2::new(avail_rect.min.x + gutter_w, avail_rect.max.y),
                 );
-                window_style::bg_painter(&painter).rect_filled(gutter_rect, CornerRadius::ZERO, bg(BG_GUTTER));
+                window_style::bg_painter(&painter).rect_filled(
+                    gutter_rect,
+                    CornerRadius::ZERO,
+                    bg(BG_GUTTER),
+                );
                 painter.line_segment(
                     [
                         Pos2::new(gutter_rect.max.x, avail_rect.min.y),
@@ -365,14 +382,17 @@ impl VzEditorApp {
                 let gutter_painter = ui.painter_at(gutter_rect);
                 let cur_line_now = self.cur_buf().cursor_line;
                 let cur_col_now = self.cur_buf().cursor_col;
-                let search_marks = self.cur_slot().search_marks.as_ref()
+                let search_marks = self
+                    .cur_slot()
+                    .search_marks
+                    .as_ref()
                     .filter(|(rev, _)| *rev == self.cur_buf().revision)
                     .map(|(_, lines)| lines);
 
                 for row_idx in first_row..end_row {
                     let (line_idx, seg) = row_to_line(row_idx);
-                    let y = editor_rect.min.y + top_pad + row_idx as f32 * self.line_height
-                        - scroll_y;
+                    let y =
+                        editor_rect.min.y + top_pad + row_idx as f32 * self.line_height - scroll_y;
                     let is_current = line_idx == cur_line_now;
                     let full_line = &self.cur_buf().lines[line_idx];
                     let line_len = full_line.chars().count();
@@ -395,7 +415,8 @@ impl VzEditorApp {
 
                     // 行番号は論理行の最初の表示行だけ
                     if seg == 0 {
-                        if search_marks.is_some_and(|lines| lines.binary_search(&line_idx).is_ok()) {
+                        if search_marks.is_some_and(|lines| lines.binary_search(&line_idx).is_ok())
+                        {
                             gutter_painter.circle_filled(
                                 Pos2::new(gutter_rect.max.x - 4.0, y + self.line_height * 0.5),
                                 2.5,
@@ -453,17 +474,15 @@ impl VzEditorApp {
 
                     let has_newline = last_seg && line_idx + 1 < total_lines;
                     let end_x = if is_current && seg == cursor_seg && !self.ime_preedit.is_empty() {
-                        let byte_pos = char_to_byte_idx(line, cur_col_now.saturating_sub(seg_start));
+                        let byte_pos =
+                            char_to_byte_idx(line, cur_col_now.saturating_sub(seg_start));
                         let before = expand_tabs_for_display(&line[..byte_pos]);
                         let after = expand_tabs_for_display(&line[byte_pos..]);
                         let mut cur_x = text_origin_x;
 
                         if !before.is_empty() {
-                            let g = editor_painter.layout_no_wrap(
-                                before,
-                                font_id.clone(),
-                                TEXT_WHITE,
-                            );
+                            let g =
+                                editor_painter.layout_no_wrap(before, font_id.clone(), TEXT_WHITE);
                             let w = g.size().x;
                             editor_painter.galley(Pos2::new(cur_x, text_y), g, TEXT_WHITE);
                             cur_x += w;
@@ -492,11 +511,8 @@ impl VzEditorApp {
                         cur_x += pw;
 
                         if !after.is_empty() {
-                            let g_after = editor_painter.layout_no_wrap(
-                                after,
-                                font_id.clone(),
-                                TEXT_WHITE,
-                            );
+                            let g_after =
+                                editor_painter.layout_no_wrap(after, font_id.clone(), TEXT_WHITE);
                             let w = g_after.size().x;
                             editor_painter.galley(Pos2::new(cur_x, text_y), g_after, TEXT_WHITE);
                             cur_x += w;
@@ -523,10 +539,8 @@ impl VzEditorApp {
                 }
 
                 // [EOF] marker
-                let eof_y = editor_rect.min.y
-                    + top_pad
-                    + total_rows as f32 * self.line_height
-                    - scroll_y;
+                let eof_y =
+                    editor_rect.min.y + top_pad + total_rows as f32 * self.line_height - scroll_y;
                 if eof_y >= editor_rect.min.y - self.line_height && eof_y <= editor_rect.max.y {
                     editor_painter.text(
                         Pos2::new(
@@ -552,7 +566,8 @@ impl VzEditorApp {
 
                 if editor_rect.intersects(cursor_rect) && self.inline_prompt.is_none() {
                     let t = ctx.input(|i| i.time);
-                    let blink_on = !self.ime_preedit.is_empty() || ((t * 1.8) as u64).is_multiple_of(2);
+                    let blink_on =
+                        !self.ime_preedit.is_empty() || ((t * 1.8) as u64).is_multiple_of(2);
                     if blink_on && self.overwrite_mode && self.ime_preedit.is_empty() {
                         // 上書きモード: 文字の下半分を塗りつぶす
                         let half = Rect::from_min_max(
@@ -579,8 +594,7 @@ impl VzEditorApp {
                     && self.open_menu.is_none()
                     && !self.show_about
                 {
-                    let preedit_start_x =
-                        editor_rect.min.x + left_pad + cursor_px_x - scroll_x;
+                    let preedit_start_x = editor_rect.min.x + left_pad + cursor_px_x - scroll_x;
                     let max_ime_x = (editor_rect.max.x - 4.0).max(editor_rect.min.x);
                     let max_ime_y = (editor_rect.max.y - self.line_height).max(editor_rect.min.y);
                     let ime_x = preedit_start_x.clamp(editor_rect.min.x, max_ime_x);
@@ -602,7 +616,11 @@ impl VzEditorApp {
                     Pos2::new(avail_rect.max.x - scrollbar_w, avail_rect.min.y),
                     avail_rect.max,
                 );
-                window_style::bg_painter(&painter).rect_filled(sb_rect, CornerRadius::ZERO, bg(BG_GUTTER));
+                window_style::bg_painter(&painter).rect_filled(
+                    sb_rect,
+                    CornerRadius::ZERO,
+                    bg(BG_GUTTER),
+                );
                 if max_scroll_y > 0.0 {
                     let ratio = (viewport_h / total_content_h).clamp(0.06, 1.0);
                     let thumb_h = (sb_rect.height() * ratio).max(24.0);

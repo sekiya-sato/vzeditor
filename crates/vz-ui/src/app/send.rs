@@ -13,8 +13,10 @@ impl VzEditorApp {
         if !target.sends_text() {
             // 本文は送らず、GitHub Desktop は Push（Ctrl+P）、Claude Code / Codex は新規セッション（Ctrl+N）を押す
             let (_, name) = target.key_command();
-            self.status_message =
-                format!("{} へ {name} を指示中... (Alt などのキーを離してください)", target.label());
+            self.status_message = format!(
+                "{} へ {name} を指示中... (Alt などのキーを離してください)",
+                target.label()
+            );
             self.pending_send = Some(spawn_send(target, String::new()));
             return;
         }
@@ -22,7 +24,10 @@ impl VzEditorApp {
             self.status_message = format!("{} へ送る文字がありません", target.label());
             return;
         };
-        self.status_message = format!("{} へ送信中... (Alt などのキーを離してください)", target.label());
+        self.status_message = format!(
+            "{} へ送信中... (Alt などのキーを離してください)",
+            target.label()
+        );
         self.pending_send = Some(spawn_send(target, text));
     }
 

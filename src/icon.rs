@@ -24,8 +24,8 @@ fn point_in_polygon(x: f32, y: f32, verts: &[(f32, f32)]) -> bool {
     for i in 0..n {
         let (xi, yi) = verts[i];
         let (xj, yj) = verts[j];
-        let intersects = ((yi > y) != (yj > y))
-            && (x < (xj - xi) * (y - yi) / ((yj - yi) + f32::EPSILON) + xi);
+        let intersects =
+            ((yi > y) != (yj > y)) && (x < (xj - xi) * (y - yi) / ((yj - yi) + f32::EPSILON) + xi);
         if intersects {
             inside = !inside;
         }
@@ -265,7 +265,12 @@ mod tests {
 
         let pixel = |x: usize, y: usize| -> [u8; 4] {
             let i = (y * 64 + x) * 4;
-            [icon.rgba[i], icon.rgba[i + 1], icon.rgba[i + 2], icon.rgba[i + 3]]
+            [
+                icon.rgba[i],
+                icon.rgba[i + 1],
+                icon.rgba[i + 2],
+                icon.rgba[i + 3],
+            ]
         };
 
         // Outside rounded corner must be transparent
@@ -304,6 +309,9 @@ mod tests {
             std::fs::write(&path, &ico).unwrap();
         }
         let current = std::fs::read(&path).expect("assets/vzeditor.ico がありません");
-        assert!(current == ico, "assets/vzeditor.ico が古い（VZ_WRITE_ICO=1 で再生成）");
+        assert!(
+            current == ico,
+            "assets/vzeditor.ico が古い（VZ_WRITE_ICO=1 で再生成）"
+        );
     }
 }

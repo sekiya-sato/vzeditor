@@ -411,7 +411,8 @@ impl VzEditorApp {
     pub(super) fn render_buffer_strip(&mut self, ctx: &egui::Context) {
         let has_terminal = self.terminal.is_some();
         let has_browser = !self.browsers.is_empty();
-        if self.mode == AppMode::Filer || (self.buffers.len() < 2 && !has_terminal && !has_browser) {
+        if self.mode == AppMode::Filer || (self.buffers.len() < 2 && !has_terminal && !has_browser)
+        {
             return;
         }
         let in_editor = self.mode == AppMode::Editor;
@@ -454,20 +455,32 @@ impl VzEditorApp {
 
                     if has_terminal || has_browser {
                         ui.add_space(6.0);
-                        ui.label(egui::RichText::new("|").font(FontId::monospace(12.0)).color(GUTTER_SEP));
+                        ui.label(
+                            egui::RichText::new("|")
+                                .font(FontId::monospace(12.0))
+                                .color(GUTTER_SEP),
+                        );
                         ui.add_space(2.0);
                     }
                     if let Some(term) = &self.terminal {
                         // シェルが終了したターミナルは poll_terminal が閉じるので、ここに来るのは動作中だけ
-                        let resp = strip_tab(ui, "ターミナル".to_string(), self.mode == AppMode::Terminal);
-                        if resp.on_hover_text(format!("Alt+K  {}", term.program())).clicked() {
+                        let resp =
+                            strip_tab(ui, "ターミナル".to_string(), self.mode == AppMode::Terminal);
+                        if resp
+                            .on_hover_text(format!("Alt+K  {}", term.program()))
+                            .clicked()
+                        {
                             terminal_clicked = true;
                         }
                     }
                     let many = self.browsers.len() > 1;
                     for (i, tab) in self.browsers.iter().enumerate() {
                         // 複数あるときは番号を付ける。タイトルが無ければ URL
-                        let head = if many { format!("ブラウザ{}", i + 1) } else { "ブラウザ".to_string() };
+                        let head = if many {
+                            format!("ブラウザ{}", i + 1)
+                        } else {
+                            "ブラウザ".to_string()
+                        };
                         let label = tab.label();
                         let name = if label.is_empty() {
                             head
@@ -476,7 +489,10 @@ impl VzEditorApp {
                         };
                         let active = self.mode == AppMode::Browser && i == self.active_browser;
                         let resp = strip_tab(ui, name, active);
-                        if resp.on_hover_text("Alt+B / Ctrl+Tab で切替、Ctrl+W で閉じる").clicked() {
+                        if resp
+                            .on_hover_text("Alt+B / Ctrl+Tab で切替、Ctrl+W で閉じる")
+                            .clicked()
+                        {
                             browser_clicked = Some(i);
                         }
                     }
@@ -729,8 +745,15 @@ fn strip_tab(ui: &mut egui::Ui, title: String, active: bool) -> egui::Response {
                 .font(FontId::monospace(12.5))
                 .color(if active { TEXT_WHITE } else { TEXT_DIM_CYAN }),
         )
-        .fill(if active { BG_TAB_ACTIVE } else { BG_TAB_INACTIVE })
-        .stroke(Stroke::new(1.0_f32, if active { TEXT_CYAN } else { GUTTER_SEP }))
+        .fill(if active {
+            BG_TAB_ACTIVE
+        } else {
+            BG_TAB_INACTIVE
+        })
+        .stroke(Stroke::new(
+            1.0_f32,
+            if active { TEXT_CYAN } else { GUTTER_SEP },
+        ))
         .corner_radius(CornerRadius::same(2)),
     )
 }

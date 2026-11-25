@@ -41,8 +41,12 @@ impl VzEditorApp {
         let Some(g) = self.pending_window_restore else {
             return;
         };
-        let (native_ppp, outer) =
-            ctx.input(|i| (i.viewport().native_pixels_per_point, i.viewport().outer_rect));
+        let (native_ppp, outer) = ctx.input(|i| {
+            (
+                i.viewport().native_pixels_per_point,
+                i.viewport().outer_rect,
+            )
+        });
         // ウィンドウの情報が届くまで待つ
         let (Some(native_ppp), Some(outer)) = (native_ppp, outer) else {
             return;
@@ -168,7 +172,10 @@ impl VzEditorApp {
                 {
                     if let Some(action) = window_style_key_action(*key, *physical_key, *modifiers) {
                         if !in_editor
-                            && matches!(action, MenuAction::OpenSearch(_) | MenuAction::RepeatSearch(_))
+                            && matches!(
+                                action,
+                                MenuAction::OpenSearch(_) | MenuAction::RepeatSearch(_)
+                            )
                         {
                             return true;
                         }

@@ -282,20 +282,23 @@ mod platform {
             return Err("Alt などのキーが押されたままのため中止しました".to_string());
         }
         let Some(hwnd) = find_window(target) else {
-            return Err(format!("{label} が見つかりません（起動しているか確認してください）"));
+            return Err(format!(
+                "{label} が見つかりません（起動しているか確認してください）"
+            ));
         };
         if !activate(hwnd) {
             return Err(format!("{label} のウィンドウを前面にできませんでした"));
         }
         sleep_ms(250);
-        let ok = unsafe { GetForegroundWindow() } == hwnd
-            && send_keys(&ctrl_chord(vk));
+        let ok = unsafe { GetForegroundWindow() } == hwnd && send_keys(&ctrl_chord(vk));
         sleep_ms(300);
         if !vz_hwnd.is_null() {
             activate(vz_hwnd);
         }
         if ok {
-            Ok(format!("{label} へ {name} を指示しました（結果は {label} で確認してください）"))
+            Ok(format!(
+                "{label} へ {name} を指示しました（結果は {label} で確認してください）"
+            ))
         } else {
             Err(format!("{label} へ {name} のキーを送れませんでした"))
         }
@@ -312,7 +315,9 @@ mod platform {
             return Err("Alt などのキーが押されたままのため送信を中止しました".to_string());
         }
         let Some(hwnd) = find_window(target) else {
-            return Err(format!("{label} のアプリが見つかりません（起動しているか確認してください）"));
+            return Err(format!(
+                "{label} のアプリが見つかりません（起動しているか確認してください）"
+            ));
         };
 
         let mut clipboard =
@@ -361,7 +366,10 @@ mod platform {
                 "{label} へ貼り付けましたが、途中でウィンドウが切り替わったため送信していません"
             ));
         }
-        Ok(format!("{label} へ送信しました（{} 文字）", text.chars().count()))
+        Ok(format!(
+            "{label} へ送信しました（{} 文字）",
+            text.chars().count()
+        ))
     }
 }
 
@@ -490,7 +498,9 @@ mod platform {
     pub fn send(target: SendTarget, text: &str) -> SendResult {
         let label = target.label();
         if std::env::var_os("WAYLAND_DISPLAY").is_some() && std::env::var_os("DISPLAY").is_none() {
-            return Err("Wayland では送信に対応していません（X11 と xdotool が必要です）".to_string());
+            return Err(
+                "Wayland では送信に対応していません（X11 と xdotool が必要です）".to_string(),
+            );
         }
         sleep_ms(300);
         let me = run("xdotool", &["getactivewindow"]).ok();
@@ -513,7 +523,9 @@ mod platform {
             if let Some(me) = me {
                 let _ = run("xdotool", &["windowactivate", &me]);
             }
-            return Ok(format!("{label} へ {name} を指示しました（結果は {label} で確認してください）"));
+            return Ok(format!(
+                "{label} へ {name} を指示しました（結果は {label} で確認してください）"
+            ));
         }
 
         let saved = run("xclip", &["-o", "-selection", "clipboard"]).ok();
@@ -535,7 +547,10 @@ mod platform {
         if let Some(me) = me {
             let _ = run("xdotool", &["windowactivate", &me]);
         }
-        Ok(format!("{label} へ送信しました（{} 文字）", text.chars().count()))
+        Ok(format!(
+            "{label} へ送信しました（{} 文字）",
+            text.chars().count()
+        ))
     }
 }
 
@@ -545,9 +560,11 @@ mod tests {
 
     #[test]
     fn test_matches_exe_path() {
-        let claude = r"C:\Program Files\WindowsApps\Claude_6.28899.6.0_x64__pzs8sxrjxfjjc\app\Claude.exe";
+        let claude =
+            r"C:\Program Files\WindowsApps\Claude_6.28899.6.0_x64__pzs8sxrjxfjjc\app\Claude.exe";
         let codex = r"C:\Program Files\WindowsApps\OpenAI.Codex_26.1117.4957.0_x64__2p2nqsd0c76g0\app\ChatGPT.exe";
-        let chatgpt = r"C:\Program Files\WindowsApps\OpenAI.ChatGPT-Desktop_1.0.0.0_x64__x\app\ChatGPT.exe";
+        let chatgpt =
+            r"C:\Program Files\WindowsApps\OpenAI.ChatGPT-Desktop_1.0.0.0_x64__x\app\ChatGPT.exe";
         assert!(SendTarget::ClaudeCode.matches_exe_path(claude));
         assert!(!SendTarget::ClaudeCode.matches_exe_path(codex));
         assert!(SendTarget::Codex.matches_exe_path(codex));

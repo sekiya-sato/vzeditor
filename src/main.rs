@@ -60,6 +60,13 @@ fn main() -> eframe::Result<()> {
     eframe::run_native(
         "VZ Editor",
         native_options,
-        Box::new(move |cc| Ok(Box::new(VzEditorApp::new(cc, initial_paths, settings, restore)))),
+        Box::new(move |cc| {
+            Ok(Box::new(VzEditorApp::new(
+                cc,
+                initial_paths,
+                settings,
+                restore,
+            )))
+        }),
     )
 }

@@ -17,7 +17,9 @@ pub enum DialogResult {
     OpenPaths(Vec<PathBuf>),
     /// ネイティブダイアログが使えないため、組み込みのパス入力欄を使う。
     #[cfg_attr(windows, allow(dead_code))]
-    Unavailable { is_save: bool },
+    Unavailable {
+        is_save: bool,
+    },
 }
 
 const SAVE_TITLE: &str = "VZ Editor - 名前を付けて保存";
@@ -155,7 +157,10 @@ fn run_save_dialog(initial_path: Option<&Path>) -> DialogResult {
 
 #[cfg(target_os = "macos")]
 fn run_open_dialog(initial_dir: Option<&Path>) -> DialogResult {
-    let mut script = format!("set fs to (choose file with prompt {}", applescript_quote(OPEN_TITLE));
+    let mut script = format!(
+        "set fs to (choose file with prompt {}",
+        applescript_quote(OPEN_TITLE)
+    );
     if let Some(d) = initial_dir {
         script.push_str(&format!(
             " default location (POSIX file {})",

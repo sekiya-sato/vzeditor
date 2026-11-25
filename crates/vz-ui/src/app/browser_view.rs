@@ -129,7 +129,10 @@ impl VzEditorApp {
                 if let Some(b) = &self.browsers[i].view {
                     b.reload();
                 }
-            } else if self.active_browser_tab().is_some_and(|t| t.current_url().is_none()) {
+            } else if self
+                .active_browser_tab()
+                .is_some_and(|t| t.current_url().is_none())
+            {
                 self.open_in_browser(url);
             } else {
                 self.new_browser_tab(Some(url));
@@ -369,7 +372,8 @@ impl VzEditorApp {
                 self.status_message = format!("外部ブラウザで開きました: {url}");
             }
         }
-        if let (Some(dir), Some(b)) = (nav, self.active_browser_tab().and_then(|t| t.view.as_ref())) {
+        if let (Some(dir), Some(b)) = (nav, self.active_browser_tab().and_then(|t| t.view.as_ref()))
+        {
             match dir {
                 -1 => b.back(),
                 1 => b.forward(),

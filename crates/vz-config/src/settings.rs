@@ -238,23 +238,29 @@ mod tests {
     #[test]
     fn test_settings_window_needs_all_values() {
         // 位置かサイズが欠けていれば復元しない
-        let s = Settings::parse("window_x=10
+        let s = Settings::parse(
+            "window_x=10
 window_y=20
 window_width=800
-");
+",
+        );
         assert_eq!(s.window, None);
-        let s = Settings::parse("window_x=10
+        let s = Settings::parse(
+            "window_x=10
 window_y=20
 window_width=800
 window_height=0
-");
+",
+        );
         assert_eq!(s.window, None);
         // 拡大率が無ければ 1.0
-        let s = Settings::parse("window_x=10
+        let s = Settings::parse(
+            "window_x=10
 window_y=-5
 window_width=800
 window_height=500
-");
+",
+        );
         let w = s.window.unwrap();
         assert_eq!((w.x, w.y, w.scale, w.maximized), (10, -5, 1.0, false));
     }

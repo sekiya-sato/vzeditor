@@ -73,7 +73,9 @@ fn flag(b: bool) -> &'static str {
 }
 
 fn path_field(p: &Option<PathBuf>) -> String {
-    p.as_ref().map(|p| p.to_string_lossy().into_owned()).unwrap_or_default()
+    p.as_ref()
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_default()
 }
 
 /// 1項目1行。タブ区切りで、パスは改行以外を含められるよう最後の欄に置く。
@@ -135,7 +137,9 @@ pub fn parse(text: &str) -> Vec<SessionEntry> {
             EntryKind::File => entry.path.is_some(),
             EntryKind::Unsaved => entry.temp.is_some(),
             EntryKind::Conflict => entry.temp.is_some() && entry.path.is_some(),
-            EntryKind::Terminal | EntryKind::FilerLeft | EntryKind::FilerRight => entry.path.is_some(),
+            EntryKind::Terminal | EntryKind::FilerLeft | EntryKind::FilerRight => {
+                entry.path.is_some()
+            }
             EntryKind::Browser => true,
         };
         if valid {
@@ -222,9 +226,7 @@ fn is_claim_name(name: &std::ffi::OsStr) -> bool {
 }
 
 fn has_claim(dir: &Path) -> bool {
-    fs::read_dir(dir).is_ok_and(|rd| {
-        rd.flatten().any(|e| is_claim_name(&e.file_name()))
-    })
+    fs::read_dir(dir).is_ok_and(|rd| rd.flatten().any(|e| is_claim_name(&e.file_name())))
 }
 
 /// 起動中のすべての vz に「保存して終了」を要求する。受け取った vz の数を返す。

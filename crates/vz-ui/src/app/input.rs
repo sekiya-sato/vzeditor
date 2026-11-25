@@ -142,7 +142,8 @@ impl VzEditorApp {
             FilerAction::Rename => {
                 if let Some(entry) = self.filer.active_pane().selected_entry().cloned() {
                     if entry.is_parent {
-                        self.status_message = "親ディレクトリ (..) はリネームできません".to_string();
+                        self.status_message =
+                            "親ディレクトリ (..) はリネームできません".to_string();
                     } else {
                         self.filer_modal = Some(FilerModal::Rename {
                             src: entry.path,
@@ -403,7 +404,8 @@ impl VzEditorApp {
                                     self.status_message = "ファイル末尾へ移動 (^Q^C)".to_string();
                                 }
                                 Key::Escape => {
-                                    self.status_message = "コマンドをキャンセルしました".to_string();
+                                    self.status_message =
+                                        "コマンドをキャンセルしました".to_string();
                                 }
                                 _ => {
                                     self.status_message = format!("未定義の ^Q コマンド: {key:?}");
@@ -426,7 +428,8 @@ impl VzEditorApp {
                                     return;
                                 }
                                 Key::Escape => {
-                                    self.status_message = "コマンドをキャンセルしました".to_string();
+                                    self.status_message =
+                                        "コマンドをキャンセルしました".to_string();
                                 }
                                 _ => {
                                     self.status_message = format!("未定義の ^K コマンド: {key:?}");

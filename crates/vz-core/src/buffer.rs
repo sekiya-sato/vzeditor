@@ -81,7 +81,10 @@ pub fn read_lines(path: &Path) -> io::Result<(Vec<String>, &'static str)> {
     let raw = fs::read_to_string(path)?;
     let line_ending = if raw.contains("\r\n") { "\r\n" } else { "\n" };
     // split は常に 1 つ以上を返すので、空のファイルでも 1 行になる
-    let lines = normalize_newlines(&raw).split('\n').map(String::from).collect();
+    let lines = normalize_newlines(&raw)
+        .split('\n')
+        .map(String::from)
+        .collect();
     Ok((lines, line_ending))
 }
 
@@ -215,7 +218,11 @@ impl TextBuffer {
     /// 内容を `lines` に置き換えて未保存にする（Ctrl+Z で戻せる）。
     pub fn replace_all(&mut self, lines: Vec<String>) {
         self.push_undo_snapshot();
-        self.lines = if lines.is_empty() { vec![String::new()] } else { lines };
+        self.lines = if lines.is_empty() {
+            vec![String::new()]
+        } else {
+            lines
+        };
         self.dirty = true;
         self.after_replace_all();
     }
@@ -297,7 +304,8 @@ impl TextBuffer {
             let cw = char_display_width(c);
             if width + cw > target_visual {
                 // Pick the closer boundary
-                if target_visual.saturating_sub(width) >= (width + cw).saturating_sub(target_visual) {
+                if target_visual.saturating_sub(width) >= (width + cw).saturating_sub(target_visual)
+                {
                     return i + 1;
                 }
                 return i;
@@ -1119,7 +1127,10 @@ mod tests {
         buf.select_line(0);
         assert_eq!(buf.selected_text().as_deref(), Some("hello 日本語テスト\n"));
         buf.select_all();
-        assert_eq!(buf.selected_text().as_deref(), Some("hello 日本語テスト\nsecond"));
+        assert_eq!(
+            buf.selected_text().as_deref(),
+            Some("hello 日本語テスト\nsecond")
+        );
 
         buf.clear_selection();
         buf.set_cursor(1, 2);

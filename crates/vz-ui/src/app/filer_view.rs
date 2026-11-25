@@ -25,8 +25,7 @@ impl VzEditorApp {
                 let gap = 6.0_f32;
                 let half_w = ((avail.width() - gap) * 0.5).max(200.0);
 
-                let left_rect =
-                    Rect::from_min_size(avail.min, Vec2::new(half_w, avail.height()));
+                let left_rect = Rect::from_min_size(avail.min, Vec2::new(half_w, avail.height()));
                 let right_rect = Rect::from_min_size(
                     Pos2::new(avail.min.x + half_w + gap, avail.min.y),
                     Vec2::new(avail.width() - half_w - gap, avail.height()),
@@ -84,20 +83,22 @@ impl VzEditorApp {
                 .size()
                 .x
                 .max(name_font_size * 0.55);
-            let sc = f
-                .layout_no_wrap("999.9 M".into(), FontId::monospace(size_font_size), TEXT_WHITE)
+            let sc =
+                f.layout_no_wrap(
+                    "999.9 M".into(),
+                    FontId::monospace(size_font_size),
+                    TEXT_WHITE,
+                )
                 .size()
-                .x
-                + 10.0;
-            let dc = f
-                .layout_no_wrap(
+                .x + 10.0;
+            let dc =
+                f.layout_no_wrap(
                     "2026-11-23 00:00".into(),
                     FontId::monospace(date_font_size),
                     TEXT_DIM_CYAN,
                 )
                 .size()
-                .x
-                + 10.0;
+                .x + 10.0;
             (hc, nc, sc, dc)
         });
 
@@ -193,8 +194,10 @@ impl VzEditorApp {
         let mark_x = list_rect.min.x + (8.0 * scale).clamp(6.0, 14.0);
         let name_x = list_rect.min.x + (22.0 * scale).clamp(16.0, 38.0);
         let min_name_w = (name_char_w * 12.0).max(96.0);
-        let show_date = list_rect.width() >= (name_x - list_rect.min.x) + min_name_w + size_col_w + date_col_w + 24.0;
-        let show_size = list_rect.width() >= (name_x - list_rect.min.x) + min_name_w + size_col_w + 16.0;
+        let show_date = list_rect.width()
+            >= (name_x - list_rect.min.x) + min_name_w + size_col_w + date_col_w + 24.0;
+        let show_size =
+            list_rect.width() >= (name_x - list_rect.min.x) + min_name_w + size_col_w + 16.0;
 
         let date_x = list_rect.max.x - 8.0;
         let size_x = if show_date {
@@ -274,8 +277,9 @@ impl VzEditorApp {
         let overlay_open = self.show_help || self.show_about;
         if !overlay_open && (resp.clicked() || resp.double_clicked()) {
             if let Some(pos) = resp.interact_pointer_pos() {
-                let clicked_row =
-                    ((pos.y - list_rect.min.y + pane.scroll_y) / row_h).floor().max(0.0) as usize;
+                let clicked_row = ((pos.y - list_rect.min.y + pane.scroll_y) / row_h)
+                    .floor()
+                    .max(0.0) as usize;
                 if clicked_row < pane.entries.len() {
                     pane.cursor = clicked_row;
                     if resp.double_clicked() {

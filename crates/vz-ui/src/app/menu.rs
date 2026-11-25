@@ -87,7 +87,13 @@ impl VzEditorApp {
         let in_md_view = self.is_markdown_view();
         let can_edit = in_editor && !in_md_view;
         let sakura = self.is_sakura();
-        let sc = |sakura_key: &'static str, vz_key: &'static str| if sakura { sakura_key } else { vz_key };
+        let sc = |sakura_key: &'static str, vz_key: &'static str| {
+            if sakura {
+                sakura_key
+            } else {
+                vz_key
+            }
+        };
 
         match menu {
             TopMenu::File => vec![
@@ -464,7 +470,11 @@ impl VzEditorApp {
         entries
             .iter()
             .position(|e| matches!(e, MenuEntry::Item { enabled: true, .. }))
-            .or_else(|| entries.iter().position(|e| matches!(e, MenuEntry::Item { .. })))
+            .or_else(|| {
+                entries
+                    .iter()
+                    .position(|e| matches!(e, MenuEntry::Item { .. }))
+            })
             .unwrap_or(0)
     }
 
@@ -536,9 +546,7 @@ impl VzEditorApp {
             }
             MenuAction::ToggleAlwaysOnTop => self.toggle_always_on_top(ctx),
             MenuAction::OpacityUp => self.change_bg_opacity(window_style::OPACITY_STEP as i16),
-            MenuAction::OpacityDown => {
-                self.change_bg_opacity(-(window_style::OPACITY_STEP as i16))
-            }
+            MenuAction::OpacityDown => self.change_bg_opacity(-(window_style::OPACITY_STEP as i16)),
             MenuAction::OpacityReset => self.set_bg_opacity(window_style::MAX_OPACITY),
             MenuAction::TextOpacityUp => {
                 self.change_text_opacity(window_style::OPACITY_STEP as i16)
@@ -846,9 +854,9 @@ impl VzEditorApp {
             // Close menu if the user clicked anywhere outside both the menu bar and the popup
             let clicked_outside = ctx.input(|i| {
                 i.pointer.any_pressed()
-                    && i.pointer.interact_pos().is_some_and(|pos| {
-                        !bar_rect.contains(pos) && !popup_rect.contains(pos)
-                    })
+                    && i.pointer
+                        .interact_pos()
+                        .is_some_and(|pos| !bar_rect.contains(pos) && !popup_rect.contains(pos))
             });
             if clicked_outside {
                 self.open_menu = None;
@@ -872,7 +880,11 @@ impl VzEditorApp {
                     egui::RichText::new(if always_on_top { "TOP" } else { "top" })
                         .font(FontId::monospace(12.5))
                         .strong()
-                        .color(if always_on_top { TEXT_AMBER } else { TEXT_DIM_CYAN }),
+                        .color(if always_on_top {
+                            TEXT_AMBER
+                        } else {
+                            TEXT_DIM_CYAN
+                        }),
                 )
                 .fill(BG_TAB_INACTIVE)
                 .stroke(Stroke::new(1.0_f32, BORDER_BLUE)),

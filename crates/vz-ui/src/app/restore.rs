@@ -18,7 +18,8 @@ impl VzEditorApp {
         if let Err(e) = self.save_session_to(&dir) {
             // 保存できなければ終了しない（要求側には完了として返す）
             session::finish_request(&dir);
-            self.status_message = format!("終了要求: 状態を保存できないため終了を中止しました: {e}");
+            self.status_message =
+                format!("終了要求: 状態を保存できないため終了を中止しました: {e}");
             return;
         }
         session::finish_request(&dir);
@@ -253,7 +254,12 @@ impl VzEditorApp {
         self.need_scroll_to_cursor = true;
         let buffer_entries = entries
             .iter()
-            .filter(|e| matches!(e.kind, EntryKind::File | EntryKind::Unsaved | EntryKind::Conflict))
+            .filter(|e| {
+                matches!(
+                    e.kind,
+                    EntryKind::File | EntryKind::Unsaved | EntryKind::Conflict
+                )
+            })
             .count();
         self.status_message =
             format!("前回の状態を復元しました: {restored} / {buffer_entries} 個のバッファ");
@@ -264,9 +270,12 @@ impl VzEditorApp {
     /// `path` を開いているバッファ（無題を除く）。
     pub(super) fn find_buffer_by_path(&self, path: &Path) -> Option<usize> {
         let target = canonical_or_self(path);
-        self.buffers
-            .iter()
-            .position(|slot| slot.buffer.file_path.as_deref().is_some_and(|p| same_file(p, path, &target)))
+        self.buffers.iter().position(|slot| {
+            slot.buffer
+                .file_path
+                .as_deref()
+                .is_some_and(|p| same_file(p, path, &target))
+        })
     }
 
     /// 外部で変更された（まだ尋ねていない）ファイルのバッファ。
@@ -281,7 +290,9 @@ impl VzEditorApp {
     /// 復元直後は、外部の変更と衝突したファイルの確認を先に出す。
     pub(super) fn check_external_changes(&mut self, ctx: &egui::Context) {
         let interval = std::time::Duration::from_secs(1);
-        if !self.conflict_queue.is_empty() || self.buffers.iter().any(|s| s.buffer.disk_stamp.is_some()) {
+        if !self.conflict_queue.is_empty()
+            || self.buffers.iter().any(|s| s.buffer.disk_stamp.is_some())
+        {
             ctx.request_repaint_after(interval);
         }
         if self.filer_modal.is_some()
@@ -327,7 +338,9 @@ impl VzEditorApp {
                 slot.wrap = None;
                 slot.md_scroll_dirty = true;
                 self.need_scroll_to_cursor = true;
-                self.status_message = format!("外部での変更を読み込みました: {name}（元に戻すで読み込み前に戻せます）");
+                self.status_message = format!(
+                    "外部での変更を読み込みました: {name}（元に戻すで読み込み前に戻せます）"
+                );
             }
             Err(e) => self.status_message = format!("再読み込みできません: {name}: {e}"),
         }
@@ -335,17 +348,25 @@ impl VzEditorApp {
 
     /// 衝突したファイルの確認ダイアログを開く（vz の編集内容を持つ無題バッファとファイルの差分を見せる）。
     pub(super) fn open_conflict_dialog(&mut self, path: PathBuf) {
-        let Some(u) = self.buffers.iter().position(|s| s.conflict_of.as_deref() == Some(path.as_path())) else {
+        let Some(u) = self
+            .buffers
+            .iter()
+            .position(|s| s.conflict_of.as_deref() == Some(path.as_path()))
+        else {
             return;
         };
-        let disk = vz_core::buffer::read_lines(&path).map(|(l, _)| l).unwrap_or_default();
+        let disk = vz_core::buffer::read_lines(&path)
+            .map(|(l, _)| l)
+            .unwrap_or_default();
         let diff = diff::unified(&disk, &self.buffers[u].buffer.lines, 3);
         if diff.is_empty() {
             // 内容が同じなら確認は要らない
             self.force_close_buffer(u);
             self.status_message = format!(
                 "{} は vz の編集内容と同じため、そのまま使います",
-                path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()
+                path.file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_default()
             );
             return;
         }
@@ -365,7 +386,11 @@ impl VzEditorApp {
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_else(|| path.display().to_string());
-        let Some(u) = self.buffers.iter().position(|s| s.conflict_of.as_deref() == Some(path)) else {
+        let Some(u) = self
+            .buffers
+            .iter()
+            .position(|s| s.conflict_of.as_deref() == Some(path))
+        else {
             return;
         };
         match adopt_vz {
@@ -389,7 +414,9 @@ impl VzEditorApp {
                 buf.replace_all(lines);
                 if let Err(e) = buf.save_to_path(path) {
                     self.switch_buffer_to(f);
-                    self.status_message = format!("{name} に保存できません: {e}（vz の内容は [無題] に残しています）");
+                    self.status_message = format!(
+                        "{name} に保存できません: {e}（vz の内容は [無題] に残しています）"
+                    );
                     return;
                 }
                 self.force_close_buffer(u);
@@ -401,12 +428,15 @@ impl VzEditorApp {
             Some(false) => {
                 self.force_close_buffer(u);
                 if let Some(f) = self.find_buffer_by_path(path) {
-                    if self.buffers[f].buffer.changed_on_disk().is_some() && !self.buffers[f].buffer.dirty {
+                    if self.buffers[f].buffer.changed_on_disk().is_some()
+                        && !self.buffers[f].buffer.dirty
+                    {
                         self.reload_buffer(f);
                     }
                     self.switch_buffer_to(f);
                 }
-                self.status_message = format!("{name} はファイル（外部の変更）の内容を採用しました");
+                self.status_message =
+                    format!("{name} はファイル（外部の変更）の内容を採用しました");
             }
         }
     }

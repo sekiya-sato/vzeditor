@@ -66,7 +66,10 @@ fn diff_ops(old: &[String], new: &[String]) -> Vec<(DiffKind, usize, usize)> {
         pre += 1;
     }
     let mut suf = 0;
-    while suf < old.len() - pre && suf < new.len() - pre && old[old.len() - 1 - suf] == new[new.len() - 1 - suf] {
+    while suf < old.len() - pre
+        && suf < new.len() - pre
+        && old[old.len() - 1 - suf] == new[new.len() - 1 - suf]
+    {
         suf += 1;
     }
     let a = &old[pre..old.len() - suf];

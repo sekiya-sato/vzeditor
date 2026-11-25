@@ -3,7 +3,10 @@
 
 fn main() {
     let now = chrono::Local::now();
-    println!("cargo:rustc-env=VZ_BUILD_AT={}", now.format("%Y/%m/%d %H:%M"));
+    println!(
+        "cargo:rustc-env=VZ_BUILD_AT={}",
+        now.format("%Y/%m/%d %H:%M")
+    );
     // crates/vz-ui から見たワークスペースのルートと各クレート
     println!("cargo:rerun-if-changed=../../src");
     println!("cargo:rerun-if-changed=../../Cargo.toml");

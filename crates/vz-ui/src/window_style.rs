@@ -76,7 +76,10 @@ mod tests {
         let navy = Color32::from_rgb(8, 24, 56);
         assert_eq!(with_opacity(navy, 100), navy);
         assert_eq!(with_opacity(navy, 50).a(), 128);
-        assert_eq!(with_opacity(navy, 0).a(), with_opacity(navy, MIN_OPACITY).a());
+        assert_eq!(
+            with_opacity(navy, 0).a(),
+            with_opacity(navy, MIN_OPACITY).a()
+        );
         assert_eq!(clamp_opacity(150), MAX_OPACITY);
     }
 }

@@ -5,8 +5,8 @@ mod bars;
 mod browser_view;
 mod dialogs;
 mod editor_view;
-mod files;
 mod filer_view;
+mod files;
 mod input;
 mod keys;
 mod menu;
@@ -14,11 +14,11 @@ mod restore;
 mod search;
 mod send;
 mod terminal_view;
+#[cfg(test)]
+mod tests;
 mod theme;
 mod window;
 mod wrap;
-#[cfg(test)]
-mod tests;
 
 use crate::fonts::configure_japanese_fonts;
 use crate::markdown::{parse_markdown, render_markdown_view, MdBlock};
@@ -31,9 +31,9 @@ use search::{SearchDialog, SearchState};
 use std::borrow::Cow;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Receiver;
+use std::sync::Arc;
 use theme::*;
 use vz_config::session::{self, EntryKind, SessionEntry};
 use vz_config::settings::{KeyScheme, Settings, WindowGeometry};
@@ -43,9 +43,9 @@ use vz_core::filer::{
     copy_entry, create_dir, create_file, delete_entry, format_size, move_entry, rename_entry,
     ActivePane, FileEntry, FilerState,
 };
-use vz_platform::{clipboard, monitor};
 use vz_platform::dialog::{spawn_open_dialog, spawn_save_dialog, DialogResult};
 use vz_platform::send_to_app::{prepare_text, spawn_send, SendResult, SendTarget};
+use vz_platform::{clipboard, monitor};
 use wrap::WrapLayout;
 
 // --- Font Size Scaling Constants ---
@@ -617,7 +617,6 @@ impl VzEditorApp {
     }
 
     // --- Font Size Scaling ---
-
 }
 
 /// ウィンドウスタイル用ショートカットの判定。該当しなければ None。
@@ -852,7 +851,11 @@ fn next_window_geometry(
     if info.minimized == Some(true) || info.fullscreen == Some(true) {
         return None;
     }
-    let (outer, inner, native_ppp) = (info.outer_rect?, info.inner_rect?, info.native_pixels_per_point?);
+    let (outer, inner, native_ppp) = (
+        info.outer_rect?,
+        info.inner_rect?,
+        info.native_pixels_per_point?,
+    );
     let ppp = native_ppp * zoom;
     if ppp.is_nan() || ppp <= 0.0 {
         return None;

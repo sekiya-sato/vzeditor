@@ -161,10 +161,7 @@ pub fn parse_markdown(lines: &[String]) -> Vec<MdBlock> {
         {
             let header_cells = split_table_cells(trimmed);
             let col_count = header_cells.len();
-            let headers = header_cells
-                .into_iter()
-                .map(parse_inlines)
-                .collect();
+            let headers = header_cells.into_iter().map(parse_inlines).collect();
             i += 2;
             let mut rows = Vec::new();
             while i < total {
@@ -481,9 +478,7 @@ fn is_table_delimiter(trimmed: &str) -> bool {
 }
 
 fn split_table_cells(trimmed: &str) -> Vec<&str> {
-    let s = trimmed
-        .strip_prefix('|')
-        .unwrap_or(trimmed);
+    let s = trimmed.strip_prefix('|').unwrap_or(trimmed);
     let s = s.strip_suffix('|').unwrap_or(s);
     s.split('|').map(str::trim).collect()
 }
@@ -549,9 +544,7 @@ pub fn parse_inlines(input: &str) -> Vec<MdInline> {
         // 5. Autolink <https://...> or <http://...>
         if bytes[i] == b'<' {
             let rest = &input[i + 1..];
-            if (rest.starts_with("http://") || rest.starts_with("https://"))
-                && rest.contains('>')
-            {
+            if (rest.starts_with("http://") || rest.starts_with("https://")) && rest.contains('>') {
                 if let Some(end) = rest.find('>') {
                     let url = &rest[..end];
                     if !url.contains(char::is_whitespace) {
@@ -631,10 +624,7 @@ pub fn parse_inlines(input: &str) -> Vec<MdInline> {
                 }
             }
         }
-        if bytes[i] == b'_'
-            && !input[i..].starts_with("__")
-            && is_word_boundary_before(input, i)
-        {
+        if bytes[i] == b'_' && !input[i..].starts_with("__") && is_word_boundary_before(input, i) {
             if let Some(rel_end) = find_closing_underscore_delim(&input[i + 1..], "_") {
                 if rel_end > 0 {
                     let inner = &input[i + 1..i + 1 + rel_end];
@@ -1084,10 +1074,7 @@ pub fn render_markdown_view(
                                     (1.0_f32, MD_H2_RULE_COLOR)
                                 };
                                 ui.painter().line_segment(
-                                    [
-                                        Pos2::new(rule_rect.min.x, y),
-                                        Pos2::new(rule_rect.max.x, y),
-                                    ],
+                                    [Pos2::new(rule_rect.min.x, y), Pos2::new(rule_rect.max.x, y)],
                                     Stroke::new(stroke_w, stroke_col),
                                 );
                             }
@@ -1122,9 +1109,7 @@ pub fn render_markdown_view(
                                     (font_size * 0.55).round() as i8,
                                 ))
                                 .show(ui, |ui| {
-                                    ui.set_min_width(
-                                        (content_max_w - font_size * 1.5).max(120.0),
-                                    );
+                                    ui.set_min_width((content_max_w - font_size * 1.5).max(120.0));
                                     if !lang.is_empty() {
                                         ui.horizontal(|ui| {
                                             egui::Frame::NONE
@@ -1213,8 +1198,8 @@ pub fn render_markdown_view(
                             inlines,
                         } => {
                             let indent_px = (*indent as f32) * (font_size * 1.35);
-                            let marker_w =
-                                ((number.len() as f32 + 0.8) * font_size * 0.65).max(font_size * 1.8);
+                            let marker_w = ((number.len() as f32 + 0.8) * font_size * 0.65)
+                                .max(font_size * 1.8);
                             let text_w = (content_max_w - indent_px - marker_w).max(80.0);
 
                             ui.horizontal_top(|ui| {
@@ -1605,10 +1590,7 @@ fn main() {
                 ..
             } if number == "1."
         ));
-        assert!(matches!(
-            blocks[6],
-            MdBlock::BlockQuote { depth: 1, .. }
-        ));
+        assert!(matches!(blocks[6], MdBlock::BlockQuote { depth: 1, .. }));
         assert!(matches!(
             blocks[7],
             MdBlock::Table { ref headers, ref rows } if headers.len() == 2 && rows.len() == 1
@@ -1644,11 +1626,13 @@ fn main() {
         assert!(blocks
             .iter()
             .any(|b| matches!(b, MdBlock::CodeBlock { .. })));
-        assert!(blocks
-            .iter()
-            .any(|b| matches!(b, MdBlock::BulletItem { task: Some(true), .. })));
-        assert!(blocks
-            .iter()
-            .any(|b| matches!(b, MdBlock::HorizontalRule)));
+        assert!(blocks.iter().any(|b| matches!(
+            b,
+            MdBlock::BulletItem {
+                task: Some(true),
+                ..
+            }
+        )));
+        assert!(blocks.iter().any(|b| matches!(b, MdBlock::HorizontalRule)));
     }
 }

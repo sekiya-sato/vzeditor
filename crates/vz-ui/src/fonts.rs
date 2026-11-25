@@ -20,7 +20,10 @@ fn query_fc_match(pattern: &str) -> Option<FontCandidate> {
     let stdout = String::from_utf8_lossy(&output.stdout);
     let mut lines = stdout.lines();
     let path = lines.next()?.trim().to_string();
-    let index = lines.next().and_then(|s| s.trim().parse::<u32>().ok()).unwrap_or(0);
+    let index = lines
+        .next()
+        .and_then(|s| s.trim().parse::<u32>().ok())
+        .unwrap_or(0);
     if path.is_empty() || !Path::new(&path).exists() {
         return None;
     }
@@ -92,7 +95,9 @@ pub fn configure_japanese_fonts(ctx: &egui::Context) -> Option<String> {
             let font_name = format!("ja_font_{i}");
             let mut font_data = FontData::from_owned(bytes);
             font_data.index = cand.index;
-            fonts.font_data.insert(font_name.clone(), Arc::new(font_data));
+            fonts
+                .font_data
+                .insert(font_name.clone(), Arc::new(font_data));
             loaded_names.push(font_name);
             if primary_loaded_path.is_none() {
                 primary_loaded_path = Some(format!("{} (index {})", cand.path, cand.index));
@@ -133,14 +138,19 @@ fn static_font_fallbacks() -> Vec<(String, u32)> {
         let mut v: Vec<(String, u32)> = Vec::new();
         let mut dirs = vec![windir.join("Fonts")];
         if let Some(local) = std::env::var_os("LOCALAPPDATA") {
-            dirs.push(PathBuf::from(local).join("Microsoft").join("Windows").join("Fonts"));
+            dirs.push(
+                PathBuf::from(local)
+                    .join("Microsoft")
+                    .join("Windows")
+                    .join("Fonts"),
+            );
         }
         for dir in &dirs {
             for (file, index) in [
-                ("BIZ-UDGothicR.ttc", 0),  // BIZ UDゴシック（等幅）
+                ("BIZ-UDGothicR.ttc", 0), // BIZ UDゴシック（等幅）
                 ("HackGen-Regular.ttf", 0),
                 ("PlemolJP-Regular.ttf", 0),
-                ("msgothic.ttc", 0),       // MS ゴシック（等幅）
+                ("msgothic.ttc", 0), // MS ゴシック（等幅）
                 ("YuGothM.ttc", 0),
                 ("meiryo.ttc", 0),
             ] {
@@ -166,13 +176,19 @@ fn static_font_fallbacks() -> Vec<(String, u32)> {
     {
         [
             ("/usr/share/fonts/opentype/ipafont-gothic/ipag.ttf", 0),
-            ("/usr/share/fonts/truetype/vlgothic/VL-Gothic-Regular.ttf", 0),
+            (
+                "/usr/share/fonts/truetype/vlgothic/VL-Gothic-Regular.ttf",
+                0,
+            ),
             ("/usr/share/fonts/truetype/takao-gothic/TakaoGothic.ttf", 0),
             ("/usr/share/fonts/truetype/fonts-japanese-gothic.ttf", 0),
             ("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc", 5),
             ("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc", 0),
             ("/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc", 5),
-            ("/usr/share/fonts/truetype/droid/DroidSansFallbackFull.ttf", 0),
+            (
+                "/usr/share/fonts/truetype/droid/DroidSansFallbackFull.ttf",
+                0,
+            ),
         ]
         .iter()
         .map(|&(p, i)| (p.to_string(), i))

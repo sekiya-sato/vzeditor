@@ -391,7 +391,10 @@ fn copy_dir_recursive(src: &Path, dst: &Path) -> io::Result<()> {
 /// コピー・移動（`op` は "コピー" / "移動"）の前の確認。宛先のパスを返す。
 fn check_transfer(src: &Path, dst_dir: &Path, op: &str) -> io::Result<PathBuf> {
     let name = src.file_name().ok_or_else(|| {
-        io::Error::new(io::ErrorKind::InvalidInput, format!("{op}元ファイル名が取得できません"))
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("{op}元ファイル名が取得できません"),
+        )
     })?;
     let dst = dst_dir.join(name);
 
@@ -449,7 +452,10 @@ pub fn delete_entry(path: &Path) -> io::Result<()> {
 pub fn rename_entry(src: &Path, new_name: &str) -> io::Result<PathBuf> {
     let valid = validate_single_name(new_name)?;
     let parent = src.parent().ok_or_else(|| {
-        io::Error::new(io::ErrorKind::InvalidInput, "親ディレクトリが見つかりません")
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "親ディレクトリが見つかりません",
+        )
     })?;
     let dst = parent.join(valid);
     if dst == src {
@@ -515,10 +521,22 @@ mod tests {
             sort_entries(&mut v, mode);
             v.into_iter().map(|e| e.name).collect::<Vec<_>>()
         };
-        assert_eq!(names(SortMode::NameAsc), ["Adir", "zdir", "A.md", "a.TXT", "b.txt", "c.md"]);
-        assert_eq!(names(SortMode::ModifiedDesc), ["Adir", "zdir", "b.txt", "c.md", "A.md", "a.TXT"]);
-        assert_eq!(names(SortMode::SizeDesc), ["Adir", "zdir", "A.md", "c.md", "a.TXT", "b.txt"]);
-        assert_eq!(names(SortMode::ExtAsc), ["Adir", "zdir", "A.md", "c.md", "a.TXT", "b.txt"]);
+        assert_eq!(
+            names(SortMode::NameAsc),
+            ["Adir", "zdir", "A.md", "a.TXT", "b.txt", "c.md"]
+        );
+        assert_eq!(
+            names(SortMode::ModifiedDesc),
+            ["Adir", "zdir", "b.txt", "c.md", "A.md", "a.TXT"]
+        );
+        assert_eq!(
+            names(SortMode::SizeDesc),
+            ["Adir", "zdir", "A.md", "c.md", "a.TXT", "b.txt"]
+        );
+        assert_eq!(
+            names(SortMode::ExtAsc),
+            ["Adir", "zdir", "A.md", "c.md", "a.TXT", "b.txt"]
+        );
     }
 
     fn make_temp_dir(tag: &str) -> PathBuf {

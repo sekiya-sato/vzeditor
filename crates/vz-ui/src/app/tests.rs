@@ -62,7 +62,10 @@ pub(super) fn make_test_app() -> VzEditorApp {
 }
 
 fn viewport_info(outer: [f32; 4], ppp: f32, maximized: bool) -> egui::ViewportInfo {
-    let rect = egui::Rect::from_min_max(egui::pos2(outer[0], outer[1]), egui::pos2(outer[2], outer[3]));
+    let rect = egui::Rect::from_min_max(
+        egui::pos2(outer[0], outer[1]),
+        egui::pos2(outer[2], outer[3]),
+    );
     egui::ViewportInfo {
         native_pixels_per_point: Some(ppp),
         outer_rect: Some(rect),
@@ -84,7 +87,10 @@ fn test_next_window_geometry() {
     // 最大化: 元のサイズと、最大化したモニター上の元の位置を残す
     let max = viewport_info([-1285.0, -5.0, 5.0, 715.0], 1.5, true);
     let m = next_window_geometry(Some(g), &max, 1.0).unwrap();
-    assert_eq!((m.x, m.y, m.width, m.height, m.maximized), (-1500, 150, 784.0, 568.0, true));
+    assert_eq!(
+        (m.x, m.y, m.width, m.height, m.maximized),
+        (-1500, 150, 784.0, 568.0, true)
+    );
 
     // 別のモニターで最大化: そのモニターの中央に置く
     let other = viewport_info([0.0, 0.0, 1920.0, 1040.0], 1.0, true);
@@ -95,19 +101,27 @@ fn test_next_window_geometry() {
     let mut min = info.clone();
     min.minimized = Some(true);
     assert_eq!(next_window_geometry(Some(g), &min, 1.0), None);
-    assert_eq!(next_window_geometry(Some(g), &egui::ViewportInfo::default(), 1.0), None);
+    assert_eq!(
+        next_window_geometry(Some(g), &egui::ViewportInfo::default(), 1.0),
+        None
+    );
 }
 
 #[test]
 fn test_truncate_helpers() {
     assert!(matches!(truncate_path_left("abc", 5), Cow::Borrowed("abc")));
-    assert_eq!(truncate_path_left("C:/work/日本語/file.txt", 12), ".../file.txt");
+    assert_eq!(
+        truncate_path_left("C:/work/日本語/file.txt", 12),
+        ".../file.txt"
+    );
     // 幅 2 の文字は予算（7 - 3 = 4）に 2 文字まで
     assert_eq!(truncate_path_left("ab日本語", 7), "...本語");
-    assert!(matches!(truncate_display_right("abc", 3), Cow::Borrowed("abc")));
+    assert!(matches!(
+        truncate_display_right("abc", 3),
+        Cow::Borrowed("abc")
+    ));
     assert_eq!(truncate_display_right("日本語テキスト", 8), "日本語…");
 }
-
 
 #[test]
 fn test_wrap_breaks_and_layout() {
@@ -191,7 +205,8 @@ fn test_save_session_and_restore() {
 
     let mut app = make_test_app();
     app.buffers.clear();
-    app.buffers.push(BufferSlot::new(TextBuffer::from_file(&saved_path).unwrap()));
+    app.buffers
+        .push(BufferSlot::new(TextBuffer::from_file(&saved_path).unwrap()));
     app.buffers[0].buffer.set_cursor(2, 3);
     let mut b = TextBuffer::from_file(&dirty_path).unwrap();
     b.set_cursor(0, 5);
@@ -214,7 +229,10 @@ fn test_save_session_and_restore() {
     app2.active_buf = 0;
     app2.restore_session_from(&session_dir);
     assert_eq!(app2.buffers.len(), 3);
-    assert_eq!(app2.buffers[0].buffer.file_path.as_deref(), Some(saved_path.as_path()));
+    assert_eq!(
+        app2.buffers[0].buffer.file_path.as_deref(),
+        Some(saved_path.as_path())
+    );
     assert_eq!(app2.buffers[0].buffer.cursor_pos(), (2, 3));
     assert!(app2.buffers[1].markdown_view);
     assert_eq!(app2.buffers[1].buffer.lines, vec!["# old new"]);
@@ -256,7 +274,10 @@ fn test_save_session_conflict_keeps_external_change() {
     app2.restore_session_from(&session_dir);
     // ファイルは外部の内容で開き、vz の編集内容は無題バッファに残る
     assert_eq!(app2.buffers.len(), 2);
-    assert_eq!(app2.buffers[0].buffer.lines, vec!["a", "b", "c", "external line"]);
+    assert_eq!(
+        app2.buffers[0].buffer.lines,
+        vec!["a", "b", "c", "external line"]
+    );
     assert!(!app2.buffers[0].buffer.dirty);
     let u = &app2.buffers[1];
     assert!(u.buffer.file_path.is_none() && u.buffer.dirty);
@@ -269,8 +290,12 @@ fn test_save_session_conflict_keeps_external_change() {
     app2.open_conflict_dialog(queued);
     match &app2.filer_modal {
         Some(FilerModal::ResolveConflict { diff, .. }) => {
-            assert!(diff.iter().any(|(k, t)| *k == DiffKind::Removed && t.ends_with("- external line")));
-            assert!(diff.iter().any(|(k, t)| *k == DiffKind::Added && t.ends_with("+ a-vz")));
+            assert!(diff
+                .iter()
+                .any(|(k, t)| *k == DiffKind::Removed && t.ends_with("- external line")));
+            assert!(diff
+                .iter()
+                .any(|(k, t)| *k == DiffKind::Added && t.ends_with("+ a-vz")));
         }
         _ => panic!("衝突の確認ダイアログが開いていない"),
     }
@@ -322,7 +347,9 @@ fn test_external_change_detect_and_reload() {
 
     // 外部で変更されると検知する。「このまま」と答えた同じ変更は再度尋ねない
     fs::write(&path, "one\ntwo\nthree external").unwrap();
-    let (idx, stamp) = app.find_externally_changed().expect("外部の変更を検知していない");
+    let (idx, stamp) = app
+        .find_externally_changed()
+        .expect("外部の変更を検知していない");
     assert_eq!(idx, 0);
     app.buffers[0].ignored_stamp = Some(stamp);
     assert!(app.find_externally_changed().is_none());
@@ -549,7 +576,11 @@ fn test_close_buffer_clean_and_dirty() {
 fn test_ctrl_f4_closes_buffer_in_both_schemes() {
     for sakura in [false, true] {
         let ctx = egui::Context::default();
-        let mut app = if sakura { make_sakura_app("a") } else { make_test_app() };
+        let mut app = if sakura {
+            make_sakura_app("a")
+        } else {
+            make_test_app()
+        };
         let mut second = TextBuffer::new();
         second.insert_text("b");
         second.dirty = false;
@@ -758,7 +789,10 @@ fn test_window_style_keys_do_not_overlap() {
         window_style_key_action(Key::W, Some(Key::W), alt),
         Some(MenuAction::ToggleWordWrap)
     );
-    assert_eq!(window_style_key_action(Key::W, Some(Key::W), alt_shift), None);
+    assert_eq!(
+        window_style_key_action(Key::W, Some(Key::W), alt_shift),
+        None
+    );
     // Alt+K / Alt+B: ターミナル / ブラウザ（Shift・Ctrl 付きは対象外）
     assert_eq!(
         window_style_key_action(Key::K, Some(Key::K), alt),
@@ -768,7 +802,10 @@ fn test_window_style_keys_do_not_overlap() {
         window_style_key_action(Key::B, Some(Key::B), alt),
         Some(MenuAction::ToggleBrowser)
     );
-    assert_eq!(window_style_key_action(Key::K, Some(Key::K), alt_shift), None);
+    assert_eq!(
+        window_style_key_action(Key::K, Some(Key::K), alt_shift),
+        None
+    );
     assert_eq!(window_style_key_action(Key::B, Some(Key::B), ctrl), None);
     for (key, dialog) in [
         (Key::F, SearchDialog::Find),
@@ -776,12 +813,21 @@ fn test_window_style_keys_do_not_overlap() {
         (Key::G, SearchDialog::Grep),
         (Key::J, SearchDialog::Jump),
     ] {
-        assert_eq!(window_style_key_action(key, Some(key), alt), Some(MenuAction::OpenSearch(dialog)));
+        assert_eq!(
+            window_style_key_action(key, Some(key), alt),
+            Some(MenuAction::OpenSearch(dialog))
+        );
         assert_eq!(window_style_key_action(key, Some(key), ctrl), None);
         assert_eq!(window_style_key_action(key, Some(key), alt_shift), None);
     }
-    assert_eq!(window_style_key_action(Key::N, None, alt), Some(MenuAction::RepeatSearch(false)));
-    assert_eq!(window_style_key_action(Key::N, None, alt_shift), Some(MenuAction::RepeatSearch(true)));
+    assert_eq!(
+        window_style_key_action(Key::N, None, alt),
+        Some(MenuAction::RepeatSearch(false))
+    );
+    assert_eq!(
+        window_style_key_action(Key::N, None, alt_shift),
+        Some(MenuAction::RepeatSearch(true))
+    );
 
     // Alt+P（Markdown 切替）と Alt+±は奪わない
     assert_eq!(window_style_key_action(Key::P, Some(Key::P), alt), None);
@@ -852,7 +898,10 @@ fn test_quit_confirm_for_new_buffer_input() {
     assert!(matches!(app.filer_modal, Some(FilerModal::ConfirmQuit)));
 
     // 無題のバッファは保存先を尋ねる段階になる
-    assert_eq!(app.save_dirty_buffers_for_quit(), QuitSaveStep::NeedSaveAs(0));
+    assert_eq!(
+        app.save_dirty_buffers_for_quit(),
+        QuitSaveStep::NeedSaveAs(0)
+    );
 }
 
 #[test]
@@ -860,8 +909,11 @@ fn test_save_dirty_buffers_for_quit_saves_files() {
     let dir = std::env::temp_dir().join(format!("vz_quit_test_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("edited.txt");
-    std::fs::write(&path, "old
-").unwrap();
+    std::fs::write(
+        &path, "old
+",
+    )
+    .unwrap();
 
     let mut app = make_test_app();
     let mut buf = TextBuffer::from_file(&path).unwrap();
@@ -871,7 +923,9 @@ fn test_save_dirty_buffers_for_quit_saves_files() {
 
     assert_eq!(app.save_dirty_buffers_for_quit(), QuitSaveStep::Done);
     assert!(!app.has_any_dirty_buffer());
-    assert!(std::fs::read_to_string(&path).unwrap().starts_with("new old"));
+    assert!(std::fs::read_to_string(&path)
+        .unwrap()
+        .starts_with("new old"));
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -991,18 +1045,34 @@ fn test_send_prefix_keys() {
     let mut app = make_test_app();
     // Alt+C は透過・最前面のキーと重ならない
     assert_eq!(
-        window_style_key_action(Key::C, Some(Key::C), egui::Modifiers { alt: true, ..Default::default() }),
+        window_style_key_action(
+            Key::C,
+            Some(Key::C),
+            egui::Modifiers {
+                alt: true,
+                ..Default::default()
+            }
+        ),
         None
     );
 
     // Alt+C → 2打目待ち。C / X 以外は取り消し、文字も入力されない
     let run = |app: &mut VzEditorApp, events: Vec<Event>| {
-        let input = egui::RawInput { events, ..Default::default() };
+        let input = egui::RawInput {
+            events,
+            ..Default::default()
+        };
         let _ = ctx.run(input, |ctx| app.handle_send_keys(ctx));
     };
-    run(&mut app, vec![key_event(Key::C, true), Event::Text("c".into())]);
+    run(
+        &mut app,
+        vec![key_event(Key::C, true), Event::Text("c".into())],
+    );
     assert!(app.send_prefix);
-    run(&mut app, vec![key_event(Key::D, false), Event::Text("d".into())]);
+    run(
+        &mut app,
+        vec![key_event(Key::D, false), Event::Text("d".into())],
+    );
     assert!(!app.send_prefix);
     assert_eq!(app.status_message, "送信を取り消しました");
     assert!(app.pending_send.is_none());
@@ -1016,16 +1086,38 @@ fn test_send_prefix_keys() {
     assert!(app.status_message.contains("Codex へ送る文字がありません"));
 
     // 2打目の割り当て（P は GitHub Desktop の Push。実際の送信はテストで起こさない）
-    assert_eq!(send_target_for_key(Key::C, false), Some(SendTarget::ClaudeCode));
+    assert_eq!(
+        send_target_for_key(Key::C, false),
+        Some(SendTarget::ClaudeCode)
+    );
     assert_eq!(send_target_for_key(Key::X, false), Some(SendTarget::Codex));
-    assert_eq!(send_target_for_key(Key::P, false), Some(SendTarget::GitHubDesktop));
-    assert_eq!(send_target_for_key(Key::N, false), Some(SendTarget::ClaudeCodeNewSession));
-    assert_eq!(send_target_for_key(Key::M, false), Some(SendTarget::CodexNewSession));
+    assert_eq!(
+        send_target_for_key(Key::P, false),
+        Some(SendTarget::GitHubDesktop)
+    );
+    assert_eq!(
+        send_target_for_key(Key::N, false),
+        Some(SendTarget::ClaudeCodeNewSession)
+    );
+    assert_eq!(
+        send_target_for_key(Key::M, false),
+        Some(SendTarget::CodexNewSession)
+    );
     assert_eq!(send_target_for_key(Key::N, true), None);
     assert_eq!(send_target_for_key(Key::P, true), None);
     assert_eq!(send_target_for_key(Key::D, false), None);
     // Alt+P（VZ 互換の Markdown 切替）は Alt+C の後でなければ奪わない
-    assert_eq!(window_style_key_action(Key::P, Some(Key::P), egui::Modifiers { alt: true, ..Default::default() }), None);
+    assert_eq!(
+        window_style_key_action(
+            Key::P,
+            Some(Key::P),
+            egui::Modifiers {
+                alt: true,
+                ..Default::default()
+            }
+        ),
+        None
+    );
 }
 
 fn mods(ctrl: bool, shift: bool) -> egui::Modifiers {
@@ -1072,26 +1164,49 @@ fn test_sakura_shift_select_and_replace() {
     let ctx = egui::Context::default();
     let mut app = make_sakura_app("abcdef\nghi");
     let shift = mods(false, true);
-    run_editor(&ctx, &mut app, shift, vec![
-        key_with(Key::ArrowRight, shift),
-        key_with(Key::ArrowRight, shift),
-        key_with(Key::ArrowRight, shift),
-    ]);
+    run_editor(
+        &ctx,
+        &mut app,
+        shift,
+        vec![
+            key_with(Key::ArrowRight, shift),
+            key_with(Key::ArrowRight, shift),
+            key_with(Key::ArrowRight, shift),
+        ],
+    );
     assert_eq!(app.cur_buf().selected_text().as_deref(), Some("abc"));
 
     // 文字入力で選択範囲を置き換える
-    run_editor(&ctx, &mut app, mods(false, false), vec![Event::Text("X".into())]);
+    run_editor(
+        &ctx,
+        &mut app,
+        mods(false, false),
+        vec![Event::Text("X".into())],
+    );
     assert_eq!(app.cur_buf().lines, vec!["Xdef", "ghi"]);
 
     // Shift なしの移動で選択は解除される
     run_editor(&ctx, &mut app, shift, vec![key_with(Key::End, shift)]);
     assert!(app.cur_buf().has_selection());
-    run_editor(&ctx, &mut app, mods(false, false), vec![key_with(Key::ArrowLeft, mods(false, false))]);
+    run_editor(
+        &ctx,
+        &mut app,
+        mods(false, false),
+        vec![key_with(Key::ArrowLeft, mods(false, false))],
+    );
     assert!(!app.cur_buf().has_selection());
 
     // Ctrl+Shift+End でファイル末尾まで選択
     let cs = mods(true, true);
-    run_editor(&ctx, &mut app, cs, vec![key_with(Key::Home, mods(false, false)), key_with(Key::End, cs)]);
+    run_editor(
+        &ctx,
+        &mut app,
+        cs,
+        vec![
+            key_with(Key::Home, mods(false, false)),
+            key_with(Key::End, cs),
+        ],
+    );
     assert_eq!(app.cur_buf().selected_text().as_deref(), Some("Xdef\nghi"));
 }
 
@@ -1113,20 +1228,32 @@ fn test_enter_auto_indent_both_schemes() {
         };
         app.cur_buf_mut().move_line_end();
         run_editor(&ctx, &mut app, none, vec![key_with(Key::Enter, none)]);
-        assert_eq!(app.cur_buf().lines, vec!["\t\tこれはテスト", "\t\t"], "sakura={sakura}");
+        assert_eq!(
+            app.cur_buf().lines,
+            vec!["\t\tこれはテスト", "\t\t"],
+            "sakura={sakura}"
+        );
         assert_eq!(app.cur_buf().cursor_pos(), (1, 2));
         run_editor(&ctx, &mut app, none, vec![Event::Text("次".into())]);
         assert_eq!(app.cur_buf().lines[1], "\t\t次");
 
         run_editor(&ctx, &mut app, shift, vec![key_with(Key::Enter, shift)]);
-        assert_eq!(app.cur_buf().lines, vec!["\t\tこれはテスト", "\t\t次", ""], "sakura={sakura}");
+        assert_eq!(
+            app.cur_buf().lines,
+            vec!["\t\tこれはテスト", "\t\t次", ""],
+            "sakura={sakura}"
+        );
         assert_eq!(app.cur_buf().cursor_pos(), (2, 0));
 
         // 1回の Undo で Enter の改行とインデントがまとめて戻る
         app.cur_buf_mut().undo();
         app.cur_buf_mut().undo();
         app.cur_buf_mut().undo();
-        assert_eq!(app.cur_buf().lines, vec!["\t\tこれはテスト"], "sakura={sakura}");
+        assert_eq!(
+            app.cur_buf().lines,
+            vec!["\t\tこれはテスト"],
+            "sakura={sakura}"
+        );
     }
 }
 
@@ -1201,7 +1328,12 @@ fn test_sakura_select_all_cut_undo_and_escape() {
     let ctx = egui::Context::default();
     let mut app = make_sakura_app("one\ntwo");
     let ctrl = mods(true, false);
-    run_editor(&ctx, &mut app, ctrl, vec![key_with(Key::A, ctrl), Event::Cut]);
+    run_editor(
+        &ctx,
+        &mut app,
+        ctrl,
+        vec![key_with(Key::A, ctrl), Event::Cut],
+    );
     assert_eq!(app.cur_buf().lines, vec![""]);
     assert_eq!(app.clipboard_out.as_deref(), Some("one\ntwo"));
 
@@ -1273,7 +1405,12 @@ fn test_sakura_paste_markdown_toggle_and_scheme_switch() {
 
     // Ctrl+V は選択範囲を置き換える
     let ctrl = mods(true, false);
-    run_editor(&ctx, &mut app, ctrl, vec![key_with(Key::A, ctrl), Event::Paste("new".into())]);
+    run_editor(
+        &ctx,
+        &mut app,
+        ctrl,
+        vec![key_with(Key::A, ctrl), Event::Paste("new".into())],
+    );
     assert_eq!(app.cur_buf().lines, vec!["new"]);
 
     // VZ 互換へ切り替えると選択は解除され、Ctrl+E は上移動に戻る
@@ -1329,7 +1466,10 @@ fn test_browser_opens_edited_html_file() {
     assert_eq!(app.mode, AppMode::Browser);
     // WebView を作る前なので、作るときに開く URL として残る
     let url = app.browsers[0].pending_url.clone().expect("pending url");
-    assert!(url.starts_with("file:///") && url.ends_with("/page.html"), "{url}");
+    assert!(
+        url.starts_with("file:///") && url.ends_with("/page.html"),
+        "{url}"
+    );
     assert_eq!(app.browsers[0].url_input, url);
 
     // 同じファイルは同じタブ、別の HTML は新しいタブで開く
@@ -1343,7 +1483,11 @@ fn test_browser_opens_edited_html_file() {
     app.toggle_browser();
     assert_eq!(app.browsers.len(), 2);
     assert_eq!(app.active_browser, 1);
-    assert!(app.browsers[1].pending_url.as_deref().unwrap().ends_with("/other.html"));
+    assert!(app.browsers[1]
+        .pending_url
+        .as_deref()
+        .unwrap()
+        .ends_with("/other.html"));
     app.toggle_browser();
     let first = app.find_buffer_by_path(&html).expect("page.html");
     app.switch_buffer_to(first);
@@ -1359,7 +1503,10 @@ fn test_browser_url_input_is_normalized() {
     app.toggle_browser();
     app.browsers[0].url_input = "localhost:5173".to_string();
     app.navigate_browser_input();
-    assert_eq!(app.browsers[0].pending_url.as_deref(), Some("http://localhost:5173"));
+    assert_eq!(
+        app.browsers[0].pending_url.as_deref(),
+        Some("http://localhost:5173")
+    );
 
     app.browsers[0].url_input = "not a url".to_string();
     app.navigate_browser_input();
@@ -1437,8 +1584,19 @@ fn test_session_restores_browser_tabs() {
     let mut app2 = make_test_app();
     app2.restore_session_from(&session_dir);
     assert_eq!(app2.mode, AppMode::Editor);
-    let urls: Vec<_> = app2.browsers.iter().map(|t| t.pending_url.as_deref()).collect();
-    assert_eq!(urls, [Some("http://localhost:3000"), Some("https://example.com/"), None]);
+    let urls: Vec<_> = app2
+        .browsers
+        .iter()
+        .map(|t| t.pending_url.as_deref())
+        .collect();
+    assert_eq!(
+        urls,
+        [
+            Some("http://localhost:3000"),
+            Some("https://example.com/"),
+            None
+        ]
+    );
     assert_eq!(app2.active_browser, 1);
 
     // 表示していたタブは画面ごと戻る
@@ -1490,8 +1648,14 @@ fn test_session_restores_filer_directories_and_view() {
     let initial_right = restored.filer.right.current_dir.clone();
     restored.restore_session_from(&session_dir);
     assert_eq!(restored.mode, AppMode::Filer);
-    assert_eq!(restored.filer.left.current_dir, left.canonicalize().unwrap());
-    assert_eq!(restored.filer.right.current_dir, right.canonicalize().unwrap());
+    assert_eq!(
+        restored.filer.left.current_dir,
+        left.canonicalize().unwrap()
+    );
+    assert_eq!(
+        restored.filer.right.current_dir,
+        right.canonicalize().unwrap()
+    );
 
     app.enter_editor();
     app.save_session_to(&session_dir).unwrap();
@@ -1501,7 +1665,10 @@ fn test_session_restores_filer_directories_and_view() {
     restored.restore_session_from(&session_dir);
     assert_eq!(restored.mode, AppMode::Editor);
     restored.enter_filer();
-    assert_eq!(restored.filer.left.current_dir, left.canonicalize().unwrap());
+    assert_eq!(
+        restored.filer.left.current_dir,
+        left.canonicalize().unwrap()
+    );
     assert_eq!(restored.filer.right.current_dir, initial_right);
 
     std::fs::remove_dir_all(&dir).unwrap();
@@ -1524,7 +1691,10 @@ fn test_session_restores_browser_and_terminal() {
     app2.restore_session_from(&session_dir);
     assert_eq!(app2.mode, AppMode::Browser);
     assert_eq!(app2.browsers.len(), 1);
-    assert_eq!(app2.browsers[0].pending_url.as_deref(), Some("http://localhost:5173/app"));
+    assert_eq!(
+        app2.browsers[0].pending_url.as_deref(),
+        Some("http://localhost:5173/app")
+    );
     assert_eq!(app2.return_mode, AppMode::Editor);
 
     // ターミナルは起動したフォルダで、最初のフレームに起動し直す（フォルダが無ければ戻さない）
@@ -1543,7 +1713,11 @@ fn test_session_restores_browser_and_terminal() {
     assert_eq!(app3.browsers[0].pending_url, None);
 
     let gone = dir.join("gone");
-    session::append_session(&session_dir, &[tool_session_entry(EntryKind::Terminal, true, Some(gone))]).unwrap();
+    session::append_session(
+        &session_dir,
+        &[tool_session_entry(EntryKind::Terminal, true, Some(gone))],
+    )
+    .unwrap();
     let mut app4 = make_test_app();
     app4.restore_session_from(&session_dir);
     assert_eq!(app4.mode, AppMode::Editor);
@@ -1568,12 +1742,20 @@ fn tool_session_entry(kind: EntryKind, active: bool, path: Option<PathBuf>) -> S
 #[test]
 fn test_terminal_closes_when_shell_exits() {
     let shell = if cfg!(windows) {
-        vz_terminal::ShellCommand { program: "cmd.exe".into(), args: vec!["/c".into(), "exit 0".into()] }
+        vz_terminal::ShellCommand {
+            program: "cmd.exe".into(),
+            args: vec!["/c".into(), "exit 0".into()],
+        }
     } else {
-        vz_terminal::ShellCommand { program: "/bin/sh".into(), args: vec!["-c".into(), "exit 0".into()] }
+        vz_terminal::ShellCommand {
+            program: "/bin/sh".into(),
+            args: vec!["-c".into(), "exit 0".into()],
+        }
     };
     let mut app = make_test_app();
-    app.terminal = Some(vz_terminal::Terminal::spawn(&shell, &std::env::temp_dir(), 24, 80, || {}).expect("spawn"));
+    app.terminal = Some(
+        vz_terminal::Terminal::spawn(&shell, &std::env::temp_dir(), 24, 80, || {}).expect("spawn"),
+    );
     app.mode = AppMode::Terminal;
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
     while app.terminal.is_some() && std::time::Instant::now() < deadline {
@@ -1612,7 +1794,10 @@ fn light_system_theme_keeps_dialog_controls_readable() {
     for (dialog, labels) in [
         (SearchDialog::Find, ["検索条件", "正規表現", "下検索"]),
         (SearchDialog::Replace, ["置換後", "正規表現", "すべて置換"]),
-        (SearchDialog::Grep, ["検索場所", "サブフォルダーも検索", "該当行"]),
+        (
+            SearchDialog::Grep,
+            ["検索場所", "サブフォルダーも検索", "該当行"],
+        ),
         (SearchDialog::Jump, ["行番号", "改行単位", "ジャンプ"]),
     ] {
         app.open_search_dialog(dialog);
