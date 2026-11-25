@@ -54,15 +54,10 @@ pub(super) fn make_test_app() -> VzEditorApp {
         term_selection: None,
         pending_terminal_cwd: None,
         return_mode: AppMode::Editor,
-        browser: None,
-        browser_url_input: String::new(),
-        browser_title: String::new(),
-        browser_pending_url: None,
+        browsers: Vec::new(),
+        active_browser: 0,
         browser_view_rect: None,
-        browser_error: None,
-        browser_focus_page: false,
         browser_url_editing: false,
-        browser_open: false,
     }
 }
 
@@ -1287,9 +1282,27 @@ fn test_browser_opens_edited_html_file() {
     app.toggle_browser();
     assert_eq!(app.mode, AppMode::Browser);
     // WebView を作る前なので、作るときに開く URL として残る
-    let url = app.browser_pending_url.clone().expect("pending url");
+    let url = app.browsers[0].pending_url.clone().expect("pending url");
     assert!(url.starts_with("file:///") && url.ends_with("/page.html"), "{url}");
-    assert_eq!(app.browser_url_input, url);
+    assert_eq!(app.browsers[0].url_input, url);
+
+    // 同じファイルは同じタブ、別の HTML は新しいタブで開く
+    app.toggle_browser();
+    app.toggle_browser();
+    assert_eq!(app.browsers.len(), 1);
+    let other = dir.join("other.html");
+    std::fs::write(&other, "<p>2</p>").unwrap();
+    app.toggle_browser();
+    app.open_file_in_buffer(other);
+    app.toggle_browser();
+    assert_eq!(app.browsers.len(), 2);
+    assert_eq!(app.active_browser, 1);
+    assert!(app.browsers[1].pending_url.as_deref().unwrap().ends_with("/other.html"));
+    app.toggle_browser();
+    let first = app.find_buffer_by_path(&html).expect("page.html");
+    app.switch_buffer_to(first);
+    app.toggle_browser();
+    assert_eq!(app.active_browser, 0);
 
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -1298,13 +1311,99 @@ fn test_browser_opens_edited_html_file() {
 fn test_browser_url_input_is_normalized() {
     let mut app = make_test_app();
     app.toggle_browser();
-    app.browser_url_input = "localhost:5173".to_string();
+    app.browsers[0].url_input = "localhost:5173".to_string();
     app.navigate_browser_input();
-    assert_eq!(app.browser_pending_url.as_deref(), Some("http://localhost:5173"));
+    assert_eq!(app.browsers[0].pending_url.as_deref(), Some("http://localhost:5173"));
 
-    app.browser_url_input = "not a url".to_string();
+    app.browsers[0].url_input = "not a url".to_string();
     app.navigate_browser_input();
     assert!(app.status_message.contains("URL を解釈できません"));
+}
+
+#[test]
+fn test_browser_tabs_new_close_and_switch() {
+    let mut app = make_test_app();
+    app.toggle_browser();
+    app.browser_tab_shortcut('T');
+    app.browser_tab_shortcut('T');
+    assert_eq!((app.browsers.len(), app.active_browser), (3, 2));
+    // Ctrl+Tab は端から反対の端へ回る
+    app.browser_tab_shortcut('N');
+    assert_eq!(app.active_browser, 0);
+    app.browser_tab_shortcut('P');
+    assert_eq!(app.active_browser, 2);
+    app.browser_tab_shortcut('P');
+    assert_eq!(app.active_browser, 1);
+    // 選択中より前を閉じても同じタブを選んだまま
+    app.close_browser_tab(0);
+    assert_eq!((app.browsers.len(), app.active_browser), (2, 0));
+    // 最後のタブを閉じたら閉じてから前のタブ、全部閉じたら元の画面へ
+    app.browser_tab_shortcut('N');
+    app.browser_tab_shortcut('W');
+    assert_eq!((app.browsers.len(), app.active_browser), (1, 0));
+    assert_eq!(app.mode, AppMode::Browser);
+    app.browser_tab_shortcut('W');
+    assert!(app.browsers.is_empty());
+    assert_eq!(app.mode, AppMode::Editor);
+}
+
+#[test]
+fn test_browser_ctrl_keys_handled_in_browser_mode() {
+    let mut app = make_test_app();
+    app.toggle_browser();
+    let ctx = egui::Context::default();
+    let press = |app: &mut VzEditorApp, key: Key, m: egui::Modifiers| {
+        let input = egui::RawInput {
+            events: vec![key_with(key, m)],
+            modifiers: m,
+            ..Default::default()
+        };
+        let _ = ctx.run(input, |ctx| app.handle_browser_events(ctx));
+    };
+    let (ctrl, cs) = (mods(true, false), mods(true, true));
+    press(&mut app, Key::T, ctrl);
+    assert_eq!((app.browsers.len(), app.active_browser), (2, 1));
+    press(&mut app, Key::Tab, ctrl);
+    assert_eq!(app.active_browser, 0);
+    press(&mut app, Key::Tab, cs);
+    assert_eq!(app.active_browser, 1);
+    press(&mut app, Key::W, ctrl);
+    assert_eq!(app.browsers.len(), 1);
+}
+
+#[test]
+fn test_session_restores_browser_tabs() {
+    let dir = std::env::temp_dir().join(format!("vz_browser_tabs_session_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let session_dir = dir.join("session");
+
+    let mut app = make_test_app();
+    app.toggle_browser();
+    app.browsers[0].url_input = "localhost:3000".to_string();
+    app.navigate_browser_input();
+    app.new_browser_tab(Some("https://example.com/".to_string()));
+    app.new_browser_tab(None);
+    app.switch_browser_tab(-1);
+    // ブラウザを表示していなくても選択中のタブを残す
+    app.toggle_browser();
+    app.save_session_to(&session_dir).unwrap();
+
+    let mut app2 = make_test_app();
+    app2.restore_session_from(&session_dir);
+    assert_eq!(app2.mode, AppMode::Editor);
+    let urls: Vec<_> = app2.browsers.iter().map(|t| t.pending_url.as_deref()).collect();
+    assert_eq!(urls, [Some("http://localhost:3000"), Some("https://example.com/"), None]);
+    assert_eq!(app2.active_browser, 1);
+
+    // 表示していたタブは画面ごと戻る
+    app2.show_browser_tab(2);
+    app2.save_session_to(&session_dir).unwrap();
+    let mut app3 = make_test_app();
+    app3.restore_session_from(&session_dir);
+    assert_eq!(app3.mode, AppMode::Browser);
+    assert_eq!((app3.browsers.len(), app3.active_browser), (3, 2));
+
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
@@ -1371,15 +1470,15 @@ fn test_session_restores_browser_and_terminal() {
     // ブラウザを表示したまま保存して終了
     let mut app = make_test_app();
     app.toggle_browser();
-    app.browser_url_input = "localhost:5173/app".to_string();
+    app.browsers[0].url_input = "localhost:5173/app".to_string();
     app.navigate_browser_input();
     app.save_session_to(&session_dir).unwrap();
 
     let mut app2 = make_test_app();
     app2.restore_session_from(&session_dir);
     assert_eq!(app2.mode, AppMode::Browser);
-    assert!(app2.browser_open);
-    assert_eq!(app2.browser_pending_url.as_deref(), Some("http://localhost:5173/app"));
+    assert_eq!(app2.browsers.len(), 1);
+    assert_eq!(app2.browsers[0].pending_url.as_deref(), Some("http://localhost:5173/app"));
     assert_eq!(app2.return_mode, AppMode::Editor);
 
     // ターミナルは起動したフォルダで、最初のフレームに起動し直す（フォルダが無ければ戻さない）
@@ -1394,8 +1493,8 @@ fn test_session_restores_browser_and_terminal() {
     app3.restore_session_from(&session_dir);
     assert_eq!(app3.mode, AppMode::Terminal);
     assert_eq!(app3.pending_terminal_cwd.as_deref(), Some(work.as_path()));
-    assert!(app3.browser_open);
-    assert_eq!(app3.browser_pending_url, None);
+    assert_eq!(app3.browsers.len(), 1);
+    assert_eq!(app3.browsers[0].pending_url, None);
 
     let gone = dir.join("gone");
     session::append_session(&session_dir, &[tool_session_entry(EntryKind::Terminal, true, Some(gone))]).unwrap();

@@ -104,7 +104,7 @@ impl VzEditorApp {
             }
             entries.push(entry);
         }
-        // ターミナルは起動したフォルダ、ブラウザは表示中の URL を残す（シェルの中身は戻せない）
+        // ターミナルは起動したフォルダ、ブラウザはタブごとに表示中の URL を残す（シェルの中身は戻せない）
         if let Some(term) = &self.terminal {
             entries.push(tool_entry(
                 EntryKind::Terminal,
@@ -112,19 +112,16 @@ impl VzEditorApp {
                 Some(term.cwd().to_path_buf()),
             ));
         }
-        if self.browser_open {
-            let url = self
-                .browser
-                .as_ref()
-                .and_then(vz_browser::EmbeddedBrowser::url)
-                .or_else(|| self.browser_pending_url.clone())
-                .or_else(|| vz_browser::normalize_url(&self.browser_url_input))
-                .filter(|u| !u.starts_with("data:") && !u.starts_with("about:"));
-            entries.push(tool_entry(
+        for (i, tab) in self.browsers.iter().enumerate() {
+            let selected = i == self.active_browser;
+            let mut entry = tool_entry(
                 EntryKind::Browser,
-                self.mode == AppMode::Browser,
-                url.map(PathBuf::from),
-            ));
+                selected && self.mode == AppMode::Browser,
+                tab.session_url().map(PathBuf::from),
+            );
+            // 選択中のタブ（ブラウザを表示していなくても残す）
+            entry.line = usize::from(selected);
+            entries.push(entry);
         }
         entries.push(tool_entry(
             EntryKind::FilerLeft,
@@ -164,11 +161,10 @@ impl VzEditorApp {
                     continue;
                 }
                 EntryKind::Browser => {
-                    self.browser_open = true;
-                    if let Some(url) = &e.path {
-                        let url = url.to_string_lossy().into_owned();
-                        self.browser_url_input = url.clone();
-                        self.browser_pending_url = Some(url);
+                    let url = e.path.as_ref().map(|u| u.to_string_lossy().into_owned());
+                    self.browsers.push(browser_view::BrowserTab::new(url));
+                    if e.line == 1 || e.active {
+                        self.active_browser = self.browsers.len() - 1;
                     }
                     if e.active {
                         tool_mode = Some(AppMode::Browser);

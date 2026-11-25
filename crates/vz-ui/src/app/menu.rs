@@ -303,6 +303,18 @@ impl VzEditorApp {
                     action: MenuAction::ToggleBrowser,
                     enabled: true,
                 },
+                MenuEntry::Item {
+                    label: "ブラウザ: 新しいタブ",
+                    shortcut: "Ctrl+T",
+                    action: MenuAction::NewBrowserTab,
+                    enabled: true,
+                },
+                MenuEntry::Item {
+                    label: "ブラウザ: このタブを閉じる",
+                    shortcut: "Ctrl+W",
+                    action: MenuAction::CloseBrowserTab,
+                    enabled: self.mode == AppMode::Browser,
+                },
                 MenuEntry::Separator,
                 MenuEntry::Item {
                     label: "フォントサイズ拡大",
@@ -544,6 +556,13 @@ impl VzEditorApp {
             MenuAction::ToggleWordWrap => self.toggle_word_wrap(),
             MenuAction::ToggleTerminal => self.toggle_terminal(ctx),
             MenuAction::ToggleBrowser => self.toggle_browser(),
+            MenuAction::NewBrowserTab => {
+                // エディターなどからは新しいタブを開いてブラウザを表示する
+                self.new_browser_tab(None);
+                let idx = self.active_browser;
+                self.show_browser_tab(idx);
+            }
+            MenuAction::CloseBrowserTab => self.close_browser_tab(self.active_browser),
             MenuAction::SelectAll => {
                 if self.mode == AppMode::Editor && !self.is_markdown_view() {
                     self.cur_buf_mut().select_all();

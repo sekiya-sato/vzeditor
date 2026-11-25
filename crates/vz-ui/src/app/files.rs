@@ -388,11 +388,7 @@ impl VzEditorApp {
                 format!("[ターミナル] {name} - VZ Editor")
             }
             AppMode::Browser => {
-                let name = if self.browser_title.is_empty() {
-                    &self.browser_url_input
-                } else {
-                    &self.browser_title
-                };
+                let name = self.active_browser_tab().map(|t| t.label()).unwrap_or_default();
                 format!("[ブラウザ] {name} - VZ Editor")
             }
         }

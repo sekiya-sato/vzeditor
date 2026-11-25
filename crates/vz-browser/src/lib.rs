@@ -17,21 +17,32 @@ pub struct Bounds {
 /// ページ側から届く知らせ。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BrowserEvent {
-    /// ページ上で押された共通ショートカット（`B` = Alt+B、`K` = Alt+K）
+    /// ページ上で押されたショートカット（`B` = Alt+B、`K` = Alt+K、`T` = Ctrl+T、`W` = Ctrl+W、
+    /// `N` = Ctrl+Tab、`P` = Ctrl+Shift+Tab）
     Shortcut(char),
+    /// 新しいウィンドウの要求（`target="_blank"` など）。新しいタブで開く
+    NewWindow(String),
     /// 読み込みを始めた / 終えた URL
     Loading(String),
     Loaded(String),
     TitleChanged(String),
 }
 
-/// ページ上の Alt+B / Alt+K を親（vz）へ知らせる。WebView にフォーカスがあると egui にキーが届かないため。
+/// ページ上の Alt+B / Alt+K とタブ操作（Ctrl+T / Ctrl+W / Ctrl+Tab / Ctrl+Shift+Tab）を親（vz）へ知らせる。
+/// WebView にフォーカスがあると egui にキーが届かないため。
 #[cfg(any(windows, target_os = "macos"))]
 const SHORTCUT_SCRIPT: &str = r#"
 window.addEventListener('keydown', function (e) {
-  if (!e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return;
+  if (e.metaKey) return;
   // code は合成入力などで空になることがあるので keyCode も見る（macOS の Option+B は key が別の文字）
-  var k = (e.code === 'KeyB' || e.keyCode === 66) ? 'B' : (e.code === 'KeyK' || e.keyCode === 75) ? 'K' : '';
+  var is = function (code, kc) { return e.code === code || e.keyCode === kc; };
+  var k = '';
+  if (e.altKey && !e.ctrlKey && !e.shiftKey) {
+    k = is('KeyB', 66) ? 'B' : is('KeyK', 75) ? 'K' : '';
+  } else if (e.ctrlKey && !e.altKey) {
+    if (is('Tab', 9)) k = e.shiftKey ? 'P' : 'N';
+    else if (!e.shiftKey) k = is('KeyT', 84) ? 'T' : is('KeyW', 87) ? 'W' : '';
+  }
   if (!k) return;
   e.preventDefault();
   e.stopPropagation();
@@ -47,6 +58,7 @@ pub const START_PAGE: &str = r#"<!doctype html><meta charset="utf-8"><title>VZ �
 <li>上の欄に URL・ファイルのパス・<code>localhost:3000</code> などを入れて Enter</li>
 <li>エディターで HTML を開いた状態で Alt+B を押すと、そのファイルを表示（表示中なら再読み込み）</li>
 <li>Alt+B でエディターへ戻る / Alt+K でターミナルへ</li>
+<li>Ctrl+T 新しいタブ / Ctrl+W タブを閉じる / Ctrl+Tab・Ctrl+Shift+Tab でタブの切替</li>
 </ul></body>"#;
 
 /// このOSで WebView を埋め込めるか。
@@ -113,9 +125,9 @@ impl EmbeddedBrowser {
                 let _ = title_tx.send(BrowserEvent::TitleChanged(title));
                 title_wake();
             })
-            // 新しいウィンドウ（target="_blank" など）は同じ画面で開く
+            // 新しいウィンドウ（target="_blank" など）は vz の新しいタブで開く
             .with_new_window_req_handler(move |url, _| {
-                let _ = new_tx.send(BrowserEvent::Loading(format!("open:{url}")));
+                let _ = new_tx.send(BrowserEvent::NewWindow(url));
                 new_wake();
                 wry::NewWindowResponse::Deny
             });
@@ -146,19 +158,9 @@ impl EmbeddedBrowser {
         Err("この OS では埋め込みブラウザを使えません（外部ブラウザで開いてください）".to_string())
     }
 
-    /// 届いた知らせ。新しいウィンドウの要求は同じ画面で開く。
-    pub fn poll_events(&mut self) -> Vec<BrowserEvent> {
-        let mut out = Vec::new();
-        while let Ok(ev) = self.rx.try_recv() {
-            if let BrowserEvent::Loading(url) = &ev {
-                if let Some(target) = url.strip_prefix("open:") {
-                    self.load(target);
-                    continue;
-                }
-            }
-            out.push(ev);
-        }
-        out
+    /// 届いた知らせ。
+    pub fn poll_events(&self) -> Vec<BrowserEvent> {
+        self.rx.try_iter().collect()
     }
 
     pub fn set_bounds(&mut self, bounds: Bounds) {

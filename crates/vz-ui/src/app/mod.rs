@@ -236,6 +236,8 @@ enum MenuAction {
     SelectAll,
     ToggleTerminal,
     ToggleBrowser,
+    NewBrowserTab,
+    CloseBrowserTab,
     // About
     ShowHelp,
     ShowAbout,
@@ -446,22 +448,14 @@ pub struct VzEditorApp {
     pending_terminal_cwd: Option<PathBuf>,
     /// ターミナル・ブラウザから戻る画面（エディターかファイラー）
     return_mode: AppMode,
-    /// 簡易ブラウザ（初めて表示するときに WebView を作る）
-    browser: Option<vz_browser::EmbeddedBrowser>,
-    browser_url_input: String,
-    browser_title: String,
-    /// WebView を作ったときに開く URL（作る前に指定されたもの）
-    browser_pending_url: Option<String>,
+    /// 簡易ブラウザのタブ（空ならブラウザは閉じている。WebView は表示するときに作る）
+    browsers: Vec<browser_view::BrowserTab>,
+    /// 選択中のブラウザのタブ
+    active_browser: usize,
     /// WebView を置く領域（直前の描画で決めた、論理座標）
     browser_view_rect: Option<Rect>,
-    /// WebView を作れなかった理由（作り直さない）
-    browser_error: Option<String>,
-    /// 次に表示したときにページへキー入力を渡す
-    browser_focus_page: bool,
     /// URL 欄に入力中（ページの読み込みで書き換えない）
     browser_url_editing: bool,
-    /// ブラウザを開いた（バッファ帯にタブを出す。WebView は表示するときに作る）
-    browser_open: bool,
 }
 
 impl VzEditorApp {
@@ -555,15 +549,10 @@ impl VzEditorApp {
             term_selection: None,
             pending_terminal_cwd: None,
             return_mode: AppMode::Editor,
-            browser: None,
-            browser_url_input: String::new(),
-            browser_title: String::new(),
-            browser_pending_url: None,
+            browsers: Vec::new(),
+            active_browser: 0,
             browser_view_rect: None,
-            browser_error: None,
-            browser_focus_page: false,
             browser_url_editing: false,
-            browser_open: false,
         };
         let session_dir = session::session_dir();
         if restore {
