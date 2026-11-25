@@ -24,21 +24,6 @@
 | `assets/` | `vzeditor.svg`、exe 埋め込み用 `vzeditor.ico`（図柄変更時は `VZ_WRITE_ICO=1 cargo test test_ico_asset_is_up_to_date` で再生成）、`vzeditor.desktop` |
 | `.github/workflows/release.yml` | タグ push で各 OS ビルドと Linux の .deb / .rpm を GitHub Release に公開 |
 
-### 機能の入口
-
-| 機能 | 主な関数 |
-| :--- | :--- |
-| 折り返し（Alt+W） | `toggle_word_wrap`、`WrapLayout`（`wrap_breaks`）、`render_editor_canvas`、`move_cursor_row` |
-| 透過・最前面 | `window_style_key_action` → `execute_menu_action`、`set_bg_opacity` / `set_text_opacity` / `toggle_always_on_top` |
-| 設定の保存 | `save_settings`（`persist_settings` が true のときだけ書く） |
-| 複数ファイルを開く | `open_paths`（ドロップは `handle_dropped_files`、表示は `render_drop_overlay`） |
-| 外部アプリへ送信（Alt+C → C / X / N / M / P） | `handle_send_keys` → `start_send` → `spawn_send`、結果は `poll_send` |
-| 終了時の保存確認 | `request_quit`、`handle_close_request`、`continue_save_and_quit` |
-| 外部でのファイル変更 | `check_external_changes` → `FilerModal::ConfirmReload` → `reload_buffer`。衝突は `save_session_to` → `open_conflict_dialog` → `resolve_conflict` |
-| 保存して終了・復元 | `session::request_save_and_quit`、`poll_quit_request` → `save_session_to`、`restore_session_from` |
-| キー割り当て | `key_scheme`。サクラ互換（既定）は `handle_sakura_key`、VZ 互換は `handle_editor_events`。切替 `toggle_key_scheme` |
-| 範囲選択 | `TextBuffer` の `anchor`・`selection_range`・`delete_range` |
-
 ## コーディング規約
 
 - OS 依存は `#[cfg(windows)]`・`#[cfg(target_os = "macos")]`・`#[cfg(not(any(windows, target_os = "macos")))]` で分け、他 OS のビルドを壊さない。
