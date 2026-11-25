@@ -112,6 +112,21 @@ impl VzEditorApp {
         }
     }
 
+    /// Shift+Enter: カーソル位置のファイルを OS の関連付けで実行する（フォルダは OS のファイル管理で開く）。
+    fn filer_run_selected(&mut self) {
+        let Some(entry) = self.filer.active_pane().selected_entry() else {
+            return;
+        };
+        if entry.is_parent {
+            self.status_message = "親ディレクトリ (..) は実行できません".to_string();
+            return;
+        }
+        self.status_message = match vz_platform::shell::open_with_os(&entry.path) {
+            Ok(()) => format!("実行しました: {}", entry.name),
+            Err(e) => format!("実行できません: {}（{e}）", entry.name),
+        };
+    }
+
     pub(super) fn execute_filer_action(&mut self, ctx: &egui::Context, action: FilerAction) {
         match action {
             FilerAction::ToggleHelp => {
@@ -817,6 +832,7 @@ impl VzEditorApp {
                                     self.status_message = format!("移動エラー: {e}");
                                 }
                             }
+                            Key::Enter if modifiers.shift => self.filer_run_selected(),
                             Key::Enter => {
                                 self.filer_open_selected();
                                 if self.mode == AppMode::Editor {

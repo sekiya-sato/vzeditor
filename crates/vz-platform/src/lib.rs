@@ -4,3 +4,4 @@ pub mod clipboard;
 pub mod dialog;
 pub mod monitor;
 pub mod send_to_app;
+pub mod shell;

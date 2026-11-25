@@ -945,6 +945,37 @@ fn test_filer_enter_opens_marked_files() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+#[test]
+fn test_filer_shift_enter_does_not_open_in_editor() {
+    let dir = std::env::temp_dir().join(format!("vz_run_test_{}", std::process::id()));
+    std::fs::create_dir_all(dir.join("sub")).unwrap();
+    let mut app = make_test_app();
+    app.filer = FilerState::new(dir.join("sub"));
+    app.mode = AppMode::Filer;
+    let pane = app.filer.active_pane_mut();
+    pane.cursor = pane.entries.iter().position(|e| e.is_parent).unwrap();
+    let before = pane.current_dir.clone();
+    let shift_enter = Event::Key {
+        key: Key::Enter,
+        physical_key: Some(Key::Enter),
+        pressed: true,
+        repeat: false,
+        modifiers: egui::Modifiers::SHIFT,
+    };
+    let ctx = egui::Context::default();
+    let input = egui::RawInput {
+        events: vec![shift_enter],
+        ..Default::default()
+    };
+    let _ = ctx.run(input, |ctx| app.handle_filer_events(ctx));
+    // Shift+Enter は実行で、Enter（親フォルダへ移動・エディターで開く）にはならない。
+    // 実際に OS で開く処理は副作用があるので、ここでは .. を対象にして呼び出し経路だけ確かめる。
+    assert_eq!(app.mode, AppMode::Filer);
+    assert_eq!(app.filer.active_pane().current_dir, before);
+    assert!(app.status_message.contains("実行できません"));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 fn key_event(key: Key, alt: bool) -> Event {
     Event::Key {
         key,
