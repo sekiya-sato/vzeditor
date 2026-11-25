@@ -4,6 +4,7 @@
 mod app;
 mod buffer;
 mod dialog;
+mod diff;
 mod filer;
 mod fonts;
 mod icon;

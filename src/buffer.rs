@@ -1,6 +1,7 @@
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 use unicode_width::UnicodeWidthChar;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -64,6 +65,27 @@ pub fn expand_tabs_for_display(s: &str) -> String {
 
 const MAX_UNDO_HISTORY: usize = 200;
 
+/// ディスク上のファイルの状態（更新日時, サイズ）。外部での変更の検知に使う。
+pub type FileStamp = (SystemTime, u64);
+
+/// ファイルの現在の状態。読めなければ None。
+pub fn file_stamp(path: &Path) -> Option<FileStamp> {
+    let meta = fs::metadata(path).ok()?;
+    Some((meta.modified().ok()?, meta.len()))
+}
+
+/// ファイルを読み、改行を `\n` にそろえて行に分ける（元の改行コードも返す）。
+pub fn read_lines(path: &Path) -> io::Result<(Vec<String>, &'static str)> {
+    let raw = fs::read_to_string(path)?;
+    let line_ending = if raw.contains("\r\n") { "\r\n" } else { "\n" };
+    let normalized = raw.replace("\r\n", "\n").replace('\r', "\n");
+    let mut lines: Vec<String> = normalized.split('\n').map(String::from).collect();
+    if lines.is_empty() {
+        lines.push(String::new());
+    }
+    Ok((lines, line_ending))
+}
+
 #[derive(Debug, Clone)]
 struct UndoSnapshot {
     lines: Vec<String>,
@@ -91,6 +113,8 @@ pub struct TextBuffer {
     /// 範囲選択の起点（行, 文字位置）。カーソルとの間が選択範囲。None なら選択なし。
     /// サクラ互換のキー割り当てでのみ使う（VZ 互換では常に None）。
     pub anchor: Option<(usize, usize)>,
+    /// 読み込み・保存した時点のファイルの状態（外部での変更の検知用）。未作成なら None。
+    pub disk_stamp: Option<FileStamp>,
 }
 
 /// 文書内の位置（行, 文字位置）。
@@ -117,17 +141,13 @@ impl TextBuffer {
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
             anchor: None,
+            disk_stamp: None,
         }
     }
 
     pub fn from_file(path: &Path) -> io::Result<Self> {
-        let raw = fs::read_to_string(path)?;
-        let line_ending = if raw.contains("\r\n") { "\r\n" } else { "\n" };
-        let normalized = raw.replace("\r\n", "\n").replace('\r', "\n");
-        let mut lines: Vec<String> = normalized.split('\n').map(String::from).collect();
-        if lines.is_empty() {
-            lines.push(String::new());
-        }
+        let stamp = file_stamp(path);
+        let (lines, line_ending) = read_lines(path)?;
         Ok(Self {
             lines,
             cursor_line: 0,
@@ -141,12 +161,67 @@ impl TextBuffer {
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
             anchor: None,
+            disk_stamp: stamp,
         })
+    }
+
+    /// 読み込み・保存の後に外部でファイルが変更されていれば、現在の状態を返す。
+    /// 未作成のファイル・読めないファイル（削除された場合を含む）は None。
+    pub fn changed_on_disk(&self) -> Option<FileStamp> {
+        let known = self.disk_stamp?;
+        let now = file_stamp(self.file_path.as_deref()?)?;
+        (now != known).then_some(now)
+    }
+
+    /// ディスク上の内容がバッファの内容と同じか（改行コードの違いは無視）。読めなければ false。
+    pub fn same_as_disk(&self) -> bool {
+        let Some(path) = self.file_path.as_deref() else {
+            return false;
+        };
+        read_lines(path).is_ok_and(|(lines, _)| lines == self.lines)
+    }
+
+    /// ファイルを読み直す（外部での変更の取り込み）。読む前の内容は Ctrl+Z で戻せる。
+    pub fn reload_from_disk(&mut self) -> io::Result<()> {
+        let path = self
+            .file_path
+            .clone()
+            .ok_or_else(|| io::Error::other("ファイル名がありません"))?;
+        let stamp = file_stamp(&path);
+        let (lines, line_ending) = read_lines(&path)?;
+        let mut snap = self.current_snapshot();
+        snap.dirty = true;
+        if self.undo_stack.len() >= MAX_UNDO_HISTORY {
+            self.undo_stack.remove(0);
+        }
+        self.undo_stack.push(snap);
+        self.redo_stack.clear();
+        self.lines = lines;
+        self.line_ending = line_ending;
+        self.disk_stamp = stamp;
+        self.dirty = false;
+        self.anchor = None;
+        self.revision = self.revision.wrapping_add(1);
+        let (line, col) = (self.cursor_line, self.cursor_col);
+        self.set_cursor(line, col);
+        Ok(())
+    }
+
+    /// 内容を `lines` に置き換えて未保存にする（Ctrl+Z で戻せる）。
+    pub fn replace_all(&mut self, lines: Vec<String>) {
+        self.push_undo_snapshot();
+        self.lines = if lines.is_empty() { vec![String::new()] } else { lines };
+        self.dirty = true;
+        self.anchor = None;
+        self.revision = self.revision.wrapping_add(1);
+        let (line, col) = (self.cursor_line, self.cursor_col);
+        self.set_cursor(line, col);
     }
 
     pub fn save_to_path(&mut self, path: &Path) -> io::Result<()> {
         let content = self.lines.join(self.line_ending);
         fs::write(path, content)?;
+        self.disk_stamp = file_stamp(path);
         self.file_path = Some(path.to_path_buf());
         self.dirty = false;
         // Mark previous undo snapshots as dirty since they differ from the newly saved file

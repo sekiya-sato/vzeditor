@@ -1,4 +1,5 @@
-use crate::buffer::{char_to_byte_idx, expand_tabs_for_display, TextBuffer, TextPos};
+use crate::buffer::{char_to_byte_idx, expand_tabs_for_display, FileStamp, TextBuffer, TextPos};
+use crate::diff::{self, DiffKind};
 use crate::dialog::{spawn_open_dialog, spawn_save_dialog, DialogResult};
 use crate::filer::{
     copy_entry, create_dir, create_file, delete_entry, format_size, move_entry, rename_entry,
@@ -283,6 +284,19 @@ enum FilerModal {
         name: String,
     },
     ConfirmQuit,
+    /// 開いているファイルが外部で変更された。再読み込みするか確認する
+    ConfirmReload {
+        buf_idx: usize,
+        stamp: FileStamp,
+        /// 表示した時刻（直後の打鍵で答えてしまわないようにする）
+        shown: std::time::Instant,
+    },
+    /// 前回の保存して終了で外部の変更と衝突した。差分を見せて、どちらを採用するか確認する
+    ResolveConflict {
+        path: PathBuf,
+        diff: Vec<(DiffKind, String)>,
+        shown: std::time::Instant,
+    },
 }
 
 struct BufferSlot {
@@ -298,6 +312,10 @@ struct BufferSlot {
     md_blocks: Vec<MdBlock>,
     /// 折り返し表示の行割り（折り返しモードのときだけ作る）
     wrap: Option<WrapLayout>,
+    /// 外部での変更を「再読み込みしない」と答えたときのファイルの状態（同じ変更では再度尋ねない）
+    ignored_stamp: Option<FileStamp>,
+    /// 外部の変更と衝突して上書きしなかった vz の編集内容を持つ無題バッファなら、元のファイルのパス
+    conflict_of: Option<PathBuf>,
 }
 
 /// 折り返し位置（2つ目以降の表示行の先頭の文字位置）。
@@ -409,6 +427,8 @@ impl BufferSlot {
             md_scroll_dirty: false,
             md_cache_rev: None,
             md_blocks: Vec::new(),
+            ignored_stamp: None,
+            conflict_of: None,
         }
     }
 
@@ -487,6 +507,10 @@ pub struct VzEditorApp {
 
     /// `vz --save-and-quit` からの終了要求（監視スレッドが true にする）。テストでは None
     quit_request: Option<Arc<AtomicBool>>,
+    /// 外部での変更を最後に調べた時刻
+    last_disk_check: std::time::Instant,
+    /// 復元後に確認する、外部の変更と衝突したファイル
+    conflict_queue: Vec<PathBuf>,
 
     /// 長い行をウィンドウ幅で折り返して表示する（Alt+W）
     word_wrap: bool,
@@ -578,6 +602,8 @@ impl VzEditorApp {
             select_mode: false,
             clipboard_out: None,
             quit_request: None,
+            last_disk_check: std::time::Instant::now(),
+            conflict_queue: Vec::new(),
             word_wrap: settings.word_wrap,
             wrap_cols: 80,
             window_geometry: settings.window,
@@ -2132,7 +2158,50 @@ impl VzEditorApp {
             }
             let active = idx == self.active_buf;
             let slot = &mut self.buffers[idx];
+            // 衝突の確認待ちの無題バッファは、次の復元でも確認する
+            if let Some(origin) = slot.conflict_of.clone() {
+                let temp = session::temp_path(dir, idx);
+                fs::write(&temp, slot.buffer.lines.join("\n"))?;
+                entries.push(SessionEntry {
+                    kind: EntryKind::Conflict,
+                    line: slot.buffer.cursor_line,
+                    col: slot.buffer.cursor_col,
+                    markdown_view: false,
+                    active,
+                    crlf: slot.buffer.line_ending == "\r\n",
+                    temp: Some(temp),
+                    path: Some(origin),
+                });
+                continue;
+            }
             let buf = &mut slot.buffer;
+            // 読み込み後に外部でファイルが変更されていたら上書きしない。
+            // ファイルは外部の内容のまま開き直し、vz の編集内容は無題バッファに残して復元後に確認する
+            if buf.dirty && buf.changed_on_disk().is_some() && !buf.same_as_disk() {
+                let temp = session::temp_path(dir, idx);
+                fs::write(&temp, buf.lines.join("\n"))?;
+                entries.push(SessionEntry {
+                    kind: EntryKind::File,
+                    line: buf.cursor_line,
+                    col: buf.cursor_col,
+                    markdown_view: slot.markdown_view,
+                    active,
+                    crlf: buf.line_ending == "\r\n",
+                    temp: None,
+                    path: buf.file_path.clone(),
+                });
+                entries.push(SessionEntry {
+                    kind: EntryKind::Conflict,
+                    line: buf.cursor_line,
+                    col: buf.cursor_col,
+                    markdown_view: false,
+                    active: false,
+                    crlf: buf.line_ending == "\r\n",
+                    temp: Some(temp),
+                    path: buf.file_path.clone(),
+                });
+                continue;
+            }
             let mut saved = !buf.dirty;
             if buf.dirty {
                 if let Some(path) = buf.file_path.clone() {
@@ -2195,6 +2264,25 @@ impl VzEditorApp {
                         Err(_) => false,
                     }
                 }
+                EntryKind::Conflict => {
+                    let temp = e.temp.clone().unwrap_or_default();
+                    let origin = e.path.clone().unwrap_or_default();
+                    match fs::read_to_string(&temp) {
+                        Ok(text) => {
+                            let mut buf = TextBuffer::new();
+                            buf.lines = text.split('\n').map(String::from).collect();
+                            buf.line_ending = if e.crlf { "\r\n" } else { "\n" };
+                            buf.dirty = true;
+                            buf.revision = 1;
+                            self.add_buffer(buf);
+                            self.cur_slot_mut().conflict_of = Some(origin.clone());
+                            self.conflict_queue.push(origin);
+                            let _ = fs::remove_file(&temp);
+                            true
+                        }
+                        Err(_) => false,
+                    }
+                }
             };
             if !ok {
                 continue;
@@ -2217,6 +2305,159 @@ impl VzEditorApp {
             "前回の状態を復元しました: {restored} / {} 個のバッファ",
             entries.len()
         );
+    }
+
+    // --- 外部でのファイル変更の検知（再読み込みの確認）と、保存して終了時の衝突の確認 ---
+
+    /// `path` を開いているバッファ（無題を除く）。
+    fn find_buffer_by_path(&self, path: &Path) -> Option<usize> {
+        let target = fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+        self.buffers.iter().position(|slot| {
+            slot.buffer.file_path.as_ref().is_some_and(|p| {
+                p.as_path() == path || fs::canonicalize(p).unwrap_or_else(|_| p.clone()) == target
+            })
+        })
+    }
+
+    /// 外部で変更された（まだ尋ねていない）ファイルのバッファ。
+    fn find_externally_changed(&self) -> Option<(usize, FileStamp)> {
+        self.buffers.iter().enumerate().find_map(|(idx, slot)| {
+            let stamp = slot.buffer.changed_on_disk()?;
+            (slot.ignored_stamp != Some(stamp)).then_some((idx, stamp))
+        })
+    }
+
+    /// 1 秒ごとに開いているファイルの外部での変更を調べ、変わっていれば再読み込みを尋ねる。
+    /// 復元直後は、外部の変更と衝突したファイルの確認を先に出す。
+    fn check_external_changes(&mut self, ctx: &egui::Context) {
+        let interval = std::time::Duration::from_secs(1);
+        if !self.conflict_queue.is_empty() || self.buffers.iter().any(|s| s.buffer.disk_stamp.is_some()) {
+            ctx.request_repaint_after(interval);
+        }
+        if self.filer_modal.is_some()
+            || self.inline_prompt.is_some()
+            || self.pending_dialog.is_some()
+            || self.quit_after_save
+            || self.open_menu.is_some()
+            || self.show_about
+        {
+            return;
+        }
+        if !self.conflict_queue.is_empty() {
+            let path = self.conflict_queue.remove(0);
+            self.open_conflict_dialog(path);
+            return;
+        }
+        if self.last_disk_check.elapsed() < interval {
+            return;
+        }
+        self.last_disk_check = std::time::Instant::now();
+        if let Some((idx, stamp)) = self.find_externally_changed() {
+            if self.mode == AppMode::Editor {
+                self.switch_buffer_to(idx);
+            }
+            self.filer_modal = Some(FilerModal::ConfirmReload {
+                buf_idx: idx,
+                stamp,
+                shown: std::time::Instant::now(),
+            });
+        }
+    }
+
+    /// バッファをファイルから読み直す。
+    fn reload_buffer(&mut self, idx: usize) {
+        let Some(slot) = self.buffers.get_mut(idx) else {
+            return;
+        };
+        let name = slot.buffer.display_name();
+        match slot.buffer.reload_from_disk() {
+            Ok(()) => {
+                slot.ignored_stamp = None;
+                slot.wrap = None;
+                slot.md_scroll_dirty = true;
+                self.need_scroll_to_cursor = true;
+                self.status_message = format!("外部での変更を読み込みました: {name}（元に戻すで読み込み前に戻せます）");
+            }
+            Err(e) => self.status_message = format!("再読み込みできません: {name}: {e}"),
+        }
+    }
+
+    /// 衝突したファイルの確認ダイアログを開く（vz の編集内容を持つ無題バッファとファイルの差分を見せる）。
+    fn open_conflict_dialog(&mut self, path: PathBuf) {
+        let Some(u) = self.buffers.iter().position(|s| s.conflict_of.as_deref() == Some(path.as_path())) else {
+            return;
+        };
+        let disk = crate::buffer::read_lines(&path).map(|(l, _)| l).unwrap_or_default();
+        let diff = diff::unified(&disk, &self.buffers[u].buffer.lines, 3);
+        if diff.is_empty() {
+            // 内容が同じなら確認は要らない
+            self.force_close_buffer(u);
+            self.status_message = format!(
+                "{} は vz の編集内容と同じため、そのまま使います",
+                path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()
+            );
+            return;
+        }
+        self.mode = AppMode::Editor;
+        self.switch_buffer_to(u);
+        self.filer_modal = Some(FilerModal::ResolveConflict {
+            path,
+            diff,
+            shown: std::time::Instant::now(),
+        });
+    }
+
+    /// 衝突の確認の結果。`Some(true)`: vz の内容でファイルを上書き、`Some(false)`: ファイルの内容を採用、
+    /// `None`: あとで決める（無題バッファを残し、次の保存して終了でも引き継ぐ）。
+    fn resolve_conflict(&mut self, path: &Path, adopt_vz: Option<bool>) {
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| path.display().to_string());
+        let Some(u) = self.buffers.iter().position(|s| s.conflict_of.as_deref() == Some(path)) else {
+            return;
+        };
+        match adopt_vz {
+            None => {
+                self.status_message =
+                    format!("{name}: vz の編集内容は [無題] バッファに残しています（次回の復元でも確認します）");
+            }
+            Some(true) => {
+                let lines = self.buffers[u].buffer.lines.clone();
+                let f = match self.find_buffer_by_path(path) {
+                    Some(f) => f,
+                    None => {
+                        self.open_paths(vec![path.to_path_buf()], true);
+                        match self.find_buffer_by_path(path) {
+                            Some(f) => f,
+                            None => return,
+                        }
+                    }
+                };
+                let buf = &mut self.buffers[f].buffer;
+                buf.replace_all(lines);
+                if let Err(e) = buf.save_to_path(path) {
+                    self.switch_buffer_to(f);
+                    self.status_message = format!("{name} に保存できません: {e}（vz の内容は [無題] に残しています）");
+                    return;
+                }
+                self.force_close_buffer(u);
+                if let Some(f) = self.find_buffer_by_path(path) {
+                    self.switch_buffer_to(f);
+                }
+                self.status_message = format!("{name} を vz の編集内容で上書き保存しました");
+            }
+            Some(false) => {
+                self.force_close_buffer(u);
+                if let Some(f) = self.find_buffer_by_path(path) {
+                    if self.buffers[f].buffer.changed_on_disk().is_some() && !self.buffers[f].buffer.dirty {
+                        self.reload_buffer(f);
+                    }
+                    self.switch_buffer_to(f);
+                }
+                self.status_message = format!("{name} はファイル（外部の変更）の内容を採用しました");
+            }
+        }
     }
 
     // --- Clipboard & Edit Menu Helpers ---
@@ -6465,6 +6706,180 @@ impl VzEditorApp {
                     self.status_message = "終了をキャンセルしました".to_string();
                 }
             }
+
+            FilerModal::ConfirmReload { buf_idx, stamp, shown } => {
+                let (idx, stamp) = (*buf_idx, *stamp);
+                // 表示直後の打鍵（入力中の Enter や Y）では答えない
+                let keys_ok = shown.elapsed() >= std::time::Duration::from_millis(400);
+                let mut do_reload = false;
+                let mut do_keep = false;
+                let (name, path, dirty) = self
+                    .buffers
+                    .get(idx)
+                    .map(|s| {
+                        (
+                            s.buffer.display_name(),
+                            s.buffer.file_path.as_ref().map(|p| p.display().to_string()).unwrap_or_default(),
+                            s.buffer.dirty,
+                        )
+                    })
+                    .unwrap_or_default();
+                egui::Window::new("外部での変更")
+                    .collapsible(false)
+                    .resizable(false)
+                    .anchor(Align2::CENTER_CENTER, Vec2::ZERO)
+                    .frame(
+                        egui::Frame::window(&ctx.style())
+                            .fill(STATUS_BG)
+                            .stroke(Stroke::new(1.5_f32, TEXT_AMBER)),
+                    )
+                    .show(ctx, |ui| {
+                        ui.set_min_width(420.0);
+                        ui.label(
+                            egui::RichText::new(format!("「{name}」が外部で変更されました。再読み込みしますか？"))
+                                .font(FontId::monospace(13.5))
+                                .color(TEXT_AMBER),
+                        );
+                        ui.label(
+                            egui::RichText::new(path)
+                                .font(FontId::monospace(12.5))
+                                .color(TEXT_DIM_CYAN),
+                        );
+                        if dirty {
+                            ui.add_space(4.0);
+                            ui.label(
+                                egui::RichText::new(
+                                    "vz での未保存の変更は破棄されます（再読み込み後に「元に戻す」で戻せます）",
+                                )
+                                .font(FontId::monospace(13.0))
+                                .color(TEXT_WHITE),
+                            );
+                        }
+                        ui.add_space(10.0);
+                        ui.horizontal(|ui| {
+                            if ui.button("再読み込み (Y)").clicked()
+                                || (keys_ok && ui.input(|i| i.key_pressed(Key::Y)))
+                            {
+                                do_reload = true;
+                            }
+                            if ui.button("このまま (ESC / N)").clicked()
+                                || (keys_ok && ui.input(|i| i.key_pressed(Key::Escape) || i.key_pressed(Key::N)))
+                            {
+                                do_keep = true;
+                            }
+                        });
+                    });
+
+                if do_reload {
+                    keep_modal = false;
+                    self.reload_buffer(idx);
+                } else if do_keep {
+                    keep_modal = false;
+                    if let Some(slot) = self.buffers.get_mut(idx) {
+                        slot.ignored_stamp = Some(stamp);
+                    }
+                    self.status_message = format!("外部での変更を読み込みませんでした: {name}");
+                } else if idx >= self.buffers.len() {
+                    keep_modal = false;
+                }
+            }
+
+            FilerModal::ResolveConflict { path, diff, shown } => {
+                let keys_ok = shown.elapsed() >= std::time::Duration::from_millis(400);
+                let mut choice: Option<Option<bool>> = None;
+                let name = path
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| path.display().to_string());
+                egui::Window::new("外部の変更との衝突")
+                    .collapsible(false)
+                    .resizable(false)
+                    .anchor(Align2::CENTER_CENTER, Vec2::ZERO)
+                    .frame(
+                        egui::Frame::window(&ctx.style())
+                            .fill(STATUS_BG)
+                            .stroke(Stroke::new(1.5_f32, TEXT_AMBER)),
+                    )
+                    .show(ctx, |ui| {
+                        ui.set_min_width(640.0);
+                        ui.label(
+                            egui::RichText::new(format!(
+                                "「{name}」は前回の保存して終了のとき外部で変更されていたため、上書きしていません。"
+                            ))
+                            .font(FontId::monospace(13.5))
+                            .color(TEXT_AMBER),
+                        );
+                        ui.label(
+                            egui::RichText::new(
+                                "vz の編集内容は [無題] バッファに残しています。どちらを採用しますか？",
+                            )
+                            .font(FontId::monospace(13.5))
+                            .color(TEXT_AMBER),
+                        );
+                        ui.label(
+                            egui::RichText::new(path.display().to_string())
+                                .font(FontId::monospace(12.5))
+                                .color(TEXT_DIM_CYAN),
+                        );
+                        ui.add_space(4.0);
+                        ui.label(
+                            egui::RichText::new("差分:  - ファイル（外部の変更）だけの行   + vz の編集だけの行")
+                                .font(FontId::monospace(12.5))
+                                .color(TEXT_WHITE),
+                        );
+                        egui::ScrollArea::both()
+                            .max_height(360.0)
+                            .max_width(760.0)
+                            .auto_shrink([false, true])
+                            .show(ui, |ui| {
+                                const MAX_LINES: usize = 3000;
+                                for (kind, text) in diff.iter().take(MAX_LINES) {
+                                    let color = match kind {
+                                        DiffKind::Removed => Color32::from_rgb(255, 128, 128),
+                                        DiffKind::Added => Color32::from_rgb(128, 232, 144),
+                                        DiffKind::Skip => TEXT_DIM_CYAN,
+                                        DiffKind::Same => TEXT_WHITE,
+                                    };
+                                    ui.label(
+                                        egui::RichText::new(text)
+                                            .font(FontId::monospace(12.5))
+                                            .color(color),
+                                    );
+                                }
+                                if diff.len() > MAX_LINES {
+                                    ui.label(
+                                        egui::RichText::new(format!("... 他 {} 行", diff.len() - MAX_LINES))
+                                            .font(FontId::monospace(12.5))
+                                            .color(TEXT_DIM_CYAN),
+                                    );
+                                }
+                            });
+                        ui.add_space(10.0);
+                        ui.horizontal(|ui| {
+                            if ui.button("vz の内容で上書き保存 (V)").clicked()
+                                || (keys_ok && ui.input(|i| i.key_pressed(Key::V)))
+                            {
+                                choice = Some(Some(true));
+                            }
+                            if ui.button("ファイルの内容を採用 (F)").clicked()
+                                || (keys_ok && ui.input(|i| i.key_pressed(Key::F)))
+                            {
+                                choice = Some(Some(false));
+                            }
+                            if ui.button("あとで決める (ESC)").clicked()
+                                || (keys_ok && ui.input(|i| i.key_pressed(Key::Escape)))
+                            {
+                                choice = Some(None);
+                            }
+                        });
+                    });
+
+                if let Some(choice) = choice {
+                    keep_modal = false;
+                    let path = path.clone();
+                    self.resolve_conflict(&path, choice);
+                }
+            }
         }
 
         if keep_modal {
@@ -6675,6 +7090,7 @@ impl eframe::App for VzEditorApp {
         self.track_window_geometry(ctx);
         self.handle_close_request(ctx);
         self.poll_quit_request(ctx);
+        self.check_external_changes(ctx);
         self.handle_dropped_files(ctx);
         self.poll_dialog();
         self.poll_send(ctx);
@@ -6866,6 +7282,8 @@ mod tests {
             select_mode: false,
             clipboard_out: None,
             quit_request: None,
+            last_disk_check: std::time::Instant::now(),
+            conflict_queue: Vec::new(),
             word_wrap: false,
             wrap_cols: 80,
             window_geometry: None,
@@ -7037,6 +7455,123 @@ mod tests {
         assert_eq!(app2.active_buf, 2);
         // 状態ファイルと一時保存ファイルは消える
         assert_eq!(fs::read_dir(&session_dir).unwrap().count(), 0);
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_save_session_conflict_keeps_external_change() {
+        let dir = std::env::temp_dir().join(format!("vz_session_conflict_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("README.md");
+        let session_dir = dir.join("session");
+        fs::write(&path, "a\nb\nc").unwrap();
+
+        let mut app = make_test_app();
+        let mut b = TextBuffer::from_file(&path).unwrap();
+        b.set_cursor(0, 1);
+        b.insert_text("-vz");
+        app.buffers = vec![BufferSlot::new(b)];
+        app.active_buf = 0;
+        // vz で編集中に外部でファイルが変更された（サイズを変えて確実に検知させる）
+        fs::write(&path, "a\nb\nc\nexternal line").unwrap();
+
+        app.save_session_to(&session_dir).unwrap();
+        // 外部の変更は上書きしない
+        assert_eq!(fs::read_to_string(&path).unwrap(), "a\nb\nc\nexternal line");
+
+        let mut app2 = make_test_app();
+        app2.buffers = vec![BufferSlot::new(TextBuffer::new())];
+        app2.active_buf = 0;
+        app2.restore_session_from(&session_dir);
+        // ファイルは外部の内容で開き、vz の編集内容は無題バッファに残る
+        assert_eq!(app2.buffers.len(), 2);
+        assert_eq!(app2.buffers[0].buffer.lines, vec!["a", "b", "c", "external line"]);
+        assert!(!app2.buffers[0].buffer.dirty);
+        let u = &app2.buffers[1];
+        assert!(u.buffer.file_path.is_none() && u.buffer.dirty);
+        assert_eq!(u.buffer.lines, vec!["a-vz", "b", "c"]);
+        assert_eq!(u.conflict_of.as_deref(), Some(path.as_path()));
+        assert_eq!(app2.conflict_queue, vec![path.clone()]);
+
+        // 確認ダイアログには差分を出す
+        let queued = app2.conflict_queue.remove(0);
+        app2.open_conflict_dialog(queued);
+        match &app2.filer_modal {
+            Some(FilerModal::ResolveConflict { diff, .. }) => {
+                assert!(diff.iter().any(|(k, t)| *k == DiffKind::Removed && t.ends_with("- external line")));
+                assert!(diff.iter().any(|(k, t)| *k == DiffKind::Added && t.ends_with("+ a-vz")));
+            }
+            _ => panic!("衝突の確認ダイアログが開いていない"),
+        }
+        app2.filer_modal = None;
+
+        // あとで決める: 次の保存して終了でも確認を引き継ぐ
+        app2.resolve_conflict(&path, None);
+        assert_eq!(app2.buffers.len(), 2);
+        app2.save_session_to(&session_dir).unwrap();
+        let mut app3 = make_test_app();
+        app3.buffers = vec![BufferSlot::new(TextBuffer::new())];
+        app3.restore_session_from(&session_dir);
+        assert_eq!(app3.conflict_queue, vec![path.clone()]);
+        assert_eq!(app3.buffers.len(), 2);
+
+        // vz の内容を採用: ファイルを上書きし、無題バッファを閉じる
+        app3.resolve_conflict(&path, Some(true));
+        assert_eq!(fs::read_to_string(&path).unwrap(), "a-vz\nb\nc");
+        assert_eq!(app3.buffers.len(), 1);
+        assert!(!app3.cur_buf().dirty);
+        assert_eq!(app3.cur_buf().lines, vec!["a-vz", "b", "c"]);
+
+        // ファイルの内容を採用: 無題バッファを閉じるだけ
+        app2.resolve_conflict(&path, Some(false));
+        assert_eq!(app2.buffers.len(), 1);
+        assert_eq!(fs::read_to_string(&path).unwrap(), "a-vz\nb\nc");
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_external_change_detect_and_reload() {
+        let dir = std::env::temp_dir().join(format!("vz_external_change_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("a.txt");
+        fs::write(&path, "one\ntwo").unwrap();
+
+        let mut app = make_test_app();
+        app.buffers = vec![BufferSlot::new(TextBuffer::from_file(&path).unwrap())];
+        app.active_buf = 0;
+        assert!(app.find_externally_changed().is_none());
+
+        // 自分で保存した変更は外部の変更として扱わない
+        app.cur_buf_mut().insert_text("x");
+        let p = path.clone();
+        app.cur_buf_mut().save_to_path(&p).unwrap();
+        assert!(app.find_externally_changed().is_none());
+
+        // 外部で変更されると検知する。「このまま」と答えた同じ変更は再度尋ねない
+        fs::write(&path, "one\ntwo\nthree external").unwrap();
+        let (idx, stamp) = app.find_externally_changed().expect("外部の変更を検知していない");
+        assert_eq!(idx, 0);
+        app.buffers[0].ignored_stamp = Some(stamp);
+        assert!(app.find_externally_changed().is_none());
+
+        // 再読み込み（未保存の変更は破棄。元に戻すで戻せる）
+        app.cur_buf_mut().insert_text("y");
+        app.reload_buffer(0);
+        assert_eq!(app.cur_buf().lines, vec!["one", "two", "three external"]);
+        assert!(!app.cur_buf().dirty);
+        assert!(app.buffers[0].ignored_stamp.is_none());
+        assert!(app.find_externally_changed().is_none());
+        assert!(app.cur_buf_mut().undo());
+        assert_eq!(app.cur_buf().lines, vec!["xyone", "two"]);
+        assert!(app.cur_buf().dirty);
+
+        // 削除されたファイルは尋ねない
+        fs::remove_file(&path).unwrap();
+        assert!(app.find_externally_changed().is_none());
 
         let _ = fs::remove_dir_all(&dir);
     }

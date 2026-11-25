@@ -3,6 +3,8 @@
 //! - `vz --save-and-quit`: 起動中の vz に終了を要求する。要求を受けた vz は、パスのある未保存バッファを
 //!   保存し、無題（または保存できなかった）バッファの内容は設定フォルダの `session/` に一時保存して、
 //!   開いていたバッファの一覧を `session/session.ini` に書いてから終了する。
+//!   vz で読み込んだ後に外部でファイルが変更されていた未保存バッファは上書きせず、vz の編集内容を
+//!   一時保存して（`conflict`）、復元後にどちらを採用するか確認する。
 //! - `vz --restore`: `session.ini` のバッファを開き直し（カーソル位置・Markdown ビュー・表示中のバッファも戻す）、
 //!   読み終えた `session.ini` と一時保存ファイルを削除する。
 //!
@@ -31,6 +33,9 @@ pub enum EntryKind {
     File,
     /// 内容を一時保存ファイルから戻し、未保存のバッファにする（無題、または保存できなかったファイル）
     Unsaved,
+    /// 外部での変更と衝突したため上書きしなかった vz の編集内容。一時保存ファイルから無題のバッファに戻し、
+    /// 復元後に `path` のファイルとの差分を見せて、どちらを採用するか確認する
+    Conflict,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -66,6 +71,7 @@ pub fn serialize(entries: &[SessionEntry]) -> String {
         let kind = match e.kind {
             EntryKind::File => "file",
             EntryKind::Unsaved => "unsaved",
+            EntryKind::Conflict => "conflict",
         };
         out.push_str(&format!(
             "{kind}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
@@ -91,6 +97,7 @@ pub fn parse(text: &str) -> Vec<SessionEntry> {
         let kind = match f[0] {
             "file" => EntryKind::File,
             "unsaved" => EntryKind::Unsaved,
+            "conflict" => EntryKind::Conflict,
             _ => continue,
         };
         let opt = |s: &str| (!s.is_empty()).then(|| PathBuf::from(s));
@@ -107,6 +114,7 @@ pub fn parse(text: &str) -> Vec<SessionEntry> {
         let valid = match entry.kind {
             EntryKind::File => entry.path.is_some(),
             EntryKind::Unsaved => entry.temp.is_some(),
+            EntryKind::Conflict => entry.temp.is_some() && entry.path.is_some(),
         };
         if valid {
             entries.push(entry);
@@ -248,8 +256,22 @@ mod tests {
                 temp: Some(PathBuf::from("/tmp/unsaved-1-0.txt")),
                 path: None,
             },
+            SessionEntry {
+                kind: EntryKind::Conflict,
+                line: 1,
+                col: 0,
+                markdown_view: false,
+                active: false,
+                crlf: false,
+                temp: Some(PathBuf::from("/tmp/unsaved-1-1.txt")),
+                path: Some(PathBuf::from("/work/README.md")),
+            },
         ];
-        let text = format!("garbage\nfile\t1\t2\n{}", serialize(&entries));
+        // conflict は元のファイルのパスが無ければ捨てる
+        let text = format!(
+            "garbage\nfile\t1\t2\nconflict\t0\t0\t0\t0\t0\t/tmp/x.txt\t\n{}",
+            serialize(&entries)
+        );
         assert_eq!(parse(&text), entries);
     }
 
