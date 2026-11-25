@@ -1188,6 +1188,12 @@ impl VzEditorApp {
             return true;
         }
 
+        // バッファ切替は Markdown ビューでも使えるよう、ビューのキー処理より先に扱う
+        if ctrl && key == Key::Tab {
+            self.switch_buffer_step(if shift { -1 } else { 1 });
+            return true;
+        }
+
         if in_md_view {
             return self.md_view_key(key, ctrl);
         }
@@ -1271,7 +1277,6 @@ impl VzEditorApp {
                 Key::O => self.trigger_open(),
                 Key::S if shift => self.trigger_save_as(),
                 Key::S => self.trigger_save(),
-                Key::Tab => self.switch_buffer_step(if shift { -1 } else { 1 }),
                 Key::Z => self.menu_undo(),
                 Key::Y => self.menu_redo(),
                 Key::A => {
@@ -8161,5 +8166,22 @@ mod tests {
         app.toggle_key_scheme();
         assert_eq!(app.key_scheme, KeyScheme::Vz);
         assert!(!app.cur_buf().has_selection());
+    }
+
+    #[test]
+    fn test_sakura_ctrl_tab_switches_buffer_in_markdown_view() {
+        let ctx = egui::Context::default();
+        let mut app = make_sakura_app("one");
+        app.buffers.push(BufferSlot::new(TextBuffer::new()));
+        app.cur_slot_mut().markdown_view = true;
+        let ctrl = mods(true, false);
+        run_editor(&ctx, &mut app, ctrl, vec![key_with(Key::Tab, ctrl)]);
+        assert_eq!(app.active_buf, 1);
+        // 戻った先（Markdown ビュー）でも Ctrl+Shift+Tab で切り替えられる
+        app.cur_slot_mut().markdown_view = true;
+        let cs = mods(true, true);
+        run_editor(&ctx, &mut app, cs, vec![key_with(Key::Tab, cs)]);
+        assert_eq!(app.active_buf, 0);
+        assert!(app.cur_slot().markdown_view);
     }
 }
