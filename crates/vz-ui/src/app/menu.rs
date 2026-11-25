@@ -227,6 +227,51 @@ impl VzEditorApp {
                     enabled: can_edit,
                 },
             ],
+            TopMenu::Search => vec![
+                MenuEntry::Item {
+                    label: "検索…",
+                    shortcut: sc("Ctrl+F", "Alt+F"),
+                    action: MenuAction::OpenSearch(SearchDialog::Find),
+                    enabled: in_editor,
+                },
+                MenuEntry::Item {
+                    label: "次を検索",
+                    shortcut: "Alt+N",
+                    action: MenuAction::RepeatSearch(false),
+                    enabled: in_editor,
+                },
+                MenuEntry::Item {
+                    label: "前を検索",
+                    shortcut: sc("Shift+F3", "Alt+Shift+N"),
+                    action: MenuAction::RepeatSearch(true),
+                    enabled: in_editor,
+                },
+                MenuEntry::Item {
+                    label: "行マークの切替",
+                    shortcut: sc("Ctrl+F3", ""),
+                    action: MenuAction::ToggleSearchMarks,
+                    enabled: in_editor,
+                },
+                MenuEntry::Separator,
+                MenuEntry::Item {
+                    label: "置換…",
+                    shortcut: sc("Ctrl+R", "Alt+R"),
+                    action: MenuAction::OpenSearch(SearchDialog::Replace),
+                    enabled: in_editor,
+                },
+                MenuEntry::Item {
+                    label: "Grep…",
+                    shortcut: sc("Ctrl+G", "Alt+G"),
+                    action: MenuAction::OpenSearch(SearchDialog::Grep),
+                    enabled: in_editor,
+                },
+                MenuEntry::Item {
+                    label: "指定行へジャンプ…",
+                    shortcut: sc("Ctrl+J", "Alt+J"),
+                    action: MenuAction::OpenSearch(SearchDialog::Jump),
+                    enabled: in_editor,
+                },
+            ],
             TopMenu::Tools => vec![
                 MenuEntry::Item {
                     label: if in_md_view {
@@ -456,6 +501,13 @@ impl VzEditorApp {
             MenuAction::MoveLineStart => self.execute_editor_action(EditorAction::MoveLineStart),
             MenuAction::MoveLineEnd => self.execute_editor_action(EditorAction::MoveLineEnd),
             MenuAction::ToggleOverwrite => self.toggle_overwrite_mode(),
+            MenuAction::OpenSearch(dialog) => self.open_search_dialog(dialog),
+            MenuAction::RepeatSearch(up) => self.repeat_search(up),
+            MenuAction::ToggleSearchMarks => {
+                if let Err(message) = self.toggle_search_marks() {
+                    self.status_message = message;
+                }
+            }
             MenuAction::ToggleMarkdownView => {
                 if self.mode == AppMode::Editor {
                     self.toggle_markdown_view();
@@ -575,12 +627,7 @@ impl VzEditorApp {
             });
         }
 
-        let mut header_rects: [(TopMenu, Rect); 4] = [
-            (TopMenu::File, Rect::NOTHING),
-            (TopMenu::Edit, Rect::NOTHING),
-            (TopMenu::Tools, Rect::NOTHING),
-            (TopMenu::About, Rect::NOTHING),
-        ];
+        let mut header_rects = TopMenu::ALL.map(|menu| (menu, Rect::NOTHING));
         let mut bar_rect = Rect::NOTHING;
         let mut clicked_header: Option<TopMenu> = None;
         let mut hovered_header: Option<TopMenu> = None;

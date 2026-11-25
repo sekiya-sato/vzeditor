@@ -11,6 +11,7 @@ mod input;
 mod keys;
 mod menu;
 mod restore;
+mod search;
 mod send;
 mod terminal_view;
 mod theme;
@@ -26,6 +27,7 @@ use eframe::egui::{
     self, Align2, Color32, CornerRadius, Event, FontId, ImeEvent, Key, Pos2, Rect, Sense, Stroke,
     StrokeKind, Vec2,
 };
+use search::{SearchDialog, SearchState};
 use std::borrow::Cow;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -121,17 +123,25 @@ const FORK_REPO_URL: &str = env!("CARGO_PKG_REPOSITORY");
 enum TopMenu {
     File,
     Edit,
+    Search,
     Tools,
     About,
 }
 
 impl TopMenu {
-    const ALL: [TopMenu; 4] = [TopMenu::File, TopMenu::Edit, TopMenu::Tools, TopMenu::About];
+    const ALL: [TopMenu; 5] = [
+        TopMenu::File,
+        TopMenu::Edit,
+        TopMenu::Search,
+        TopMenu::Tools,
+        TopMenu::About,
+    ];
 
     fn label(self) -> &'static str {
         match self {
             TopMenu::File => "ファイル",
             TopMenu::Edit => "編集",
+            TopMenu::Search => "検索",
             TopMenu::Tools => "ツール",
             TopMenu::About => "About",
         }
@@ -140,7 +150,8 @@ impl TopMenu {
     fn next(self) -> Self {
         match self {
             TopMenu::File => TopMenu::Edit,
-            TopMenu::Edit => TopMenu::Tools,
+            TopMenu::Edit => TopMenu::Search,
+            TopMenu::Search => TopMenu::Tools,
             TopMenu::Tools => TopMenu::About,
             TopMenu::About => TopMenu::File,
         }
@@ -150,7 +161,8 @@ impl TopMenu {
         match self {
             TopMenu::File => TopMenu::About,
             TopMenu::Edit => TopMenu::File,
-            TopMenu::Tools => TopMenu::Edit,
+            TopMenu::Tools => TopMenu::Search,
+            TopMenu::Search => TopMenu::Edit,
             TopMenu::About => TopMenu::Tools,
         }
     }
@@ -187,6 +199,10 @@ enum MenuAction {
     MoveLineStart,
     MoveLineEnd,
     ToggleOverwrite,
+    // Search
+    OpenSearch(SearchDialog),
+    RepeatSearch(bool),
+    ToggleSearchMarks,
     // Tools
     ToggleMarkdownView,
     FontZoomIn,
@@ -291,6 +307,8 @@ struct BufferSlot {
     md_blocks: Vec<MdBlock>,
     /// 折り返し表示の行割り（折り返しモードのときだけ作る）
     wrap: Option<WrapLayout>,
+    /// 行マークを付けたときの文書リビジョンと論理行。
+    search_marks: Option<(u64, Vec<usize>)>,
     /// 外部での変更を「再読み込みしない」と答えたときのファイルの状態（同じ変更では再度尋ねない）
     ignored_stamp: Option<FileStamp>,
     /// 外部の変更と衝突して上書きしなかった vz の編集内容を持つ無題バッファなら、元のファイルのパス
@@ -301,6 +319,7 @@ impl BufferSlot {
     fn new(buffer: TextBuffer) -> Self {
         Self {
             wrap: None,
+            search_marks: None,
             buffer,
             scroll_x: 0.0,
             scroll_y: 0.0,
@@ -362,6 +381,7 @@ pub struct VzEditorApp {
     pending_dialog: Option<Receiver<DialogResult>>,
     inline_prompt: Option<InlinePathPrompt>,
     filer_modal: Option<FilerModal>,
+    search: SearchState,
 
     // Window style: background-only transparency & always-on-top
     bg_opacity: u8,
@@ -499,6 +519,7 @@ impl VzEditorApp {
             pending_dialog: None,
             inline_prompt: None,
             filer_modal: None,
+            search: SearchState::default(),
             bg_opacity,
             text_opacity,
             always_on_top: settings.always_on_top,
@@ -555,8 +576,18 @@ impl VzEditorApp {
         visuals.window_fill = STATUS_BG;
         visuals.override_text_color = Some(TEXT_WHITE);
         visuals.widgets.noninteractive.bg_fill = BG_NAVY;
-        visuals.widgets.noninteractive.fg_stroke = Stroke::new(1.0_f32, TEXT_WHITE);
-        ctx.set_visuals(visuals);
+        for widget in [
+            &mut visuals.widgets.noninteractive,
+            &mut visuals.widgets.inactive,
+            &mut visuals.widgets.hovered,
+            &mut visuals.widgets.active,
+            &mut visuals.widgets.open,
+        ] {
+            widget.fg_stroke.color = TEXT_WHITE;
+        }
+        // OS のテーマに切り替わっても、紺色の背景と白文字の組み合わせを維持する。
+        ctx.set_theme(egui::Theme::Dark);
+        ctx.set_visuals_of(egui::Theme::Dark, visuals);
     }
 
     fn cur_slot(&self) -> &BufferSlot {
@@ -667,6 +698,9 @@ fn window_style_key_action(
         return None;
     }
     if modifiers.shift {
+        if key == Key::N {
+            return Some(MenuAction::RepeatSearch(true));
+        }
         // 文字の不透明度: 物理キーで判定（無ければ論理キー）
         let phys = physical_key.unwrap_or(key);
         if phys == Key::Minus {
@@ -688,6 +722,11 @@ fn window_style_key_action(
         Key::Num0 => Some(MenuAction::OpacityReset),
         Key::K => Some(MenuAction::ToggleTerminal),
         Key::B => Some(MenuAction::ToggleBrowser),
+        Key::F => Some(MenuAction::OpenSearch(SearchDialog::Find)),
+        Key::R => Some(MenuAction::OpenSearch(SearchDialog::Replace)),
+        Key::G => Some(MenuAction::OpenSearch(SearchDialog::Grep)),
+        Key::J => Some(MenuAction::OpenSearch(SearchDialog::Jump)),
+        Key::N => Some(MenuAction::RepeatSearch(false)),
         _ => None,
     }
 }
@@ -777,6 +816,7 @@ impl eframe::App for VzEditorApp {
         self.render_about_dialog(ctx);
         self.render_filer_modal(ctx);
         self.render_inline_path_prompt(ctx);
+        self.render_search_dialog(ctx);
         self.render_drop_overlay(ctx);
         // WebView は egui の上に重なるので、描画の後で位置と表示を合わせる
         self.sync_browser(ctx, frame);

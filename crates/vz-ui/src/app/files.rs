@@ -178,6 +178,7 @@ impl VzEditorApp {
             return;
         }
         if self.filer_modal.is_some()
+            || self.search.is_open()
             || self.inline_prompt.is_some()
             || self.pending_dialog.is_some()
             || self.quit_after_save
@@ -496,6 +497,7 @@ impl VzEditorApp {
     }
 
     pub(super) fn open_quit_confirm(&mut self) {
+        self.search.close();
         self.quit_after_save = false;
         self.open_menu = None;
         self.show_about = false;

@@ -3,3 +3,5 @@
 pub mod buffer;
 pub mod diff;
 pub mod filer;
+pub mod grep;
+pub mod search;

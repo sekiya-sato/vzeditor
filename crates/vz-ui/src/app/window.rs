@@ -155,6 +155,7 @@ impl VzEditorApp {
     /// 反応しないため重複しない。
     pub(super) fn handle_window_style_keys(&mut self, ctx: &egui::Context) {
         let mut commands: Vec<MenuAction> = Vec::new();
+        let in_editor = self.mode == AppMode::Editor && self.ime_preedit.is_empty();
         ctx.input_mut(|i| {
             i.events.retain(|ev| {
                 if let Event::Key {
@@ -166,6 +167,11 @@ impl VzEditorApp {
                 } = ev
                 {
                     if let Some(action) = window_style_key_action(*key, *physical_key, *modifiers) {
+                        if !in_editor
+                            && matches!(action, MenuAction::OpenSearch(_) | MenuAction::RepeatSearch(_))
+                        {
+                            return true;
+                        }
                         if *pressed {
                             commands.push(action);
                         }

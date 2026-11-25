@@ -9,4 +9,7 @@ publish = false
 
 [dependencies]
 chrono.workspace = true
+globset = "0.4"
+regex = "1"
 unicode-width.workspace = true
+walkdir = "2"

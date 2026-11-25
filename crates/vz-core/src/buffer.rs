@@ -119,7 +119,7 @@ pub struct TextBuffer {
     undo_stack: VecDeque<UndoSnapshot>,
     redo_stack: Vec<UndoSnapshot>,
     /// 範囲選択の起点（行, 文字位置）。カーソルとの間が選択範囲。None なら選択なし。
-    /// サクラ互換のキー割り当てでのみ使う（VZ 互換では常に None）。
+    /// サクラ互換の編集操作と、両方式の検索結果の選択に使う。
     pub anchor: Option<(usize, usize)>,
     /// 読み込み・保存した時点のファイルの状態（外部での変更の検知用）。未作成なら None。
     pub disk_stamp: Option<FileStamp>,

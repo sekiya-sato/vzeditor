@@ -185,11 +185,18 @@ impl VzEditorApp {
     // --- Event Dispatch ---
 
     pub(super) fn handle_events(&mut self, ctx: &egui::Context) {
-        if self.inline_prompt.is_some() || self.filer_modal.is_some() || self.show_about {
+        if self.inline_prompt.is_some()
+            || self.filer_modal.is_some()
+            || self.search.is_open()
+            || self.show_about
+        {
             return;
         }
         self.handle_send_keys(ctx);
         self.handle_window_style_keys(ctx);
+        if self.search.is_open() {
+            return;
+        }
         if self.open_menu.is_some() {
             self.handle_menu_events(ctx);
             return;
@@ -324,12 +331,15 @@ impl VzEditorApp {
                     if self.is_sakura() {
                         if self.handle_sakura_key(key, modifiers, in_md_view) {
                             suppress_text_this_frame = true;
-                            if self.mode == AppMode::Filer {
+                            if self.mode == AppMode::Filer || self.search.is_open() {
                                 return;
                             }
                         }
                         continue;
                     }
+
+                    // VZ の通常キー操作を再開するときは検索結果の選択を解除する。
+                    self.cur_buf_mut().clear_selection();
 
                     // 1. Two-stroke VZ prefix keys (^Q, ^K)
                     match self.prefix {

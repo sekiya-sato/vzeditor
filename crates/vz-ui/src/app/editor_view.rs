@@ -232,6 +232,7 @@ impl VzEditorApp {
                     && !self.show_about
                     && !self.show_help
                     && self.filer_modal.is_none()
+                    && !self.search.is_open()
                     && self.inline_prompt.is_none();
                 if can_click {
                     let sakura = self.is_sakura();
@@ -364,6 +365,9 @@ impl VzEditorApp {
                 let gutter_painter = ui.painter_at(gutter_rect);
                 let cur_line_now = self.cur_buf().cursor_line;
                 let cur_col_now = self.cur_buf().cursor_col;
+                let search_marks = self.cur_slot().search_marks.as_ref()
+                    .filter(|(rev, _)| *rev == self.cur_buf().revision)
+                    .map(|(_, lines)| lines);
 
                 for row_idx in first_row..end_row {
                     let (line_idx, seg) = row_to_line(row_idx);
@@ -391,6 +395,13 @@ impl VzEditorApp {
 
                     // 行番号は論理行の最初の表示行だけ
                     if seg == 0 {
+                        if search_marks.is_some_and(|lines| lines.binary_search(&line_idx).is_ok()) {
+                            gutter_painter.circle_filled(
+                                Pos2::new(gutter_rect.max.x - 4.0, y + self.line_height * 0.5),
+                                2.5,
+                                TEXT_CYAN,
+                            );
+                        }
                         let num_str = format!("{:>width$}", line_idx + 1, width = line_digits);
                         gutter_painter.text(
                             Pos2::new(gutter_rect.max.x - 8.0, y + self.line_height * 0.5),

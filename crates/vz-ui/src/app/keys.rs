@@ -216,6 +216,30 @@ impl VzEditorApp {
             return false;
         }
 
+        if ctrl && !shift {
+            let dialog = match key {
+                Key::F => Some(SearchDialog::Find),
+                Key::R => Some(SearchDialog::Replace),
+                Key::G => Some(SearchDialog::Grep),
+                Key::J => Some(SearchDialog::Jump),
+                _ => None,
+            };
+            if let Some(dialog) = dialog {
+                self.open_search_dialog(dialog);
+                return true;
+            }
+            if key == Key::F3 {
+                if let Err(message) = self.toggle_search_marks() {
+                    self.status_message = message;
+                }
+                return true;
+            }
+        }
+        if !ctrl && shift && key == Key::F3 {
+            self.repeat_search(true);
+            return true;
+        }
+
         // ファンクションキー
         match (key, ctrl, shift) {
             (Key::F1, false, false) => {
@@ -418,10 +442,6 @@ impl VzEditorApp {
                 Key::Delete => {
                     let end = self.word_boundary_pos(true);
                     self.sakura_cut_range(cur, end, true, "単語の右側");
-                }
-                Key::F | Key::R | Key::G | Key::J => {
-                    self.status_message =
-                        "検索・置換・Grep・行ジャンプはまだ対応していません".to_string();
                 }
                 _ => {}
             }

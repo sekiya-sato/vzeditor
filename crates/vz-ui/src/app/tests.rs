@@ -1,7 +1,7 @@
 use super::wrap::wrap_breaks;
 use super::*;
 
-fn make_test_app() -> VzEditorApp {
+pub(super) fn make_test_app() -> VzEditorApp {
     let mut buf = TextBuffer::new();
     buf.file_path = Some(PathBuf::from("notes.md"));
     buf.insert_text("# Title\n\n**Bold** and `code`\n");
@@ -30,6 +30,7 @@ fn make_test_app() -> VzEditorApp {
         pending_dialog: None,
         inline_prompt: None,
         filer_modal: None,
+        search: SearchState::default(),
         bg_opacity: 100,
         text_opacity: 100,
         always_on_top: false,
@@ -773,6 +774,19 @@ fn test_window_style_keys_do_not_overlap() {
     );
     assert_eq!(window_style_key_action(Key::K, Some(Key::K), alt_shift), None);
     assert_eq!(window_style_key_action(Key::B, Some(Key::B), ctrl), None);
+    for (key, dialog) in [
+        (Key::F, SearchDialog::Find),
+        (Key::R, SearchDialog::Replace),
+        (Key::G, SearchDialog::Grep),
+        (Key::J, SearchDialog::Jump),
+    ] {
+        assert_eq!(window_style_key_action(key, Some(key), alt), Some(MenuAction::OpenSearch(dialog)));
+        assert_eq!(window_style_key_action(key, Some(key), ctrl), None);
+        assert_eq!(window_style_key_action(key, Some(key), alt_shift), None);
+    }
+    assert_eq!(window_style_key_action(Key::N, None, alt), Some(MenuAction::RepeatSearch(false)));
+    assert_eq!(window_style_key_action(Key::N, None, alt_shift), Some(MenuAction::RepeatSearch(true)));
+
     // Alt+P（Markdown 切替）と Alt+±は奪わない
     assert_eq!(window_style_key_action(Key::P, Some(Key::P), alt), None);
     assert_eq!(
@@ -1166,9 +1180,10 @@ fn test_sakura_line_and_word_cut_keys() {
     app.cur_buf_mut().insert_text("dup");
     run_editor(&ctx, &mut app, ctrl, vec![key_with(Key::I, ctrl)]);
     assert_eq!(app.cur_buf().lines, vec!["dup", "dup"]);
-    // VZ のキーは効かない（Ctrl+Y は Redo、Ctrl+G は未対応で文字も入らない）
+    // サクラ互換の Ctrl+G は Grep を開き、VZ の1文字削除は実行しない。
     run_editor(&ctx, &mut app, ctrl, vec![key_with(Key::G, ctrl)]);
     assert_eq!(app.cur_buf().lines, vec!["dup", "dup"]);
+    assert!(app.search.is_open());
 }
 
 #[test]
@@ -1392,4 +1407,60 @@ fn test_terminal_closes_when_shell_exits() {
     assert!(app.terminal.is_none());
     assert_eq!(app.mode, AppMode::Editor);
     assert!(app.status_message.contains("ターミナルを閉じました"));
+}
+
+#[test]
+fn light_system_theme_keeps_dialog_controls_readable() {
+    fn has_white_text(shape: &egui::Shape, label: &str) -> bool {
+        match shape {
+            egui::Shape::Text(text) => {
+                text.galley.text() == label
+                    && text.override_text_color.unwrap_or(text.fallback_color) == TEXT_WHITE
+            }
+            egui::Shape::Vec(shapes) => shapes.iter().any(|shape| has_white_text(shape, label)),
+            _ => false,
+        }
+    }
+
+    let mut app = make_test_app();
+    let ctx = egui::Context::default();
+    VzEditorApp::configure_visuals(&ctx);
+    ctx.all_styles_mut(|style| style.animation_time = 0.0);
+    let input = egui::RawInput {
+        screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(1024.0, 680.0))),
+        system_theme: Some(egui::Theme::Light),
+        ..Default::default()
+    };
+
+    for (dialog, labels) in [
+        (SearchDialog::Find, ["検索条件", "正規表現", "下検索"]),
+        (SearchDialog::Replace, ["置換後", "正規表現", "すべて置換"]),
+        (SearchDialog::Grep, ["検索場所", "サブフォルダーも検索", "該当行"]),
+        (SearchDialog::Jump, ["行番号", "改行単位", "ジャンプ"]),
+    ] {
+        app.open_search_dialog(dialog);
+        let _ = ctx.run(input.clone(), |ctx| app.render_search_dialog(ctx));
+        let frame = ctx.run(input.clone(), |ctx| app.render_search_dialog(ctx));
+        for label in labels {
+            assert!(
+                frame.shapes.iter().any(|s| has_white_text(&s.shape, label)),
+                "{dialog:?}: {label} needs white text under the light system theme"
+            );
+        }
+        app.search.close();
+    }
+
+    app.inline_prompt = Some(InlinePathPrompt {
+        is_save: false,
+        path_input: "sample.txt".into(),
+        just_opened: true,
+    });
+    let _ = ctx.run(input.clone(), |ctx| app.render_inline_path_prompt(ctx));
+    let frame = ctx.run(input, |ctx| app.render_inline_path_prompt(ctx));
+    for label in ["sample.txt", "実行 (Enter)", "キャンセル (ESC)"] {
+        assert!(
+            frame.shapes.iter().any(|s| has_white_text(&s.shape, label)),
+            "File dialog: {label} needs white text under the light system theme"
+        );
+    }
 }

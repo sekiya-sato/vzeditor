@@ -289,6 +289,7 @@ impl VzEditorApp {
             ctx.request_repaint_after(interval);
         }
         if self.filer_modal.is_some()
+            || self.search.is_open()
             || self.inline_prompt.is_some()
             || self.pending_dialog.is_some()
             || self.quit_after_save
