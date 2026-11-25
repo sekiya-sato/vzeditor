@@ -238,6 +238,26 @@ impl VzEditorApp {
                     action: MenuAction::ToggleMarkdownView,
                     enabled: in_editor,
                 },
+                MenuEntry::Item {
+                    label: if self.mode == AppMode::Terminal {
+                        "ターミナルから戻る"
+                    } else {
+                        "ターミナル"
+                    },
+                    shortcut: "Alt+K",
+                    action: MenuAction::ToggleTerminal,
+                    enabled: true,
+                },
+                MenuEntry::Item {
+                    label: if self.mode == AppMode::Browser {
+                        "ブラウザから戻る"
+                    } else {
+                        "ブラウザ（編集中の HTML を表示）"
+                    },
+                    shortcut: "Alt+B",
+                    action: MenuAction::ToggleBrowser,
+                    enabled: true,
+                },
                 MenuEntry::Separator,
                 MenuEntry::Item {
                     label: "フォントサイズ拡大",
@@ -423,8 +443,8 @@ impl VzEditorApp {
             MenuAction::SaveAs => self.trigger_save_as(),
             MenuAction::CloseBuffer => self.close_current_buffer(),
             MenuAction::ToggleFiler => match self.mode {
-                AppMode::Editor => self.enter_filer(),
                 AppMode::Filer => self.enter_editor(),
+                _ => self.enter_filer(),
             },
             MenuAction::Quit => self.request_quit(ctx),
             MenuAction::Undo => self.menu_undo(),
@@ -470,6 +490,8 @@ impl VzEditorApp {
             MenuAction::NewSessionCodex => self.start_send(SendTarget::CodexNewSession),
             MenuAction::ToggleKeyScheme => self.toggle_key_scheme(),
             MenuAction::ToggleWordWrap => self.toggle_word_wrap(),
+            MenuAction::ToggleTerminal => self.toggle_terminal(ctx),
+            MenuAction::ToggleBrowser => self.toggle_browser(),
             MenuAction::SelectAll => {
                 if self.mode == AppMode::Editor && !self.is_markdown_view() {
                     self.cur_buf_mut().select_all();

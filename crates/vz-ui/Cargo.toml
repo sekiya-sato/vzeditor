@@ -1,6 +1,6 @@
 [package]
 name = "vz-ui"
-description = "VZ Editor: 画面・メニュー・キー操作・Markdown ビュー（eframe/egui）"
+description = "VZ Editor: 画面・メニュー・キー操作・Markdown ビュー・ターミナルとブラウザの画面（eframe/egui）"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -13,6 +13,8 @@ unicode-width.workspace = true
 vz-config.workspace = true
 vz-core.workspace = true
 vz-platform.workspace = true
+vz-terminal.workspace = true
+vz-browser.workspace = true
 
 # build.rs でビルド日時（About の Build At）を埋め込む
 [build-dependencies]

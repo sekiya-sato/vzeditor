@@ -337,6 +337,54 @@ impl VzEditorApp {
                             }
                         });
                     }
+                    AppMode::Terminal | AppMode::Browser => {
+                        let (badge, badge_bg) = if self.mode == AppMode::Terminal {
+                            ("TERM", STATUS_BADGE_VIEW_BG)
+                        } else {
+                            ("WEB", STATUS_BADGE_FILER_BG)
+                        };
+                        egui::Frame::NONE
+                            .fill(badge_bg)
+                            .corner_radius(CornerRadius::same(2))
+                            .inner_margin(egui::Margin::symmetric(6, 1))
+                            .show(ui, |ui| {
+                                ui.label(
+                                    egui::RichText::new(badge)
+                                        .font(FontId::monospace(13.0))
+                                        .strong()
+                                        .color(STATUS_BADGE_FG),
+                                );
+                            });
+                        let avail_msg_w = ui.available_width() - 250.0;
+                        if !self.status_message.is_empty() && avail_msg_w > 48.0 {
+                            ui.add_space(10.0);
+                            let max_cols = ((avail_msg_w - 10.0) / 7.8).floor().max(6.0) as usize;
+                            let msg_color = if self.status_message.contains("エラー") {
+                                TEXT_AMBER
+                            } else {
+                                TEXT_CYAN
+                            };
+                            ui.label(
+                                egui::RichText::new(truncate_display_right(&self.status_message, max_cols))
+                                    .font(FontId::monospace(13.0))
+                                    .color(msg_color),
+                            );
+                        }
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if let Some(cmd) = Self::paint_font_size_controls(ui, self.font_size) {
+                                font_cmd = Some(cmd);
+                            }
+                            ui.add_space(6.0);
+                            if let Some(cmd) = Self::paint_window_style_controls(
+                                ui,
+                                self.bg_opacity,
+                                self.text_opacity,
+                                self.always_on_top,
+                            ) {
+                                win_cmd = Some(cmd);
+                            }
+                        });
+                    }
                 });
             });
 
@@ -433,6 +481,8 @@ impl VzEditorApp {
         match self.mode {
             AppMode::Editor => self.render_editor_fkey_bar(ctx),
             AppMode::Filer => self.render_filer_fkey_bar(ctx),
+            // F キーはシェル・ページへ渡すので案内しない
+            AppMode::Terminal | AppMode::Browser => {}
         }
     }
 

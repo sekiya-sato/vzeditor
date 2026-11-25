@@ -17,13 +17,15 @@
 | `crates/vz-platform` | OS 固有処理: ファイルダイアログ、クリップボード読み取り、モニター判定、Claude Code / Codex / GitHub Desktop への送信 |
 | `crates/vz-config` | 設定（`settings.ini`）と `--save-and-quit` / `--restore`（`session`） |
 | `crates/vz-core` | UI に依存しない編集モデル: バッファ、差分、ファイラーの操作 |
+| `crates/vz-terminal` | 組み込みターミナル: PTY（ConPTY / openpty、portable-pty）でシェルを起動し、出力を vt100 の画面モデルへ。キーのバイト列変換、シェルの選択（Windows は WSL2） |
+| `crates/vz-browser` | 簡易ブラウザ: wry で WebView を子として埋め込む（Windows / macOS。Linux は非対応）、URL の正規化 |
 | `tests/fixtures/markdown_sample.md` | Markdown テスト用固定データ。編集しない |
 | `assets/` | `vzeditor.svg`、exe 埋め込み用 `vzeditor.ico`（図柄変更時は `VZ_WRITE_ICO=1 cargo test test_ico_asset_is_up_to_date` で再生成）、`vzeditor.desktop` |
 | `.github/workflows/release.yml` | タグ push で各 OS ビルドと Linux の .deb / .rpm を GitHub Release に公開 |
 
 ## コーディング規約
 
-- クレートの役割と依存の向きは基本設計の「クレート構成」に従う。vz-core・vz-config・vz-platform は egui に依存させない。中身の無いクレートは作らず、分けすぎない（同じ層の中はモジュールで分ける）。
+- クレートの役割と依存の向きは基本設計の「クレート構成」に従う。vz-core・vz-config・vz-platform・vz-terminal・vz-browser は egui に依存させない。中身の無いクレートは作らず、分けすぎない（同じ層の中はモジュールで分ける）。
 - OS 依存は原則 vz-platform に置く（egui に結び付く日本語フォントの読み込みは vz-ui の `fonts`）。`#[cfg(windows)]`・`#[cfg(target_os = "macos")]`・`#[cfg(not(any(windows, target_os = "macos")))]` で分け、他 OS のビルドを壊さない。
 - 背景色は `bg(色)` を通す。文字透過したパネル内の背景は `bg_painter()`。ダイアログ・メニューは常に不透明。新しいメインパネルは先頭で `ui.multiply_opacity(window_style::text_alpha())`。
 - キー操作の追加・変更は、サクラ互換と VZ 互換の両方の扱いを決め、キー対比・README・基本設計・ヘルプ（F1）・メニューを揃えて更新する（README の記載漏れが起きやすい）。
@@ -50,7 +52,7 @@
 
 - Windows は MSVC ツールチェーン（`stable-x86_64-pc-windows-msvc` と Visual Studio の C++ デスクトップ開発）。Git Bash では coreutils の `link.exe` が優先されリンクに失敗するので PowerShell を使う。
 - `cargo` が見つからなければ `$env:PATH = "$env:USERPROFILE\.cargo\bin;$env:PATH"`。
-- 他 OS の型チェックは `cargo check --all-targets --target x86_64-unknown-linux-gnu`（macOS は `aarch64-apple-darwin`）。GNU ツールチェーンは `dlltool` が要り失敗するので使わない。
+- 他 OS の型チェックは `cargo check --all-targets --target x86_64-unknown-linux-gnu`（macOS は `aarch64-apple-darwin`）。GNU ツールチェーンは `dlltool` が要り失敗するので使わない。macOS は wry（objc2 の `exception`）が C コンパイラを要するため、clang が無い Windows では型チェックできない。
 - `cargo` はルートで実行すれば全クレートが対象（`default-members`）。特定のクレートだけなら `-p vz-core` など。
 - ビルド日時は `crates/vz-ui/build.rs` が `VZ_BUILD_AT` として埋め込み、About に表示する。
 
@@ -67,6 +69,7 @@
 - SendKeys の前はウィンドウ内をクリックして前面化する（Alt 単独で前面化するとシステムメニューに入る）。
 - 透過の確認画像はデスクトップが写るので確認後に削除する。確認で変えた `%APPDATA%\vzeditor\settings.ini` は元に戻す。
 - 次はユーザーに確認を依頼し、エージェントは試さない: ドラッグ＆ドロップ（合成では成立しないことがある）、Alt+C の送信・新規セッション・GitHub Desktop の Push（実際に送信・Push される）。
+- ブラウザ（WebView2）の中のキーは、SendKeys の合成入力だと `KeyboardEvent.code` が空になるなど実キーと違う。ページ内のキー操作の判定は `keyCode` も見る。
 - 未確認の OS は README・報告に明記する（現状の実機確認は Windows 11 のみ）。
 
 ## Release 手順（Windows 版）

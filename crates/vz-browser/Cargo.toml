@@ -1,0 +1,16 @@
+[package]
+name = "vz-browser"
+description = "VZ Editor: 簡易ブラウザ（ウィンドウに WebView を子として埋め込む）"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+raw-window-handle = "0.6"
+
+# WebView: Windows は WebView2、macOS は WKWebView。
+# Linux は wry が GTK のウィンドウを要し winit（Wayland）に埋め込めないため、外部ブラウザで開く
+[target.'cfg(any(windows, target_os = "macos"))'.dependencies]
+wry = { version = "0.57", default-features = false, features = ["os-webview"] }

@@ -1,0 +1,13 @@
+[package]
+name = "vz-terminal"
+description = "VZ Editor: 組み込みターミナル（PTY でシェルを起動し、VT 出力を画面モデルにする）"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+# PTY: Windows は ConPTY、Linux / macOS は openpty。画面モデルは vt100
+[dependencies]
+portable-pty = "0.9"
+vt100 = "0.16"

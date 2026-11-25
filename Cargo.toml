@@ -15,6 +15,8 @@ vz-core = { path = "crates/vz-core" }
 vz-config = { path = "crates/vz-config" }
 vz-platform = { path = "crates/vz-platform" }
 vz-ui = { path = "crates/vz-ui" }
+vz-terminal = { path = "crates/vz-terminal" }
+vz-browser = { path = "crates/vz-browser" }
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 eframe = { version = "0.31", default-features = false, features = ["default_fonts", "glow", "wayland", "x11"] }
 unicode-width = "0.2"

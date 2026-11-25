@@ -378,6 +378,22 @@ impl VzEditorApp {
                 let dir = self.filer.active_pane().current_dir.display();
                 format!("[2画面ファイラー] {} - VZ Editor", dir)
             }
+            AppMode::Terminal => {
+                let name = self
+                    .terminal
+                    .as_ref()
+                    .map(|t| t.title().unwrap_or(t.program()).to_string())
+                    .unwrap_or_default();
+                format!("[ターミナル] {name} - VZ Editor")
+            }
+            AppMode::Browser => {
+                let name = if self.browser_title.is_empty() {
+                    &self.browser_url_input
+                } else {
+                    &self.browser_title
+                };
+                format!("[ブラウザ] {name} - VZ Editor")
+            }
         }
     }
 

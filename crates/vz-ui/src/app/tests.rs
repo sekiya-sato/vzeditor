@@ -49,6 +49,15 @@ fn make_test_app() -> VzEditorApp {
         wrap_cols: 80,
         window_geometry: None,
         pending_window_restore: None,
+        terminal: None,
+        return_mode: AppMode::Editor,
+        browser: None,
+        browser_url_input: String::new(),
+        browser_title: String::new(),
+        browser_pending_url: None,
+        browser_view_rect: None,
+        browser_error: None,
+        browser_focus_page: false,
     }
 }
 
@@ -750,6 +759,17 @@ fn test_window_style_keys_do_not_overlap() {
         Some(MenuAction::ToggleWordWrap)
     );
     assert_eq!(window_style_key_action(Key::W, Some(Key::W), alt_shift), None);
+    // Alt+K / Alt+B: ターミナル / ブラウザ（Shift・Ctrl 付きは対象外）
+    assert_eq!(
+        window_style_key_action(Key::K, Some(Key::K), alt),
+        Some(MenuAction::ToggleTerminal)
+    );
+    assert_eq!(
+        window_style_key_action(Key::B, Some(Key::B), alt),
+        Some(MenuAction::ToggleBrowser)
+    );
+    assert_eq!(window_style_key_action(Key::K, Some(Key::K), alt_shift), None);
+    assert_eq!(window_style_key_action(Key::B, Some(Key::B), ctrl), None);
     // Alt+P（Markdown 切替）と Alt+±は奪わない
     assert_eq!(window_style_key_action(Key::P, Some(Key::P), alt), None);
     assert_eq!(
@@ -1187,4 +1207,52 @@ fn test_sakura_ctrl_tab_switches_buffer_in_markdown_view() {
     run_editor(&ctx, &mut app, cs, vec![key_with(Key::Tab, cs)]);
     assert_eq!(app.active_buf, 0);
     assert!(app.cur_slot().markdown_view);
+}
+
+#[test]
+fn test_browser_toggle_returns_to_previous_mode() {
+    let mut app = make_test_app();
+    app.toggle_browser();
+    assert_eq!(app.mode, AppMode::Browser);
+    app.toggle_browser();
+    assert_eq!(app.mode, AppMode::Editor);
+
+    // ファイラーから開いたらファイラーへ戻る
+    app.enter_filer();
+    app.toggle_browser();
+    assert_eq!(app.mode, AppMode::Browser);
+    app.toggle_browser();
+    assert_eq!(app.mode, AppMode::Filer);
+}
+
+#[test]
+fn test_browser_opens_edited_html_file() {
+    let dir = std::env::temp_dir().join(format!("vz_browser_test_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let html = dir.join("page.html");
+    std::fs::write(&html, "<p>hi</p>").unwrap();
+
+    let mut app = make_test_app();
+    app.open_file_in_buffer(html.clone());
+    app.toggle_browser();
+    assert_eq!(app.mode, AppMode::Browser);
+    // WebView を作る前なので、作るときに開く URL として残る
+    let url = app.browser_pending_url.clone().expect("pending url");
+    assert!(url.starts_with("file:///") && url.ends_with("/page.html"), "{url}");
+    assert_eq!(app.browser_url_input, url);
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_browser_url_input_is_normalized() {
+    let mut app = make_test_app();
+    app.toggle_browser();
+    app.browser_url_input = "localhost:5173".to_string();
+    app.navigate_browser_input();
+    assert_eq!(app.browser_pending_url.as_deref(), Some("http://localhost:5173"));
+
+    app.browser_url_input = "not a url".to_string();
+    app.navigate_browser_input();
+    assert!(app.status_message.contains("URL を解釈できません"));
 }

@@ -14,6 +14,8 @@ impl VzEditorApp {
         let title = match self.mode {
             AppMode::Editor => "VZ Editor - エディタ キーバインド (F1 / ESC / クリックで閉じる)",
             AppMode::Filer => "VZ Filer - 2画面ファイラー操作 (F1 / ESC / クリックで閉じる)",
+            AppMode::Terminal => "VZ Terminal - ターミナル操作 (クリックで閉じる)",
+            AppMode::Browser => "VZ Browser - 簡易ブラウザ操作 (クリックで閉じる)",
         };
         modal_window(ctx, title, TEXT_CYAN)
             .open(&mut open)
@@ -42,6 +44,7 @@ impl VzEditorApp {
                         ("Alt+C → C / Alt+C → X", "バッファ全体を Claude Code / Codex へ送信"),
                         ("Alt+C → N / Alt+C → M", "Claude Code / Codex で新規セッション (Ctrl+N)"),
                         ("Alt+C → P", "GitHub Desktop のカレントリポジトリを Push"),
+                        ("Alt+K / Alt+B", "ターミナル / ブラウザ (編集中の HTML を表示) の切替"),
                         ("ツール→キー割り当て", "VZ 互換へ切替"),
                     ],
                     AppMode::Editor => &[
@@ -65,6 +68,7 @@ impl VzEditorApp {
                         ("Alt+C → C / Alt+C → X", "バッファ全体を Claude Code / Codex へ送信"),
                         ("Alt+C → N / Alt+C → M", "Claude Code / Codex で新規セッション (Ctrl+N)"),
                         ("Alt+C → P", "GitHub Desktop のカレントリポジトリを Push"),
+                        ("Alt+K / Alt+B", "ターミナル / ブラウザ (編集中の HTML を表示) の切替"),
                         ("Alt+↑ / Alt+↓ / Alt+0", "背景を濃く / 薄く / 透過解除"),
                         ("Alt+Shift+「+」「-」「0」", "文字を濃く / 薄く / 透過解除"),
                     ],
@@ -82,6 +86,24 @@ impl VzEditorApp {
                         ("F10", "アプリケーション終了"),
                         ("Alt+T / Alt+↑ / Alt+↓", "最前面固定 / 背景の濃さ変更"),
                         ("Alt+Shift+「+」「-」「0」", "文字の濃さ変更 / 透過解除"),
+                        ("Alt+K / Alt+B", "ターミナル / ブラウザの切替"),
+                    ],
+                    AppMode::Terminal => &[
+                        ("Alt+K", "元の画面 (エディター / ファイラー) へ戻る"),
+                        ("Alt+B", "ブラウザへ切替"),
+                        ("その他のキー", "シェルへ送る (Ctrl+C は中断、F キーも送る)"),
+                        ("Ctrl+V / Shift+Ins", "貼り付け"),
+                        ("Ctrl+Shift+C", "見えている画面の文字をコピー"),
+                        ("ホイール", "履歴 (スクロールバック) を表示。キー入力で最新へ"),
+                        ("Enter (終了後)", "シェルを再起動"),
+                        ("Alt+T / Alt+↑↓0 / Alt+W", "透過・最前面などは共通 (シェルへは送らない)"),
+                    ],
+                    AppMode::Browser => &[
+                        ("Alt+B", "元の画面へ戻る (エディターで HTML 編集中なら Alt+B で表示・再読込)"),
+                        ("Alt+K", "ターミナルへ切替"),
+                        ("URL 欄 + Enter", "URL・ファイルのパス・localhost:ポートを開く"),
+                        ("F5 / Alt+← / Alt+→", "再読み込み / 戻る / 進む"),
+                        ("外部ブラウザ", "表示中のページを既定のブラウザで開く"),
                     ],
                 };
                 egui::Grid::new("vz_help_grid")

@@ -2,6 +2,7 @@
 //! 処理は役割ごとの子モジュールに分ける（docs/基本設計.md の「クレート構成」）。
 
 mod bars;
+mod browser_view;
 mod dialogs;
 mod editor_view;
 mod files;
@@ -11,6 +12,7 @@ mod keys;
 mod menu;
 mod restore;
 mod send;
+mod terminal_view;
 mod theme;
 mod window;
 mod wrap;
@@ -58,6 +60,10 @@ fn calc_line_height(font_size: f32) -> f32 {
 enum AppMode {
     Editor,
     Filer,
+    /// 組み込みターミナル（Alt+K）
+    Terminal,
+    /// 簡易ブラウザ（Alt+B）
+    Browser,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -202,6 +208,8 @@ enum MenuAction {
     NewSessionCodex,
     ToggleKeyScheme,
     SelectAll,
+    ToggleTerminal,
+    ToggleBrowser,
     // About
     ShowHelp,
     ShowAbout,
@@ -399,6 +407,23 @@ pub struct VzEditorApp {
     window_geometry: Option<WindowGeometry>,
     /// 起動直後に合わせる前回の位置（合わせ終わるまで window_geometry を更新しない）
     pending_window_restore: Option<WindowGeometry>,
+
+    /// 組み込みターミナル（Alt+K で初めて開いたときに起動する）
+    terminal: Option<vz_terminal::Terminal>,
+    /// ターミナル・ブラウザから戻る画面（エディターかファイラー）
+    return_mode: AppMode,
+    /// 簡易ブラウザ（初めて表示するときに WebView を作る）
+    browser: Option<vz_browser::EmbeddedBrowser>,
+    browser_url_input: String,
+    browser_title: String,
+    /// WebView を作ったときに開く URL（作る前に指定されたもの）
+    browser_pending_url: Option<String>,
+    /// WebView を置く領域（直前の描画で決めた、論理座標）
+    browser_view_rect: Option<Rect>,
+    /// WebView を作れなかった理由（作り直さない）
+    browser_error: Option<String>,
+    /// 次に表示したときにページへキー入力を渡す
+    browser_focus_page: bool,
 }
 
 impl VzEditorApp {
@@ -487,6 +512,15 @@ impl VzEditorApp {
             wrap_cols: 80,
             window_geometry: settings.window,
             pending_window_restore: settings.window,
+            terminal: None,
+            return_mode: AppMode::Editor,
+            browser: None,
+            browser_url_input: String::new(),
+            browser_title: String::new(),
+            browser_pending_url: None,
+            browser_view_rect: None,
+            browser_error: None,
+            browser_focus_page: false,
         };
         let session_dir = session::session_dir();
         if restore {
@@ -643,6 +677,8 @@ fn window_style_key_action(
         Key::ArrowUp => Some(MenuAction::OpacityUp),
         Key::ArrowDown => Some(MenuAction::OpacityDown),
         Key::Num0 => Some(MenuAction::OpacityReset),
+        Key::K => Some(MenuAction::ToggleTerminal),
+        Key::B => Some(MenuAction::ToggleBrowser),
         _ => None,
     }
 }
@@ -694,7 +730,7 @@ impl eframe::App for VzEditorApp {
         [0.0, 0.0, 0.0, 0.0]
     }
 
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+    fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         window_style::set_opacity_percent(self.bg_opacity);
         window_style::set_text_opacity_percent(self.text_opacity);
         self.restore_window_position(ctx);
@@ -706,6 +742,7 @@ impl eframe::App for VzEditorApp {
         self.poll_dialog();
         self.poll_send(ctx);
         self.continue_save_and_quit(ctx);
+        self.poll_terminal();
         self.handle_events(ctx);
 
         self.render_menu_bar(ctx);
@@ -722,6 +759,8 @@ impl eframe::App for VzEditorApp {
                 }
             }
             AppMode::Filer => self.render_filer_canvas(ctx),
+            AppMode::Terminal => self.render_terminal_canvas(ctx),
+            AppMode::Browser => self.render_browser_canvas(ctx),
         }
 
         self.render_help_overlay(ctx);
@@ -729,6 +768,8 @@ impl eframe::App for VzEditorApp {
         self.render_filer_modal(ctx);
         self.render_inline_path_prompt(ctx);
         self.render_drop_overlay(ctx);
+        // WebView は egui の上に重なるので、描画の後で位置と表示を合わせる
+        self.sync_browser(ctx, frame);
 
         // ctx を持たない処理（F キー・メニュー）からのコピーを書き出す
         if let Some(text) = self.clipboard_out.take() {

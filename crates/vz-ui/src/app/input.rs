@@ -197,6 +197,8 @@ impl VzEditorApp {
         match self.mode {
             AppMode::Editor => self.handle_editor_events(ctx),
             AppMode::Filer => self.handle_filer_events(ctx),
+            AppMode::Terminal => self.handle_terminal_events(ctx),
+            AppMode::Browser => self.handle_browser_events(ctx),
         }
     }
 
