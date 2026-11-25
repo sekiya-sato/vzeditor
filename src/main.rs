@@ -1,24 +1,14 @@
 // リリースビルドの Windows ではコンソールウィンドウを出さない
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
-mod app;
-mod buffer;
-mod dialog;
-mod diff;
-mod filer;
-mod fonts;
 mod icon;
-mod markdown;
-mod send_to_app;
-mod session;
-mod settings;
-mod window_style;
 
-use app::VzEditorApp;
 use eframe::egui;
-use settings::Settings;
 use std::path::PathBuf;
 use std::sync::Arc;
+use vz_config::session;
+use vz_config::settings::Settings;
+use vz_ui::VzEditorApp;
 
 fn main() -> eframe::Result<()> {
     // 複数ファイル・フォルダを引数で受け取る（エクスプローラーで exe へ複数ドロップした場合も同じ）

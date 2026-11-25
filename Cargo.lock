@@ -2977,15 +2977,45 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 
 [[package]]
-name = "vzeditor"
+name = "vz-config"
+version = "0.1.0"
+
+[[package]]
+name = "vz-core"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "unicode-width 0.2.3",
+]
+
+[[package]]
+name = "vz-platform"
 version = "0.1.0"
 dependencies = [
  "arboard",
+ "rfd",
+ "windows-sys 0.59.0",
+]
+
+[[package]]
+name = "vz-ui"
+version = "0.1.0"
+dependencies = [
  "chrono",
  "eframe",
- "rfd",
  "unicode-width 0.2.3",
- "windows-sys 0.59.0",
+ "vz-config",
+ "vz-core",
+ "vz-platform",
+]
+
+[[package]]
+name = "vzeditor"
+version = "0.1.0"
+dependencies = [
+ "eframe",
+ "vz-config",
+ "vz-ui",
  "winresource",
 ]
 

@@ -1,0 +1,12 @@
+[package]
+name = "vz-core"
+description = "VZ Editor: UI に依存しない編集モデル（バッファ・差分・ファイラーの操作）"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+chrono.workspace = true
+unicode-width.workspace = true

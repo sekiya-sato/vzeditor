@@ -1634,7 +1634,7 @@ fn main() {
 
     #[test]
     fn test_parse_readme_document() {
-        let readme = include_str!("../tests/fixtures/markdown_sample.md");
+        let readme = include_str!("../../../tests/fixtures/markdown_sample.md");
         let lines: Vec<String> = readme.lines().map(String::from).collect();
         let blocks = parse_markdown(&lines);
         assert!(blocks

@@ -1,0 +1,8 @@
+[package]
+name = "vz-config"
+description = "VZ Editor: 設定（settings.ini）と、保存して終了・復元の状態"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false

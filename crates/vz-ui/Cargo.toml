@@ -1,0 +1,19 @@
+[package]
+name = "vz-ui"
+description = "VZ Editor: 画面・メニュー・キー操作・Markdown ビュー（eframe/egui）"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+eframe.workspace = true
+unicode-width.workspace = true
+vz-config.workspace = true
+vz-core.workspace = true
+vz-platform.workspace = true
+
+# build.rs でビルド日時（About の Build At）を埋め込む
+[build-dependencies]
+chrono.workspace = true

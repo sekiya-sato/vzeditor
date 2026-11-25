@@ -11,22 +11,20 @@
 
 | パス | 役割 |
 | :--- | :--- |
-| `Cargo.toml` | クレート `vzeditor`、実行ファイル `vz`。eframe/egui 0.31（glow） |
-| `src/main.rs` | 起動。設定読込、透過ウィンドウ・最前面の初期化、引数処理 |
-| `src/app.rs` | 画面描画、キー操作、メニュー、ファイラー連携（本体） |
-| `src/window_style.rs` | 背景・文字の不透明度（`bg()` / `text_alpha()` / `bg_painter()`） |
-| `src/settings.rs` | 設定の保存（`settings.ini`） |
-| `src/session.rs` | `--save-and-quit`（起動中の vz に終了要求）と `--restore`（状態復元） |
-| `src/send_to_app.rs` | Claude Code / Codex / GitHub Desktop への送信（OS 別） |
-| `src/dialog.rs` `src/fonts.rs` | ファイルダイアログ、日本語フォント検出（OS 別） |
-| `src/buffer.rs` `src/filer.rs` `src/markdown.rs` `src/diff.rs` `src/icon.rs` | バッファ、2画面ファイラー、Markdown ビュー、差分、アイコン |
+| `Cargo.toml` | ワークスペース兼ルートのクレート `vzeditor`（実行ファイル `vz`）。版・依存の共通設定、deb / rpm の設定。eframe/egui 0.31（glow） |
+| `src/main.rs` `src/icon.rs` `build.rs` | 起動（設定読込、透過ウィンドウ・最前面の初期化、引数処理）、アイコン、exe へのアイコン埋め込み |
+| `crates/vz-ui` | 画面・メニュー・キー操作（`src/app/` に役割ごとに分割）、Markdown ビュー、透過（`window_style`）、フォント。`build.rs` がビルド日時を埋め込む |
+| `crates/vz-platform` | OS 固有処理: ファイルダイアログ、クリップボード読み取り、モニター判定、Claude Code / Codex / GitHub Desktop への送信 |
+| `crates/vz-config` | 設定（`settings.ini`）と `--save-and-quit` / `--restore`（`session`） |
+| `crates/vz-core` | UI に依存しない編集モデル: バッファ、差分、ファイラーの操作 |
 | `tests/fixtures/markdown_sample.md` | Markdown テスト用固定データ。編集しない |
 | `assets/` | `vzeditor.svg`、exe 埋め込み用 `vzeditor.ico`（図柄変更時は `VZ_WRITE_ICO=1 cargo test test_ico_asset_is_up_to_date` で再生成）、`vzeditor.desktop` |
 | `.github/workflows/release.yml` | タグ push で各 OS ビルドと Linux の .deb / .rpm を GitHub Release に公開 |
 
 ## コーディング規約
 
-- OS 依存は `#[cfg(windows)]`・`#[cfg(target_os = "macos")]`・`#[cfg(not(any(windows, target_os = "macos")))]` で分け、他 OS のビルドを壊さない。
+- クレートの役割と依存の向きは基本設計の「クレート構成」に従う。vz-core・vz-config・vz-platform は egui に依存させない。中身の無いクレートは作らず、分けすぎない（同じ層の中はモジュールで分ける）。
+- OS 依存は原則 vz-platform に置く（egui に結び付く日本語フォントの読み込みは vz-ui の `fonts`）。`#[cfg(windows)]`・`#[cfg(target_os = "macos")]`・`#[cfg(not(any(windows, target_os = "macos")))]` で分け、他 OS のビルドを壊さない。
 - 背景色は `bg(色)` を通す。文字透過したパネル内の背景は `bg_painter()`。ダイアログ・メニューは常に不透明。新しいメインパネルは先頭で `ui.multiply_opacity(window_style::text_alpha())`。
 - キー操作の追加・変更は、サクラ互換と VZ 互換の両方の扱いを決め、キー対比・README・基本設計・ヘルプ（F1）・メニューを揃えて更新する（README の記載漏れが起きやすい）。
 - 両方式共通のショートカットは Alt / Alt+Shift 系とし、`window_style_key_action` と `test_window_style_keys_do_not_overlap` に加える。
@@ -50,11 +48,12 @@
 - Windows は MSVC ツールチェーン（`stable-x86_64-pc-windows-msvc` と Visual Studio の C++ デスクトップ開発）。Git Bash では coreutils の `link.exe` が優先されリンクに失敗するので PowerShell を使う。
 - `cargo` が見つからなければ `$env:PATH = "$env:USERPROFILE\.cargo\bin;$env:PATH"`。
 - 他 OS の型チェックは `cargo check --all-targets --target x86_64-unknown-linux-gnu`（macOS は `aarch64-apple-darwin`）。GNU ツールチェーンは `dlltool` が要り失敗するので使わない。
-- ビルド日時は `build.rs` が `VZ_BUILD_AT` として埋め込み、About に表示する。
+- `cargo` はルートで実行すれば全クレートが対象（`default-members`）。特定のクレートだけなら `-p vz-core` など。
+- ビルド日時は `crates/vz-ui/build.rs` が `VZ_BUILD_AT` として埋め込み、About に表示する。
 
 ## テスト
 
-- 単体テストは各ソースの `#[cfg(test)] mod tests`。
+- 単体テストは各ソースの `#[cfg(test)] mod tests`。アプリのテストは `crates/vz-ui/src/app/tests.rs`。
 - アプリのテストは `make_test_app()`（VZ 互換・`persist_settings: false`）で利用者の設定を書き換えない。サクラ互換は `make_sakura_app()` と `run_editor()`（イベントを入力処理に流す）。
 - ファイルを使うテストは `std::env::temp_dir()` 下にプロセス ID 付きフォルダを作り、最後に削除する。
 - ファイラーはパスを正規化する（Windows は `\\?\C:\...`）ので、比較・マークには `entries` のパスを使う。

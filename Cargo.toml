@@ -1,10 +1,32 @@
-[package]
-name = "vzeditor"
+[workspace]
+members = ["crates/*"]
+# ルートで cargo check / clippy / test / build すると全クレートが対象になる
+default-members = [".", "crates/*"]
+resolver = "2"
+
+[workspace.package]
 version = "0.1.0"
 edition = "2021"
-description = "VZ Editor - fast native GUI VZ-style text editor (based on LZ Editor, MIT)"
 license = "MIT"
 repository = "https://github.com/sekiya-sato/vzeditor"
+
+[workspace.dependencies]
+vz-core = { path = "crates/vz-core" }
+vz-config = { path = "crates/vz-config" }
+vz-platform = { path = "crates/vz-platform" }
+vz-ui = { path = "crates/vz-ui" }
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+eframe = { version = "0.31", default-features = false, features = ["default_fonts", "glow", "wayland", "x11"] }
+unicode-width = "0.2"
+
+# 実行ファイル vz（起動・引数処理・アイコン・配布設定）。構成は docs/基本設計.md の「クレート構成」
+[package]
+name = "vzeditor"
+version.workspace = true
+edition.workspace = true
+description = "VZ Editor - fast native GUI VZ-style text editor (based on LZ Editor, MIT)"
+license.workspace = true
+repository.workspace = true
 readme = "README.md"
 keywords = ["editor", "vz-editor", "egui", "filer"]
 categories = ["text-editors", "gui"]
@@ -14,32 +36,13 @@ name = "vz"
 path = "src/main.rs"
 
 [dependencies]
-chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
-eframe = { version = "0.31", default-features = false, features = ["default_fonts", "glow", "wayland", "x11"] }
-unicode-width = "0.2"
+eframe.workspace = true
+vz-config.workspace = true
+vz-ui.workspace = true
 
-# build.rs でビルド日時（About の Build At）を埋め込む
-[build-dependencies]
-chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 # build.rs で Windows の exe にアイコン（assets/vzeditor.ico）を埋め込む
+[build-dependencies]
 winresource = "0.1"
-
-# Windows: ネイティブのファイルダイアログとクリップボード、
-# Claude Code / Codex への送信（ウィンドウ検索・前面化・キー入力）
-[target.'cfg(windows)'.dependencies]
-rfd = "0.15"
-arboard = { version = "3", default-features = false }
-windows-sys = { version = "0.59", features = [
-    "Win32_Foundation",
-    "Win32_Graphics_Gdi",
-    "Win32_System_Threading",
-    "Win32_UI_Input_KeyboardAndMouse",
-    "Win32_UI_WindowsAndMessaging",
-] }
-
-# macOS: クリップボード（ファイルダイアログは osascript）
-[target.'cfg(target_os = "macos")'.dependencies]
-arboard = { version = "3", default-features = false }
 
 [profile.release]
 opt-level = "s"

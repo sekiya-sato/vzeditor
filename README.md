@@ -115,7 +115,7 @@ cargo build --release
 - Linux: 日本語フォント（`fonts-noto-cjk` など）と、ファイルダイアログ用に `zenity` を推奨。
 - macOS: 追加の依存はありません。
 
-詳細は [docs/基本設計.md](docs/基本設計.md) を参照してください。
+ソースは Cargo ワークスペースで、ルートの `vz`（起動）と `crates/` の vz-ui（画面）・vz-platform（OS 固有処理）・vz-config（設定）・vz-core（編集モデル）に分かれています。詳細は [docs/基本設計.md](docs/基本設計.md) を参照してください。
 
 ## ライセンス
 
