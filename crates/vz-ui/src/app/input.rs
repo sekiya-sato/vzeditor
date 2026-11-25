@@ -71,7 +71,14 @@ impl VzEditorApp {
             EditorAction::Paste => self.sakura_paste_from_clipboard(),
             EditorAction::BeginSelect => self.toggle_select_mode(),
             EditorAction::CloseBuffer => self.close_current_buffer(),
-            EditorAction::Nop => {}
+            EditorAction::FindPrev => self.repeat_search(true),
+            EditorAction::DuplicateLine => self.sakura_duplicate_line(),
+            EditorAction::ToggleSearchMarks => {
+                if let Err(message) = self.toggle_search_marks() {
+                    self.status_message = message;
+                }
+            }
+            EditorAction::Quit | EditorAction::Nop => {}
         }
     }
 

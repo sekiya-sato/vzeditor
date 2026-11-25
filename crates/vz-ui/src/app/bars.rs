@@ -501,106 +501,123 @@ impl VzEditorApp {
         }
     }
 
+    /// エディターの F キー欄（F1〜F12 の順のラベルと動作）。`layer` は押している修飾キー。
+    pub(super) fn editor_fkeys(
+        sakura: bool,
+        in_md_view: bool,
+        layer: FKeyLayer,
+    ) -> [(&'static str, EditorAction); 12] {
+        use EditorAction::*;
+        const NONE: (&str, EditorAction) = ("", Nop);
+        if sakura {
+            // サクラ互換（F1〜F3 は VZ 互換と同じ。未対応のキーは空欄）
+            let mut keys = [NONE; 12];
+            match layer {
+                FKeyLayer::Normal => {
+                    keys[..9].copy_from_slice(&[
+                        ("ヘルプ", ToggleHelp),
+                        ("新規", NewBuffer),
+                        ("開く", OpenFile),
+                        ("閉じる", CloseBuffer),
+                        NONE,
+                        ("選択", BeginSelect),
+                        ("切取", Cut),
+                        ("コピー", Copy),
+                        ("貼付", Paste),
+                    ]);
+                }
+                FKeyLayer::Shift => {
+                    keys[2] = ("前検索", FindPrev);
+                    keys[7] = ("コピー", Copy);
+                    keys[9] = ("行複製", DuplicateLine);
+                }
+                FKeyLayer::Ctrl => {
+                    keys[2] = ("行マーク", ToggleSearchMarks);
+                    keys[3] = ("閉じる", CloseBuffer);
+                }
+                FKeyLayer::Alt => keys[3] = ("終了", Quit),
+            }
+            return keys;
+        }
+        // VZ 互換は修飾キーを区別しない（Ctrl+F4 の「閉じる」と、OS の Alt+F4 の終了を除く）
+        let (f4, f5, f7, f8) = if in_md_view {
+            ("先頭", "末尾", "半頁上", "半頁下")
+        } else {
+            ("行頭", "行末", "単語左", "単語右")
+        };
+        let mut keys = [
+            ("ヘルプ", ToggleHelp),
+            ("新規", NewBuffer),
+            ("開く", OpenFile),
+            (f4, MoveLineStart),
+            (f5, MoveLineEnd),
+            ("行削除", DeleteLine),
+            (f7, MoveWordLeft),
+            (f8, MoveWordRight),
+            ("ファイラ", SwitchToFiler),
+            ("保存", SaveFile),
+            NONE,
+            NONE,
+        ];
+        match layer {
+            FKeyLayer::Ctrl => keys[3] = ("閉じる", CloseBuffer),
+            FKeyLayer::Alt => keys[3] = ("終了", Quit),
+            FKeyLayer::Normal | FKeyLayer::Shift => {}
+        }
+        keys
+    }
+
+    /// ファイラーの F キー欄。修飾キーは区別しない（OS の Alt+F4 の終了を除く）。
+    pub(super) fn filer_fkeys(layer: FKeyLayer) -> [(&'static str, FilerAction); 12] {
+        use FilerAction::*;
+        let mut keys = [
+            ("ヘルプ", ToggleHelp),
+            ("名前変", Rename),
+            ("新規作成", NewFile),
+            ("コピー", Copy),
+            ("移動", Move),
+            ("削除", Delete),
+            ("フォルダ", NewDir),
+            ("ソート", CycleSort),
+            ("編集戻", BackToEditor),
+            ("終了", Quit),
+            ("", Nop),
+            ("", Nop),
+        ];
+        if layer == FKeyLayer::Alt {
+            keys[3] = ("終了", Quit);
+        }
+        keys
+    }
+
     pub(super) fn render_editor_fkey_bar(&mut self, ctx: &egui::Context) {
-        let in_md_view = self.is_markdown_view();
-        let keys_left: &[(&str, &str, EditorAction)] = if in_md_view {
-            &[
-                ("F1", "ヘルプ", EditorAction::ToggleHelp),
-                ("F2", "新規", EditorAction::NewBuffer),
-                ("F3", "開く", EditorAction::OpenFile),
-                ("F4", "先頭", EditorAction::MoveLineStart),
-                ("F5", "末尾", EditorAction::MoveLineEnd),
-            ]
-        } else {
-            &[
-                ("F1", "ヘルプ", EditorAction::ToggleHelp),
-                ("F2", "新規", EditorAction::NewBuffer),
-                ("F3", "開く", EditorAction::OpenFile),
-                ("F4", "行頭", EditorAction::MoveLineStart),
-                ("F5", "行末", EditorAction::MoveLineEnd),
-            ]
-        };
-        let keys_right: &[(&str, &str, EditorAction)] = if in_md_view {
-            &[
-                ("F6", "行削除", EditorAction::DeleteLine),
-                ("F7", "半頁上", EditorAction::MoveWordLeft),
-                ("F8", "半頁下", EditorAction::MoveWordRight),
-                ("F9", "ファイラ", EditorAction::SwitchToFiler),
-                ("F10", "保存", EditorAction::SaveFile),
-            ]
-        } else {
-            &[
-                ("F6", "行削除", EditorAction::DeleteLine),
-                ("F7", "単語左", EditorAction::MoveWordLeft),
-                ("F8", "単語右", EditorAction::MoveWordRight),
-                ("F9", "ファイラ", EditorAction::SwitchToFiler),
-                ("F10", "保存", EditorAction::SaveFile),
-            ]
-        };
-
-        // サクラ互換の F キー（F1〜F3 は VZ 互換と同じ。未対応のキーは空欄）
-        let sakura_left: &[(&str, &str, EditorAction)] = &[
-            ("F1", "ヘルプ", EditorAction::ToggleHelp),
-            ("F2", "新規", EditorAction::NewBuffer),
-            ("F3", "開く", EditorAction::OpenFile),
-            ("F4", "閉じる", EditorAction::CloseBuffer),
-            ("F5", "", EditorAction::Nop),
-        ];
-        let keys_left = if self.is_sakura() { sakura_left } else { keys_left };
-        let sakura_right: &[(&str, &str, EditorAction)] = &[
-            ("F6", "選択", EditorAction::BeginSelect),
-            ("F7", "切取", EditorAction::Cut),
-            ("F8", "コピー", EditorAction::Copy),
-            ("F9", "貼付", EditorAction::Paste),
-            ("F10", "", EditorAction::Nop),
-        ];
-        let keys_right = if self.is_sakura() { sakura_right } else { keys_right };
-        // F11・F12 は両方式とも割り当てなし（幅に余裕があるときだけ表示）
-        let keys_extra: &[(&str, &str, EditorAction)] =
-            &[("F11", "", EditorAction::Nop), ("F12", "", EditorAction::Nop)];
-
-        if let Some(action) =
-            Self::paint_fkey_bar(ctx, [keys_left, keys_right, keys_extra], FKEY_NUM_BG)
-        {
-            self.execute_editor_action(action);
+        let layer = FKeyLayer::current(ctx);
+        let keys = Self::editor_fkeys(self.is_sakura(), self.is_markdown_view(), layer);
+        match Self::paint_fkey_bar(ctx, &keys, layer, FKEY_NUM_BG) {
+            Some(EditorAction::Quit) => self.request_quit(ctx),
+            Some(action) => self.execute_editor_action(action),
+            None => {}
         }
     }
 
     pub(super) fn render_filer_fkey_bar(&mut self, ctx: &egui::Context) {
-        let keys_left: &[(&str, &str, FilerAction)] = &[
-            ("F1", "ヘルプ", FilerAction::ToggleHelp),
-            ("F2", "名前変", FilerAction::Rename),
-            ("F3", "新規作成", FilerAction::NewFile),
-            ("F4", "コピー", FilerAction::Copy),
-            ("F5", "移動", FilerAction::Move),
-        ];
-        let keys_right: &[(&str, &str, FilerAction)] = &[
-            ("F6", "削除", FilerAction::Delete),
-            ("F7", "フォルダ", FilerAction::NewDir),
-            ("F8", "ソート", FilerAction::CycleSort),
-            ("F9", "編集戻", FilerAction::BackToEditor),
-            ("F10", "終了", FilerAction::Quit),
-        ];
-        let keys_extra: &[(&str, &str, FilerAction)] =
-            &[("F11", "", FilerAction::Nop), ("F12", "", FilerAction::Nop)];
-
-        if let Some(action) = Self::paint_fkey_bar(
-            ctx,
-            [keys_left, keys_right, keys_extra],
-            FKEY_NUM_FILER_BG,
-        ) {
+        let layer = FKeyLayer::current(ctx);
+        let keys = Self::filer_fkeys(layer);
+        if let Some(action) = Self::paint_fkey_bar(ctx, &keys, layer, FKEY_NUM_FILER_BG) {
             self.execute_filer_action(ctx, action);
         }
     }
 
     /// F キーの案内バー（F1〜F5・F6〜F10・F11〜F12 の 3 ブロック）を描き、押されたボタンの動作を返す。
-    /// F11〜F12 は 12 個がボタンの最小幅で並ぶときだけ表示する。
+    /// F11〜F12 は 12 個がボタンの最小幅で並ぶときだけ表示する。キー名は `layer` に応じて `SF1` などにする。
     pub(super) fn paint_fkey_bar<A: Copy>(
         ctx: &egui::Context,
-        blocks: [&[(&str, &str, A)]; 3],
+        keys: &[(&str, A); 12],
+        layer: FKeyLayer,
         badge_color: Color32,
     ) -> Option<A> {
         let mut clicked_action: Option<A> = None;
+        let names = layer.key_names();
 
         egui::TopBottomPanel::bottom("fkey_guide_bar")
             .exact_height(34.0)
@@ -614,24 +631,25 @@ impl VzEditorApp {
                 ui.multiply_opacity(window_style::text_alpha());
                 let (block_count, btn_w) = fkey_bar_layout(ui.available_width());
                 let btn_h = ui.available_height().max(24.0);
+                let shown = if block_count == 3 { 12 } else { 10 };
 
                 ui.horizontal_centered(|ui| {
                     ui.spacing_mut().item_spacing.x = FKEY_KEY_GAP;
 
-                    for (i, keys) in blocks.into_iter().take(block_count).enumerate() {
-                        if i > 0 {
+                    for (i, (&(label, action), fkey)) in
+                        keys.iter().zip(names).take(shown).enumerate()
+                    {
+                        if i == 5 || i == 10 {
                             ui.add_space(FKEY_BLOCK_GAP - FKEY_KEY_GAP);
                         }
-                        for &(fkey, label, action) in keys {
-                            if Self::paint_fkey_button(
-                                ui,
-                                fkey,
-                                label,
-                                Vec2::new(btn_w, btn_h),
-                                badge_color,
-                            ) {
-                                clicked_action = Some(action);
-                            }
+                        if Self::paint_fkey_button(
+                            ui,
+                            fkey,
+                            label,
+                            Vec2::new(btn_w, btn_h),
+                            badge_color,
+                        ) {
+                            clicked_action = Some(action);
                         }
                     }
                 });
@@ -663,7 +681,10 @@ impl VzEditorApp {
                 StrokeKind::Inside,
             );
 
-            let badge_w = (rect.width() * 0.34).clamp(24.0, 34.0);
+            // SF10 などの長いキー名も収まるように広げる
+            let badge_w = (rect.width() * 0.34)
+                .clamp(24.0, 34.0)
+                .max(fkey.len() as f32 * 7.0 + 6.0);
             let badge_rect =
                 Rect::from_min_max(rect.min, Pos2::new(rect.min.x + badge_w, rect.max.y));
             painter.rect_filled(badge_rect, CornerRadius::same(1), badge_color);
@@ -707,6 +728,51 @@ fn strip_tab(ui: &mut egui::Ui, title: String, active: bool) -> egui::Response {
     )
 }
 
+/// F キー欄に表示する修飾キーの段（Shift・Ctrl・Alt のどれか 1 つだけを押している間）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum FKeyLayer {
+    Normal,
+    Shift,
+    Ctrl,
+    Alt,
+}
+
+impl FKeyLayer {
+    /// 修飾キーから段を決める。2 つ以上の組み合わせ（Ctrl+Shift など）は通常の段。
+    fn from_modifiers(m: egui::Modifiers) -> Self {
+        match (m.shift, m.ctrl || m.command, m.alt) {
+            (true, false, false) => Self::Shift,
+            (false, true, false) => Self::Ctrl,
+            (false, false, true) => Self::Alt,
+            _ => Self::Normal,
+        }
+    }
+
+    fn current(ctx: &egui::Context) -> Self {
+        ctx.input(|i| Self::from_modifiers(i.modifiers))
+    }
+
+    fn key_names(self) -> &'static [&'static str; 12] {
+        match self {
+            Self::Normal => &[
+                "F1", "F2", "F3", "F4", "F5", "F6", "F7", "F8", "F9", "F10", "F11", "F12",
+            ],
+            Self::Shift => &[
+                "SF1", "SF2", "SF3", "SF4", "SF5", "SF6", "SF7", "SF8", "SF9", "SF10", "SF11",
+                "SF12",
+            ],
+            Self::Ctrl => &[
+                "CF1", "CF2", "CF3", "CF4", "CF5", "CF6", "CF7", "CF8", "CF9", "CF10", "CF11",
+                "CF12",
+            ],
+            Self::Alt => &[
+                "AF1", "AF2", "AF3", "AF4", "AF5", "AF6", "AF7", "AF8", "AF9", "AF10", "AF11",
+                "AF12",
+            ],
+        }
+    }
+}
+
 /// F キー案内バーのボタン間隔・ブロック間隔・ボタンの最小幅。
 const FKEY_KEY_GAP: f32 = 4.0;
 const FKEY_BLOCK_GAP: f32 = 18.0;
@@ -743,5 +809,56 @@ mod tests {
         assert!((w * 12.0 + FKEY_BLOCK_GAP * 2.0 + FKEY_KEY_GAP * 9.0 - 1200.0).abs() < 0.01);
         // 狭いときは F10 まで、最小幅で
         assert_eq!(fkey_bar_layout(300.0), (2, FKEY_BTN_MIN_W));
+    }
+
+    #[test]
+    fn test_editor_fkeys_layers() {
+        use EditorAction::*;
+        let assigned = |keys: &[(&str, EditorAction); 12]| -> Vec<(usize, EditorAction)> {
+            keys.iter()
+                .enumerate()
+                .filter(|(_, (_, a))| *a != Nop)
+                .map(|(i, (_, a))| (i, *a))
+                .collect()
+        };
+        let sakura = |layer| VzEditorApp::editor_fkeys(true, false, layer);
+        assert_eq!(
+            assigned(&sakura(FKeyLayer::Shift)),
+            vec![(2, FindPrev), (7, Copy), (9, DuplicateLine)]
+        );
+        assert_eq!(
+            assigned(&sakura(FKeyLayer::Ctrl)),
+            vec![(2, ToggleSearchMarks), (3, CloseBuffer)]
+        );
+        assert_eq!(assigned(&sakura(FKeyLayer::Alt)), vec![(3, Quit)]);
+        // VZ 互換は Shift を区別せず、Ctrl+F4 は閉じる、Alt+F4 は終了
+        for md in [false, true] {
+            let vz = |layer| VzEditorApp::editor_fkeys(false, md, layer);
+            let normal = vz(FKeyLayer::Normal);
+            assert_eq!(vz(FKeyLayer::Shift), normal);
+            assert_eq!(vz(FKeyLayer::Ctrl)[3].1, CloseBuffer);
+            assert_eq!(vz(FKeyLayer::Ctrl)[4], normal[4]);
+            assert_eq!(vz(FKeyLayer::Alt)[3].1, Quit);
+        }
+        let filer_alt = VzEditorApp::filer_fkeys(FKeyLayer::Alt);
+        assert_eq!(filer_alt[3].1, FilerAction::Quit);
+    }
+
+    #[test]
+    fn test_fkey_layer_from_modifiers() {
+        let layer = |shift, ctrl, alt| {
+            FKeyLayer::from_modifiers(egui::Modifiers {
+                shift,
+                ctrl,
+                alt,
+                ..Default::default()
+            })
+        };
+        assert_eq!(layer(false, false, false), FKeyLayer::Normal);
+        assert_eq!(layer(true, false, false), FKeyLayer::Shift);
+        assert_eq!(layer(false, true, false), FKeyLayer::Ctrl);
+        assert_eq!(layer(false, false, true), FKeyLayer::Alt);
+        // Ctrl+Shift などの組み合わせは通常の段
+        assert_eq!(layer(true, true, false), FKeyLayer::Normal);
     }
 }

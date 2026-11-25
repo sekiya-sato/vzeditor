@@ -93,6 +93,14 @@ enum EditorAction {
     Paste,
     BeginSelect,
     CloseBuffer,
+    /// 前を検索（Shift+F3）
+    FindPrev,
+    /// 行の複製（Shift+F10）
+    DuplicateLine,
+    /// 検索語の行マーク切替（サクラ互換 Ctrl+F3）
+    ToggleSearchMarks,
+    /// 終了（Alt+F4。ctx が要るので F キー欄の側で request_quit を呼ぶ）
+    Quit,
     /// 割り当てなし（F キー欄の空欄）
     Nop,
 }
