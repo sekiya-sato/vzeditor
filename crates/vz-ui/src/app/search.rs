@@ -127,9 +127,10 @@ impl SearchState {
         let mut action = if focus {
             None
         } else {
-            let enter = ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, Key::Enter));
-            let shift_enter =
-                !enter && ctx.input_mut(|i| i.consume_key(egui::Modifiers::SHIFT, Key::Enter));
+            // consume_key は余分な Shift を無視するので、Shift+Enter を先に判定する。
+            let shift_enter = ctx.input_mut(|i| i.consume_key(egui::Modifiers::SHIFT, Key::Enter));
+            let enter =
+                !shift_enter && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, Key::Enter));
             match (dialog, enter, shift_enter) {
                 (SearchDialog::Jump, true, _) => Some(DialogAction::Jump),
                 (SearchDialog::Grep, true, _) if self.grep_job.is_none() => {
@@ -397,6 +398,7 @@ impl VzEditorApp {
             return;
         }
         self.show_help = false;
+        self.open_menu = None;
         self.prefix = PrefixKey::None;
         self.ime_preedit.clear();
         self.ime_active = false;
@@ -408,7 +410,15 @@ impl VzEditorApp {
                 if let Some((start, end)) =
                     self.cur_buf().selection_range().filter(|(s, e)| s.0 == e.0)
                 {
-                    self.search.query = self.cur_buf().text_in_range(start, end);
+                    // 直前の検索結果が選択されたままなら、正規表現などの検索条件を残す。
+                    let is_last_hit = self.search.pattern().is_ok_and(|pattern| {
+                        pattern
+                            .replacement_for(&self.cur_buf().lines[start.0], start.1, end.1, "")
+                            .is_some()
+                    });
+                    if !is_last_hit {
+                        self.search.query = self.cur_buf().text_in_range(start, end);
+                    }
                 }
             }
             SearchDialog::Replace => self.search.selection_only = false,
@@ -523,7 +533,21 @@ impl VzEditorApp {
             } else if start != end || !output.is_empty() {
                 self.cur_buf_mut().insert_text(&output);
             }
-            self.status_message = "1件を置換しました".into();
+            // サクラと同じく次の一致を選択する。置換後の位置の空一致は飛ばす。
+            let wrap = self.search.wrap;
+            let buf = self.cur_buf_mut();
+            let cursor = buf.cursor_pos();
+            buf.select_range(cursor, cursor);
+            match pattern.find(buf, false, wrap) {
+                Some((next_start, next_end)) => {
+                    buf.select_range(next_start, next_end);
+                    self.status_message = "1件を置換しました".into();
+                }
+                None => {
+                    buf.clear_selection();
+                    self.status_message = "1件を置換しました（次の一致はありません）".into();
+                }
+            }
         }
         self.search.message = self.status_message.clone();
         self.cur_slot_mut().markdown_view = false;
@@ -772,6 +796,71 @@ mod tests {
         );
         assert_eq!(app.cur_buf().selection_range(), Some(((1, 0), (1, 1))));
         assert_eq!(app.cur_buf().lines, ["一 猫", "猫"]);
+    }
+
+    #[test]
+    fn shift_enter_searches_up() {
+        let ctx = egui::Context::default();
+        let mut app = app_with_text("猫\n猫\n猫");
+        app.cur_buf_mut().set_cursor(1, 1);
+        app.search.query = "猫".into();
+        app.search.auto_close = false;
+        app.open_search_dialog(SearchDialog::Find);
+        input_frame(&ctx, &mut app, vec![]);
+        input_frame(
+            &ctx,
+            &mut app,
+            vec![key_event(Key::Enter, egui::Modifiers::SHIFT)],
+        );
+        assert_eq!(app.cur_buf().selection_range(), Some(((1, 0), (1, 1))));
+    }
+
+    #[test]
+    fn reopening_find_keeps_regex_query_for_its_own_hit() {
+        let mut app = app_with_text("a12 b3");
+        app.search.query = r"\d+".into();
+        app.search.options.regex = true;
+        app.repeat_search(false);
+        assert_eq!(app.cur_buf().selection_range(), Some(((0, 1), (0, 3))));
+        app.open_search_dialog(SearchDialog::Find);
+        assert_eq!(app.search.query, r"\d+");
+        app.search.close();
+        app.cur_buf_mut().select_range((0, 4), (0, 5));
+        app.open_search_dialog(SearchDialog::Find);
+        assert_eq!(app.search.query, "b");
+    }
+
+    #[test]
+    fn single_replace_selects_next_match() {
+        let ctx = egui::Context::default();
+        let mut app = app_with_text("a a\na");
+        app.open_search_dialog(SearchDialog::Replace);
+        app.search.query = "a".into();
+        app.search.replace = "bb".into();
+        app.perform_search_action(&ctx, DialogAction::Replace)
+            .unwrap();
+        assert_eq!(app.cur_buf().selection_range(), Some(((0, 0), (0, 1))));
+        app.perform_search_action(&ctx, DialogAction::Replace)
+            .unwrap();
+        assert_eq!(app.cur_buf().lines, ["bb a", "a"]);
+        assert_eq!(app.cur_buf().selection_range(), Some(((0, 3), (0, 4))));
+        app.perform_search_action(&ctx, DialogAction::Replace)
+            .unwrap();
+        app.perform_search_action(&ctx, DialogAction::Replace)
+            .unwrap();
+        assert_eq!(app.cur_buf().lines, ["bb bb", "bb"]);
+        assert!(!app.cur_buf().has_selection());
+        // 空一致は置換後の位置で繰り返さない
+        let mut app = app_with_text("x\ny");
+        app.open_search_dialog(SearchDialog::Replace);
+        app.search.query = "$".into();
+        app.search.options.regex = true;
+        app.search.replace = ";".into();
+        for _ in 0..4 {
+            app.perform_search_action(&ctx, DialogAction::Replace)
+                .unwrap();
+        }
+        assert_eq!(app.cur_buf().lines, ["x;", "y;"]);
     }
 
     #[test]
