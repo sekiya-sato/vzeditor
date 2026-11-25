@@ -57,7 +57,7 @@ impl VzEditorApp {
         self.mode = AppMode::Terminal;
         if let Some(term) = &self.terminal {
             self.status_message = format!(
-                "ターミナル: {}  （Alt+K で戻る / Ctrl+Shift+C で画面をコピー / ホイールで履歴）",
+                "ターミナル: {}  （Alt+K で戻る / ドラッグで選択コピー / ホイールで履歴）",
                 term.program()
             );
         }
@@ -128,6 +128,7 @@ impl VzEditorApp {
                 // Alt 付きの文字は Key 側で ESC + 文字として送る
                 Event::Text(text) if !modifiers_now.alt => {
                     if self.ime_preedit.is_empty() {
+                        self.term_selection = None;
                         term.send_input(text.as_bytes());
                     }
                 }
@@ -141,12 +142,24 @@ impl VzEditorApp {
                     self.ime_active = false;
                     self.ime_preedit.clear();
                 }
-                Event::Paste(text) => term.paste(&text),
+                Event::Paste(text) => {
+                    self.term_selection = None;
+                    term.paste(&text);
+                }
                 // egui は Ctrl+C / Ctrl+X（macOS は Cmd）をコピー・切り取りとして届ける
                 Event::Copy => {
                     if modifiers_now.shift || cfg!(target_os = "macos") {
-                        self.clipboard_out = Some(term.visible_text());
-                        self.status_message = "ターミナルの画面をコピーしました".to_string();
+                        // マウスで選択していればその範囲、無ければ画面全体
+                        let (text, what) = match &self.term_selection {
+                            Some(sel) => (
+                                vz_terminal::selection_text(term.screen(), sel.anchor, sel.head),
+                                "選択範囲",
+                            ),
+                            None => (term.visible_text(), "画面"),
+                        };
+                        self.internal_clipboard = text.clone();
+                        self.clipboard_out = Some(text);
+                        self.status_message = format!("ターミナルの{what}をコピーしました");
                     } else {
                         term.send_input(b"\x03");
                     }
@@ -164,6 +177,10 @@ impl VzEditorApp {
                 } => {
                     if !self.ime_preedit.is_empty() {
                         continue;
+                    }
+                    // 修飾キー単独（Ctrl+Shift+C の押し始めなど）では選択を残す
+                    if term_key(key).is_some() || key_char(key).is_some() {
+                        self.term_selection = None;
                     }
                     let mods = Mods {
                         ctrl: modifiers.ctrl,
@@ -184,7 +201,12 @@ impl VzEditorApp {
                         egui::MouseWheelUnit::Line => delta.y * WHEEL_LINES,
                         egui::MouseWheelUnit::Page => delta.y * f32::from(term.screen().size().0),
                     };
-                    term.scroll_by(lines.round() as i32);
+                    let lines = lines.round() as i32;
+                    if lines != 0 {
+                        // 選択は表示中の行で覚えているので、スクロールしたら解除する
+                        self.term_selection = None;
+                        term.scroll_by(lines);
+                    }
                 }
                 _ => {}
             }
@@ -196,13 +218,14 @@ impl VzEditorApp {
         let row_h = self.line_height;
         let preedit = self.ime_preedit.clone();
         let mut ime_rect: Option<Rect> = None;
+        let mut copied: Option<String> = None;
 
         egui::CentralPanel::default()
             .frame(egui::Frame::NONE)
             .show(ctx, |ui| {
                 ui.multiply_opacity(window_style::text_alpha());
                 let avail = ui.available_rect_before_wrap();
-                ui.allocate_rect(avail, Sense::click());
+                let response = ui.allocate_rect(avail, Sense::click_and_drag());
                 let painter = ui.painter_at(avail);
                 window_style::bg_painter(&painter).rect_filled(
                     avail,
@@ -223,6 +246,9 @@ impl VzEditorApp {
                 let pad = 6.0;
                 let cols = ((avail.width() - pad * 2.0) / cell_w).floor().max(10.0) as u16;
                 let rows = ((avail.height() - pad * 2.0) / row_h).floor().max(2.0) as u16;
+                if term.screen().size() != (rows.max(2), cols.max(10)) {
+                    self.term_selection = None;
+                }
                 term.resize(rows, cols);
 
                 let origin = avail.min + Vec2::splat(pad);
@@ -231,6 +257,46 @@ impl VzEditorApp {
                 let cell_pos = |row: u16, col: u16| {
                     origin + Vec2::new(f32::from(col) * cell_w, f32::from(row) * row_h)
                 };
+                let cell_at = |p: Pos2| {
+                    let col = ((p.x - origin.x) / cell_w).floor().max(0.0) as u16;
+                    let row = ((p.y - origin.y) / row_h).floor().max(0.0) as u16;
+                    (row.min(rows - 1), col.min(cols - 1))
+                };
+
+                // 押してドラッグし、離した時点で範囲を確定してクリップボードへ
+                if response.drag_started_by(egui::PointerButton::Primary) {
+                    let origin_pos = ui.input(|i| i.pointer.press_origin());
+                    if let Some(p) = origin_pos.or(response.interact_pointer_pos()) {
+                        let cell = cell_at(p);
+                        self.term_selection = Some(TermSelection {
+                            anchor: cell,
+                            head: cell,
+                        });
+                    }
+                }
+                if response.dragged_by(egui::PointerButton::Primary) {
+                    if let (Some(sel), Some(p)) = (
+                        self.term_selection.as_mut(),
+                        response.interact_pointer_pos(),
+                    ) {
+                        sel.head = cell_at(p);
+                    }
+                }
+                if response.drag_stopped_by(egui::PointerButton::Primary) {
+                    if let Some(sel) = &self.term_selection {
+                        let text = vz_terminal::selection_text(screen, sel.anchor, sel.head);
+                        if text.is_empty() {
+                            self.term_selection = None;
+                        } else {
+                            copied = Some(text);
+                        }
+                    }
+                }
+                if response.clicked() {
+                    self.term_selection = None;
+                }
+                let sel = self.term_selection;
+                let in_sel = |row: u16, col: u16| sel.is_some_and(|s| s.contains(row, col));
                 // 文字の上端を行の中で上下中央に寄せる
                 let text_dy = ((row_h - self.font_size * 1.2) * 0.5).max(0.0);
 
@@ -253,6 +319,7 @@ impl VzEditorApp {
                             if col >= cols
                                 || c.is_wide_continuation()
                                 || CellStyle::of(c) != style
+                                || in_sel(row, col) != in_sel(row, start)
                                 || (width > 0 && c.is_wide())
                             {
                                 break;
@@ -275,6 +342,9 @@ impl VzEditorApp {
                             Rect::from_min_size(pos, Vec2::new(f32::from(width) * cell_w, row_h));
                         if let Some(bg_color) = style.bg {
                             painter.rect_filled(run_rect, CornerRadius::ZERO, bg_color);
+                        }
+                        if in_sel(row, start) {
+                            painter.rect_filled(run_rect, CornerRadius::ZERO, SELECTION_BG);
                         }
                         if !text.trim().is_empty() {
                             painter.text(
@@ -335,6 +405,12 @@ impl VzEditorApp {
                 }
             });
 
+        if let Some(text) = copied {
+            let chars = text.chars().count();
+            self.copy_to_clipboard(text);
+            self.status_message = format!("ターミナルの選択範囲をコピーしました（{chars} 文字）");
+        }
+
         // IME の候補ウィンドウをカーソル位置に出す（メニュー・ダイアログ表示中は出さない）
         let overlay = self.open_menu.is_some() || self.filer_modal.is_some() || self.show_about;
         ctx.output_mut(|o| {
@@ -346,6 +422,25 @@ impl VzEditorApp {
                 _ => None,
             };
         });
+    }
+}
+
+/// ターミナルのマウス選択。表示中の画面の（行, 桁）で、押した位置と今の位置を持つ。
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(super) struct TermSelection {
+    pub(super) anchor: (u16, u16),
+    pub(super) head: (u16, u16),
+}
+
+impl TermSelection {
+    /// セルが選択範囲に入るか（行をまたぐときは途中の行は全体）。
+    fn contains(&self, row: u16, col: u16) -> bool {
+        let (start, end) = if self.anchor <= self.head {
+            (self.anchor, self.head)
+        } else {
+            (self.head, self.anchor)
+        };
+        (start..=end).contains(&(row, col))
     }
 }
 
@@ -437,6 +532,21 @@ mod tests {
         assert_eq!(key_char(Key::Num2), Some('2'));
         assert_eq!(key_char(Key::ArrowUp), None);
         assert_eq!(key_char(Key::F1), None);
+    }
+
+    #[test]
+    fn test_term_selection_contains_rows_between() {
+        // 逆向き（下から上）にドラッグした選択
+        let sel = TermSelection {
+            anchor: (2, 3),
+            head: (0, 5),
+        };
+        assert!(!sel.contains(0, 4));
+        assert!(sel.contains(0, 5));
+        assert!(sel.contains(1, 0));
+        assert!(sel.contains(1, 79));
+        assert!(sel.contains(2, 3));
+        assert!(!sel.contains(2, 4));
     }
 
     #[test]

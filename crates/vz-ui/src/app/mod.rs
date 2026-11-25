@@ -440,6 +440,8 @@ pub struct VzEditorApp {
 
     /// 組み込みターミナル（Alt+K で初めて開いたときに起動する）
     terminal: Option<vz_terminal::Terminal>,
+    /// ターミナルのマウス選択（離した時点でクリップボードへコピー）
+    term_selection: Option<terminal_view::TermSelection>,
     /// 復元したターミナルを起動するフォルダ（最初のフレームで起動する）
     pending_terminal_cwd: Option<PathBuf>,
     /// ターミナル・ブラウザから戻る画面（エディターかファイラー）
@@ -550,6 +552,7 @@ impl VzEditorApp {
             window_geometry: settings.window,
             pending_window_restore: settings.window,
             terminal: None,
+            term_selection: None,
             pending_terminal_cwd: None,
             return_mode: AppMode::Editor,
             browser: None,

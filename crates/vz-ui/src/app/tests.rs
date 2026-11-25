@@ -51,6 +51,7 @@ pub(super) fn make_test_app() -> VzEditorApp {
         window_geometry: None,
         pending_window_restore: None,
         terminal: None,
+        term_selection: None,
         pending_terminal_cwd: None,
         return_mode: AppMode::Editor,
         browser: None,

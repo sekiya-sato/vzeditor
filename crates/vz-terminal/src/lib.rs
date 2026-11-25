@@ -294,6 +294,25 @@ impl Terminal {
     }
 }
 
+/// 画面上の 2 つのセル（行, 桁。どちらも含む）の間の文字（マウス選択のコピー用）。
+/// 順序は問わない。各行の行末の空白は除き、折り返した行はつなげる。
+pub fn selection_text(screen: &vt100::Screen, a: (u16, u16), b: (u16, u16)) -> String {
+    let (start, end) = if a <= b { (a, b) } else { (b, a) };
+    let (_, cols) = screen.size();
+    // 終わりのセルを含める（全角の左半分なら右半分まで）
+    let end_wide = screen.cell(end.0, end.1).is_some_and(vt100::Cell::is_wide);
+    let end_col = (end.1 + if end_wide { 2 } else { 1 }).min(cols);
+    let text = screen.contents_between(start.0, start.1, end.0, end_col);
+    let mut out = String::with_capacity(text.len());
+    for (i, line) in text.split('\n').enumerate() {
+        if i > 0 {
+            out.push('\n');
+        }
+        out.push_str(line.trim_end());
+    }
+    out
+}
+
 impl Drop for Terminal {
     fn drop(&mut self) {
         if self.exit_code.is_none() {
@@ -319,6 +338,21 @@ mod tests {
                 args: vec!["-c".into(), format!("echo {text}")],
             }
         }
+    }
+
+    #[test]
+    fn test_selection_text_spans_rows_and_trims() {
+        let mut parser = vt100::Parser::new(5, 20, 0);
+        parser.process("hello world   \r\nsecond line\r\n日本語abc".as_bytes());
+        let screen = parser.screen();
+        // 1 行の中（終わりのセルを含む）
+        assert_eq!(selection_text(screen, (0, 6), (0, 10)), "world");
+        // 逆向きにドラッグしても同じ
+        assert_eq!(selection_text(screen, (0, 10), (0, 6)), "world");
+        // 複数行（行末の空白を除く）
+        assert_eq!(selection_text(screen, (0, 6), (1, 5)), "world\nsecond");
+        // 全角の左半分で終わると 1 文字まるごと入る
+        assert_eq!(selection_text(screen, (2, 0), (2, 2)), "日本");
     }
 
     #[test]
