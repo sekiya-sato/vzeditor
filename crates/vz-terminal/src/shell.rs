@@ -143,8 +143,9 @@ mod tests {
 
     #[test]
     fn test_wsl_gets_cd_argument() {
+        // `\` は Windows でしか区切りにならないので join で組み立てる（他 OS のテストでも末尾が WSL.exe になる）
         let wsl = ShellCommand {
-            program: PathBuf::from(r"C:\Windows\System32\WSL.exe"),
+            program: Path::new("C:\\Windows").join("System32").join("WSL.exe"),
             args: Vec::new(),
         };
         assert_eq!(
