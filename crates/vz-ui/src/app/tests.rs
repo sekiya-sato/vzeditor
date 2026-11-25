@@ -1280,6 +1280,42 @@ fn test_buffer_strip_and_browser_screen_render_headless() {
 }
 
 #[test]
+fn test_session_restores_filer_directories_and_view() {
+    let dir = std::env::temp_dir().join(format!("vz_filer_session_{}", std::process::id()));
+    let session_dir = dir.join("session");
+    let left = dir.join("左 pane");
+    let right = dir.join("右 pane");
+    std::fs::create_dir_all(&left).unwrap();
+    std::fs::create_dir_all(&right).unwrap();
+
+    let mut app = make_test_app();
+    app.filer.left.enter_dir(left.clone()).unwrap();
+    app.filer.right.enter_dir(right.clone()).unwrap();
+    app.enter_filer();
+    app.save_session_to(&session_dir).unwrap();
+
+    let mut restored = make_test_app();
+    let initial_right = restored.filer.right.current_dir.clone();
+    restored.restore_session_from(&session_dir);
+    assert_eq!(restored.mode, AppMode::Filer);
+    assert_eq!(restored.filer.left.current_dir, left.canonicalize().unwrap());
+    assert_eq!(restored.filer.right.current_dir, right.canonicalize().unwrap());
+
+    app.enter_editor();
+    app.save_session_to(&session_dir).unwrap();
+    std::fs::remove_dir(&right).unwrap();
+
+    let mut restored = make_test_app();
+    restored.restore_session_from(&session_dir);
+    assert_eq!(restored.mode, AppMode::Editor);
+    restored.enter_filer();
+    assert_eq!(restored.filer.left.current_dir, left.canonicalize().unwrap());
+    assert_eq!(restored.filer.right.current_dir, initial_right);
+
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
 fn test_session_restores_browser_and_terminal() {
     let dir = std::env::temp_dir().join(format!("vz_tool_session_{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);

@@ -9,6 +9,7 @@
 //!   読み終えた `session.ini` と一時保存ファイルを削除する。
 //!   ターミナル（起動したフォルダ）とブラウザ（表示中の URL）も、開いていれば記録して開き直す。
 //!   シェルは新しく起動する（実行中のコマンドや画面の内容は戻らない）。
+//!   2画面ファイラーは左右のフォルダを記録し、表示中だった場合はその画面も戻す。
 //!
 //! 要求は設定フォルダの `session/quit-request` ファイルで伝える。起動中の vz は監視スレッドで
 //! このファイルを見つけると `quit-request.<pid>` へ改名して受け取り（同時に1つの vz だけが受け取る）、
@@ -42,6 +43,10 @@ pub enum EntryKind {
     Terminal,
     /// 簡易ブラウザ。`path` は表示中の URL（無ければ案内ページ）。`active` はブラウザを表示していたか
     Browser,
+    /// ファイラーの左側。path はフォルダ、active はファイラーを表示していたか
+    FilerLeft,
+    /// ファイラーの右側。path はフォルダ
+    FilerRight,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -54,7 +59,7 @@ pub struct SessionEntry {
     pub crlf: bool,
     /// 一時保存ファイル（Unsaved のとき）
     pub temp: Option<PathBuf>,
-    /// 元のファイルのパス（無題なら None）
+    /// 元のファイルのパス（無題なら None）、またはツールのフォルダ・URL
     pub path: Option<PathBuf>,
 }
 
@@ -70,7 +75,7 @@ fn path_field(p: &Option<PathBuf>) -> String {
     p.as_ref().map(|p| p.to_string_lossy().into_owned()).unwrap_or_default()
 }
 
-/// 1バッファ1行。タブ区切りで、パスは改行以外を含められるよう最後の欄に置く。
+/// 1項目1行。タブ区切りで、パスは改行以外を含められるよう最後の欄に置く。
 pub fn serialize(entries: &[SessionEntry]) -> String {
     let mut out = String::new();
     for e in entries {
@@ -80,6 +85,8 @@ pub fn serialize(entries: &[SessionEntry]) -> String {
             EntryKind::Conflict => "conflict",
             EntryKind::Terminal => "terminal",
             EntryKind::Browser => "browser",
+            EntryKind::FilerLeft => "filer-left",
+            EntryKind::FilerRight => "filer-right",
         };
         out.push_str(&format!(
             "{kind}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
@@ -108,6 +115,8 @@ pub fn parse(text: &str) -> Vec<SessionEntry> {
             "conflict" => EntryKind::Conflict,
             "terminal" => EntryKind::Terminal,
             "browser" => EntryKind::Browser,
+            "filer-left" => EntryKind::FilerLeft,
+            "filer-right" => EntryKind::FilerRight,
             _ => continue,
         };
         let opt = |s: &str| (!s.is_empty()).then(|| PathBuf::from(s));
@@ -125,7 +134,7 @@ pub fn parse(text: &str) -> Vec<SessionEntry> {
             EntryKind::File => entry.path.is_some(),
             EntryKind::Unsaved => entry.temp.is_some(),
             EntryKind::Conflict => entry.temp.is_some() && entry.path.is_some(),
-            EntryKind::Terminal => entry.path.is_some(),
+            EntryKind::Terminal | EntryKind::FilerLeft | EntryKind::FilerRight => entry.path.is_some(),
             EntryKind::Browser => true,
         };
         if valid {

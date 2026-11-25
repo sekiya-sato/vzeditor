@@ -26,7 +26,7 @@ impl VzEditorApp {
     }
 
     /// 未保存のファイルを保存し、無題・保存できなかったバッファは `dir` に一時保存して、
-    /// 開いているバッファの一覧を `dir/session.ini` に追記する。
+    /// 開いているバッファとツールの状態を `dir/session.ini` に追記する。
     pub(super) fn save_session_to(&mut self, dir: &Path) -> std::io::Result<()> {
         fs::create_dir_all(dir)?;
         let mut entries = Vec::new();
@@ -126,6 +126,16 @@ impl VzEditorApp {
                 url.map(PathBuf::from),
             ));
         }
+        entries.push(tool_entry(
+            EntryKind::FilerLeft,
+            self.mode == AppMode::Filer,
+            Some(self.filer.left.current_dir.clone()),
+        ));
+        entries.push(tool_entry(
+            EntryKind::FilerRight,
+            false,
+            Some(self.filer.right.current_dir.clone()),
+        ));
         session::append_session(dir, &entries)
     }
 
@@ -137,7 +147,9 @@ impl VzEditorApp {
         }
         let mut active: Option<usize> = None;
         let mut restored = 0usize;
-        // 表示していた画面（ターミナル・ブラウザ。無ければエディター）
+        let mut left_dir = None;
+        let mut right_dir = None;
+        // 表示していた画面（無ければエディター）
         let mut tool_mode: Option<AppMode> = None;
         for e in &entries {
             let ok = match e.kind {
@@ -161,6 +173,17 @@ impl VzEditorApp {
                     if e.active {
                         tool_mode = Some(AppMode::Browser);
                     }
+                    continue;
+                }
+                EntryKind::FilerLeft => {
+                    left_dir = e.path.as_ref();
+                    if e.active {
+                        tool_mode = Some(AppMode::Filer);
+                    }
+                    continue;
+                }
+                EntryKind::FilerRight => {
+                    right_dir = e.path.as_ref();
                     continue;
                 }
                 EntryKind::File => {
@@ -223,12 +246,18 @@ impl VzEditorApp {
         if let Some(idx) = active {
             self.switch_buffer_to(idx);
         }
+        if let Some(path) = left_dir {
+            let _ = self.filer.left.enter_dir(path.clone());
+        }
+        if let Some(path) = right_dir {
+            let _ = self.filer.right.enter_dir(path.clone());
+        }
         self.mode = tool_mode.unwrap_or(AppMode::Editor);
         self.return_mode = AppMode::Editor;
         self.need_scroll_to_cursor = true;
         let buffer_entries = entries
             .iter()
-            .filter(|e| !matches!(e.kind, EntryKind::Terminal | EntryKind::Browser))
+            .filter(|e| matches!(e.kind, EntryKind::File | EntryKind::Unsaved | EntryKind::Conflict))
             .count();
         self.status_message =
             format!("前回の状態を復元しました: {restored} / {buffer_entries} 個のバッファ");
@@ -388,7 +417,7 @@ impl VzEditorApp {
     // --- Clipboard & Edit Menu Helpers ---
 }
 
-/// ターミナル・ブラウザの保存項目。
+/// ファイラー・ターミナル・ブラウザの保存項目。
 fn tool_entry(kind: EntryKind, active: bool, path: Option<PathBuf>) -> SessionEntry {
     SessionEntry {
         kind,
