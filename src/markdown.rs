@@ -133,7 +133,7 @@ pub fn parse_markdown(lines: &[String]) -> Vec<MdBlock> {
                 i += 1;
             }
             blocks.push(MdBlock::CodeBlock {
-                lang,
+                lang: lang.to_string(),
                 code: code_lines.join("\n"),
             });
             continue;
@@ -163,7 +163,7 @@ pub fn parse_markdown(lines: &[String]) -> Vec<MdBlock> {
             let col_count = header_cells.len();
             let headers = header_cells
                 .into_iter()
-                .map(|c| parse_inlines(&c))
+                .map(parse_inlines)
                 .collect();
             i += 2;
             let mut rows = Vec::new();
@@ -173,8 +173,8 @@ pub fn parse_markdown(lines: &[String]) -> Vec<MdBlock> {
                     break;
                 }
                 let mut cells = split_table_cells(row_trimmed);
-                cells.resize(col_count, String::new());
-                rows.push(cells.into_iter().map(|c| parse_inlines(&c)).collect());
+                cells.resize(col_count, "");
+                rows.push(cells.into_iter().map(parse_inlines).collect());
                 i += 1;
             }
             blocks.push(MdBlock::Table { headers, rows });
@@ -267,7 +267,7 @@ pub fn parse_markdown(lines: &[String]) -> Vec<MdBlock> {
             }
             blocks.push(MdBlock::OrderedItem {
                 indent,
-                number,
+                number: format!("{number}."),
                 inlines,
             });
             continue;
@@ -344,7 +344,7 @@ fn count_leading_spaces(s: &str) -> usize {
     n
 }
 
-fn parse_fence_open(trimmed: &str) -> Option<(char, usize, String)> {
+fn parse_fence_open(trimmed: &str) -> Option<(char, usize, &str)> {
     let first = trimmed.chars().next()?;
     if first != '`' && first != '~' {
         return None;
@@ -358,7 +358,7 @@ fn parse_fence_open(trimmed: &str) -> Option<(char, usize, String)> {
     if first == '`' && rest.contains('`') {
         return None;
     }
-    Some((first, count, rest.to_string()))
+    Some((first, count, rest))
 }
 
 fn is_fence_close(trimmed: &str, fence_char: char, min_len: usize) -> bool {
@@ -442,7 +442,8 @@ fn parse_bullet_item(raw: &str) -> Option<(usize, Option<bool>, &str)> {
     Some((indent, None, content.trim()))
 }
 
-fn parse_ordered_item(raw: &str) -> Option<(usize, String, &str)> {
+/// 番号付きリストの項目なら (字下げ, 番号の数字, 本文)。
+fn parse_ordered_item(raw: &str) -> Option<(usize, &str, &str)> {
     let spaces = count_leading_spaces(raw);
     let trimmed = raw.trim_start();
     let digits_len = trimmed.bytes().take_while(|b| b.is_ascii_digit()).count();
@@ -458,8 +459,7 @@ fn parse_ordered_item(raw: &str) -> Option<(usize, String, &str)> {
     let content = after_sep
         .strip_prefix(' ')
         .or_else(|| after_sep.strip_prefix('\t'))?;
-    let number = format!("{}.", &trimmed[..digits_len]);
-    Some((spaces / 2, number, content.trim()))
+    Some((spaces / 2, &trimmed[..digits_len], content.trim()))
 }
 
 fn looks_like_table_row(trimmed: &str) -> bool {
@@ -480,12 +480,12 @@ fn is_table_delimiter(trimmed: &str) -> bool {
         })
 }
 
-fn split_table_cells(trimmed: &str) -> Vec<String> {
+fn split_table_cells(trimmed: &str) -> Vec<&str> {
     let s = trimmed
         .strip_prefix('|')
         .unwrap_or(trimmed);
     let s = s.strip_suffix('|').unwrap_or(s);
-    s.split('|').map(|c| c.trim().to_string()).collect()
+    s.split('|').map(str::trim).collect()
 }
 
 /// Parse inline Markdown spans (bold, italic, inline code, links, images, strikethrough).

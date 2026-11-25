@@ -25,20 +25,23 @@ const OPEN_TITLE: &str = "VZ Editor - ファイルを開く";
 
 /// 名前を付けて保存ダイアログを非同期で開く。
 pub fn spawn_save_dialog(initial_path: Option<&Path>) -> Receiver<DialogResult> {
-    let initial = initial_path.map(|p| p.to_path_buf());
-    let (tx, rx) = mpsc::channel();
-    thread::spawn(move || {
-        let _ = tx.send(run_save_dialog(initial.as_deref()));
-    });
-    rx
+    spawn_dialog(initial_path, run_save_dialog)
 }
 
 /// ファイルを開くダイアログ（複数選択可）を非同期で開く。
 pub fn spawn_open_dialog(initial_dir: Option<&Path>) -> Receiver<DialogResult> {
-    let initial = initial_dir.map(|p| p.to_path_buf());
+    spawn_dialog(initial_dir, run_open_dialog)
+}
+
+/// ダイアログを別スレッドで開き、結果を受け取る Receiver を返す。
+fn spawn_dialog(
+    initial: Option<&Path>,
+    run: fn(Option<&Path>) -> DialogResult,
+) -> Receiver<DialogResult> {
+    let initial = initial.map(|p| p.to_path_buf());
     let (tx, rx) = mpsc::channel();
     thread::spawn(move || {
-        let _ = tx.send(run_open_dialog(initial.as_deref()));
+        let _ = tx.send(run(initial.as_deref()));
     });
     rx
 }

@@ -1,4 +1,5 @@
 use chrono::{DateTime, Local};
+use std::cmp::Reverse;
 use std::collections::HashSet;
 use std::fs;
 use std::io;
@@ -132,12 +133,14 @@ impl FilerPane {
         entries.extend(children);
 
         // Remove marks for paths that no longer exist in this directory
-        let valid_paths: HashSet<PathBuf> = entries
-            .iter()
-            .filter(|e| !e.is_parent)
-            .map(|e| e.path.clone())
-            .collect();
-        self.marked.retain(|p| valid_paths.contains(p));
+        if !self.marked.is_empty() {
+            let valid_paths: HashSet<&Path> = entries
+                .iter()
+                .filter(|e| !e.is_parent)
+                .map(|e| e.path.as_path())
+                .collect();
+            self.marked.retain(|p| valid_paths.contains(p.as_path()));
+        }
 
         self.entries = entries;
 
@@ -312,34 +315,30 @@ impl FilerState {
 }
 
 fn sort_entries(entries: &mut [FileEntry], mode: SortMode) {
-    entries.sort_by(|a, b| {
-        // Always group directories before regular files (classic VZ / FDclone style)
-        b.is_dir.cmp(&a.is_dir).then_with(|| match mode {
-            SortMode::NameAsc => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
-            SortMode::ModifiedDesc => b
-                .modified
-                .cmp(&a.modified)
-                .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase())),
-            SortMode::SizeDesc => b
-                .size
-                .cmp(&a.size)
-                .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase())),
-            SortMode::ExtAsc => {
-                let ext_a = Path::new(&a.name)
+    // 比較ごとに小文字化しないよう、キーを 1 回だけ作って並べる（安定ソート）。
+    // フォルダを常にファイルより前に置く（classic VZ / FDclone style）。
+    entries.sort_by_cached_key(|e| {
+        let (modified, size, ext) = match mode {
+            SortMode::NameAsc => (None, 0, String::new()),
+            SortMode::ModifiedDesc => (e.modified, 0, String::new()),
+            SortMode::SizeDesc => (None, e.size, String::new()),
+            SortMode::ExtAsc => (
+                None,
+                0,
+                Path::new(&e.name)
                     .extension()
-                    .and_then(|e| e.to_str())
+                    .and_then(|x| x.to_str())
                     .unwrap_or("")
-                    .to_lowercase();
-                let ext_b = Path::new(&b.name)
-                    .extension()
-                    .and_then(|e| e.to_str())
-                    .unwrap_or("")
-                    .to_lowercase();
-                ext_a
-                    .cmp(&ext_b)
-                    .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
-            }
-        })
+                    .to_lowercase(),
+            ),
+        };
+        (
+            Reverse(e.is_dir),
+            Reverse(modified),
+            Reverse(size),
+            ext,
+            e.name.to_lowercase(),
+        )
     });
 }
 
@@ -391,10 +390,10 @@ fn copy_dir_recursive(src: &Path, dst: &Path) -> io::Result<()> {
     Ok(())
 }
 
-/// Copy a file or directory into `dst_dir`.
-pub fn copy_entry(src: &Path, dst_dir: &Path) -> io::Result<PathBuf> {
+/// コピー・移動（`op` は "コピー" / "移動"）の前の確認。宛先のパスを返す。
+fn check_transfer(src: &Path, dst_dir: &Path, op: &str) -> io::Result<PathBuf> {
     let name = src.file_name().ok_or_else(|| {
-        io::Error::new(io::ErrorKind::InvalidInput, "コピー元ファイル名が取得できません")
+        io::Error::new(io::ErrorKind::InvalidInput, format!("{op}元ファイル名が取得できません"))
     })?;
     let dst = dst_dir.join(name);
 
@@ -403,15 +402,21 @@ pub fn copy_entry(src: &Path, dst_dir: &Path) -> io::Result<PathBuf> {
     if canon_src == canon_dst_dir.join(name) {
         return Err(io::Error::new(
             io::ErrorKind::AlreadyExists,
-            "コピー元とコピー先が同じです",
+            format!("{op}元と{op}先が同じです"),
         ));
     }
     if src.is_dir() && canon_dst_dir.starts_with(&canon_src) {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
-            "ディレクトリを自身の配下へコピーできません",
+            format!("ディレクトリを自身の配下へ{op}できません"),
         ));
     }
+    Ok(dst)
+}
+
+/// Copy a file or directory into `dst_dir`.
+pub fn copy_entry(src: &Path, dst_dir: &Path) -> io::Result<PathBuf> {
+    let dst = check_transfer(src, dst_dir, "コピー")?;
 
     if src.is_dir() {
         copy_dir_recursive(src, &dst)?;
@@ -423,25 +428,7 @@ pub fn copy_entry(src: &Path, dst_dir: &Path) -> io::Result<PathBuf> {
 
 /// Move a file or directory into `dst_dir` (falls back to copy+delete across filesystems).
 pub fn move_entry(src: &Path, dst_dir: &Path) -> io::Result<PathBuf> {
-    let name = src.file_name().ok_or_else(|| {
-        io::Error::new(io::ErrorKind::InvalidInput, "移動元ファイル名が取得できません")
-    })?;
-    let dst = dst_dir.join(name);
-
-    let canon_src = fs::canonicalize(src).unwrap_or_else(|_| src.to_path_buf());
-    let canon_dst_dir = fs::canonicalize(dst_dir).unwrap_or_else(|_| dst_dir.to_path_buf());
-    if canon_src == canon_dst_dir.join(name) {
-        return Err(io::Error::new(
-            io::ErrorKind::AlreadyExists,
-            "移動元と移動先が同じです",
-        ));
-    }
-    if src.is_dir() && canon_dst_dir.starts_with(&canon_src) {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "ディレクトリを自身の配下へ移動できません",
-        ));
-    }
+    let dst = check_transfer(src, dst_dir, "移動")?;
 
     match fs::rename(src, &dst) {
         Ok(()) => Ok(dst),
@@ -504,6 +491,37 @@ pub fn create_dir(dir: &Path, name: &str) -> io::Result<PathBuf> {
 mod tests {
     use super::*;
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn test_sort_entries_order() {
+        let t = |secs: u64| Some(UNIX_EPOCH + std::time::Duration::from_secs(secs));
+        let e = |name: &str, is_dir: bool, size: u64, modified| FileEntry {
+            name: name.to_string(),
+            path: PathBuf::from(name),
+            is_dir,
+            is_parent: false,
+            size,
+            modified,
+            modified_str: String::new(),
+        };
+        let base = vec![
+            e("b.txt", false, 10, t(2)),
+            e("A.md", false, 30, t(1)),
+            e("zdir", true, 0, t(5)),
+            e("a.TXT", false, 10, None),
+            e("Adir", true, 0, t(9)),
+            e("c.md", false, 30, t(2)),
+        ];
+        let names = |mode| {
+            let mut v = base.clone();
+            sort_entries(&mut v, mode);
+            v.into_iter().map(|e| e.name).collect::<Vec<_>>()
+        };
+        assert_eq!(names(SortMode::NameAsc), ["Adir", "zdir", "A.md", "a.TXT", "b.txt", "c.md"]);
+        assert_eq!(names(SortMode::ModifiedDesc), ["Adir", "zdir", "b.txt", "c.md", "A.md", "a.TXT"]);
+        assert_eq!(names(SortMode::SizeDesc), ["Adir", "zdir", "A.md", "c.md", "a.TXT", "b.txt"]);
+        assert_eq!(names(SortMode::ExtAsc), ["Adir", "zdir", "A.md", "c.md", "a.TXT", "b.txt"]);
+    }
 
     fn make_temp_dir(tag: &str) -> PathBuf {
         let nanos = SystemTime::now()

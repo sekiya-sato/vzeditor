@@ -107,10 +107,8 @@ impl Settings {
                     }
                 }
                 "font_size" => {
-                    if let Ok(v) = value.parse::<f32>() {
-                        if v.is_finite() {
-                            s.font_size = v;
-                        }
+                    if let Some(v) = finite(value) {
+                        s.font_size = v;
                     }
                 }
                 "window_x" => wx = value.parse::<i32>().ok(),

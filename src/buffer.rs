@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+use std::collections::VecDeque;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -78,12 +80,18 @@ pub fn file_stamp(path: &Path) -> Option<FileStamp> {
 pub fn read_lines(path: &Path) -> io::Result<(Vec<String>, &'static str)> {
     let raw = fs::read_to_string(path)?;
     let line_ending = if raw.contains("\r\n") { "\r\n" } else { "\n" };
-    let normalized = raw.replace("\r\n", "\n").replace('\r', "\n");
-    let mut lines: Vec<String> = normalized.split('\n').map(String::from).collect();
-    if lines.is_empty() {
-        lines.push(String::new());
-    }
+    // split は常に 1 つ以上を返すので、空のファイルでも 1 行になる
+    let lines = normalize_newlines(&raw).split('\n').map(String::from).collect();
     Ok((lines, line_ending))
+}
+
+/// 改行（\r\n・\r）を \n にそろえる。\r が無ければコピーしない。
+fn normalize_newlines(s: &str) -> Cow<'_, str> {
+    if s.contains('\r') {
+        Cow::Owned(s.replace("\r\n", "\n").replace('\r', "\n"))
+    } else {
+        Cow::Borrowed(s)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -108,7 +116,7 @@ pub struct TextBuffer {
     pub revision: u64,
     pub encoding: &'static str,
     pub line_ending: &'static str,
-    undo_stack: Vec<UndoSnapshot>,
+    undo_stack: VecDeque<UndoSnapshot>,
     redo_stack: Vec<UndoSnapshot>,
     /// 範囲選択の起点（行, 文字位置）。カーソルとの間が選択範囲。None なら選択なし。
     /// サクラ互換のキー割り当てでのみ使う（VZ 互換では常に None）。
@@ -138,7 +146,7 @@ impl TextBuffer {
             revision: 0,
             encoding: "UTF-8",
             line_ending: "\n",
-            undo_stack: Vec::new(),
+            undo_stack: VecDeque::new(),
             redo_stack: Vec::new(),
             anchor: None,
             disk_stamp: None,
@@ -158,7 +166,7 @@ impl TextBuffer {
             revision: 1,
             encoding: "UTF-8",
             line_ending,
-            undo_stack: Vec::new(),
+            undo_stack: VecDeque::new(),
             redo_stack: Vec::new(),
             anchor: None,
             disk_stamp: stamp,
@@ -178,7 +186,11 @@ impl TextBuffer {
         let Some(path) = self.file_path.as_deref() else {
             return false;
         };
-        read_lines(path).is_ok_and(|(lines, _)| lines == self.lines)
+        fs::read_to_string(path).is_ok_and(|raw| {
+            normalize_newlines(&raw)
+                .split('\n')
+                .eq(self.lines.iter().map(String::as_str))
+        })
     }
 
     /// ファイルを読み直す（外部での変更の取り込み）。読む前の内容は Ctrl+Z で戻せる。
@@ -191,19 +203,12 @@ impl TextBuffer {
         let (lines, line_ending) = read_lines(&path)?;
         let mut snap = self.current_snapshot();
         snap.dirty = true;
-        if self.undo_stack.len() >= MAX_UNDO_HISTORY {
-            self.undo_stack.remove(0);
-        }
-        self.undo_stack.push(snap);
-        self.redo_stack.clear();
+        self.push_undo(snap);
         self.lines = lines;
         self.line_ending = line_ending;
         self.disk_stamp = stamp;
         self.dirty = false;
-        self.anchor = None;
-        self.revision = self.revision.wrapping_add(1);
-        let (line, col) = (self.cursor_line, self.cursor_col);
-        self.set_cursor(line, col);
+        self.after_replace_all();
         Ok(())
     }
 
@@ -212,6 +217,11 @@ impl TextBuffer {
         self.push_undo_snapshot();
         self.lines = if lines.is_empty() { vec![String::new()] } else { lines };
         self.dirty = true;
+        self.after_replace_all();
+    }
+
+    /// 内容を丸ごと入れ替えた後の共通処理（選択解除、カーソルを範囲内へ）。
+    fn after_replace_all(&mut self) {
         self.anchor = None;
         self.revision = self.revision.wrapping_add(1);
         let (line, col) = (self.cursor_line, self.cursor_col);
@@ -306,14 +316,20 @@ impl TextBuffer {
 
     // --- VZ Diamond Cursor Movement (Ctrl+E / S / D / X) ---
 
+    /// 上下移動で保つ表示桁（最初の上下移動の時点の桁を覚える）。
+    fn sticky_visual_col(&mut self) -> usize {
+        let vcol = self
+            .preferred_visual_col
+            .unwrap_or_else(|| self.visual_col_at(self.cursor_line, self.cursor_col));
+        self.preferred_visual_col = Some(vcol);
+        vcol
+    }
+
     pub fn move_up(&mut self) {
         if self.cursor_line == 0 {
             return;
         }
-        let target_vcol = self
-            .preferred_visual_col
-            .unwrap_or_else(|| self.visual_col_at(self.cursor_line, self.cursor_col));
-        self.preferred_visual_col = Some(target_vcol);
+        let target_vcol = self.sticky_visual_col();
         self.cursor_line -= 1;
         self.cursor_col = self.char_col_for_visual_col(self.cursor_line, target_vcol);
     }
@@ -322,10 +338,7 @@ impl TextBuffer {
         if self.cursor_line + 1 >= self.lines.len() {
             return;
         }
-        let target_vcol = self
-            .preferred_visual_col
-            .unwrap_or_else(|| self.visual_col_at(self.cursor_line, self.cursor_col));
-        self.preferred_visual_col = Some(target_vcol);
+        let target_vcol = self.sticky_visual_col();
         self.cursor_line += 1;
         self.cursor_col = self.char_col_for_visual_col(self.cursor_line, target_vcol);
     }
@@ -431,20 +444,14 @@ impl TextBuffer {
 
     pub fn move_page_up(&mut self, page_lines: usize) {
         let step = page_lines.max(1);
-        let target_vcol = self
-            .preferred_visual_col
-            .unwrap_or_else(|| self.visual_col_at(self.cursor_line, self.cursor_col));
-        self.preferred_visual_col = Some(target_vcol);
+        let target_vcol = self.sticky_visual_col();
         self.cursor_line = self.cursor_line.saturating_sub(step);
         self.cursor_col = self.char_col_for_visual_col(self.cursor_line, target_vcol);
     }
 
     pub fn move_page_down(&mut self, page_lines: usize) {
         let step = page_lines.max(1);
-        let target_vcol = self
-            .preferred_visual_col
-            .unwrap_or_else(|| self.visual_col_at(self.cursor_line, self.cursor_col));
-        self.preferred_visual_col = Some(target_vcol);
+        let target_vcol = self.sticky_visual_col();
         let max_line = self.lines.len().saturating_sub(1);
         self.cursor_line = (self.cursor_line + step).min(max_line);
         self.cursor_col = self.char_col_for_visual_col(self.cursor_line, target_vcol);
@@ -462,10 +469,15 @@ impl TextBuffer {
     }
 
     fn push_undo_snapshot(&mut self) {
+        self.push_undo(self.current_snapshot());
+    }
+
+    /// アンドゥ履歴に積む（上限を超えたら古いものから捨てる）。リドゥ履歴は消す。
+    fn push_undo(&mut self, snap: UndoSnapshot) {
         if self.undo_stack.len() >= MAX_UNDO_HISTORY {
-            self.undo_stack.remove(0);
+            self.undo_stack.pop_front();
         }
-        self.undo_stack.push(self.current_snapshot());
+        self.undo_stack.push_back(snap);
         self.redo_stack.clear();
     }
 
@@ -478,17 +490,11 @@ impl TextBuffer {
     }
 
     pub fn undo(&mut self) -> bool {
-        let Some(prev) = self.undo_stack.pop() else {
+        let Some(prev) = self.undo_stack.pop_back() else {
             return false;
         };
         self.redo_stack.push(self.current_snapshot());
-        self.anchor = None;
-        self.lines = prev.lines;
-        self.cursor_line = prev.cursor_line;
-        self.cursor_col = prev.cursor_col;
-        self.dirty = prev.dirty;
-        self.preferred_visual_col = None;
-        self.revision = self.revision.wrapping_add(1);
+        self.restore_snapshot(prev);
         true
     }
 
@@ -496,15 +502,19 @@ impl TextBuffer {
         let Some(next) = self.redo_stack.pop() else {
             return false;
         };
-        self.undo_stack.push(self.current_snapshot());
+        self.undo_stack.push_back(self.current_snapshot());
+        self.restore_snapshot(next);
+        true
+    }
+
+    fn restore_snapshot(&mut self, snap: UndoSnapshot) {
         self.anchor = None;
-        self.lines = next.lines;
-        self.cursor_line = next.cursor_line;
-        self.cursor_col = next.cursor_col;
-        self.dirty = next.dirty;
+        self.lines = snap.lines;
+        self.cursor_line = snap.cursor_line;
+        self.cursor_col = snap.cursor_col;
+        self.dirty = snap.dirty;
         self.preferred_visual_col = None;
         self.revision = self.revision.wrapping_add(1);
-        true
     }
 
     // --- Editing Operations ---
@@ -521,7 +531,7 @@ impl TextBuffer {
 
     fn insert_text_internal(&mut self, text: &str) {
         self.preferred_visual_col = None;
-        let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
+        let normalized = normalize_newlines(text);
         let mut parts = normalized.split('\n');
 
         if let Some(first) = parts.next() {
@@ -693,12 +703,17 @@ impl TextBuffer {
     /// 1行選択（改行を含む。最終行は行末まで）。
     pub fn select_line(&mut self, line: usize) {
         let line = line.min(self.lines.len().saturating_sub(1));
-        let end = if line + 1 < self.lines.len() {
-            (line + 1, 0)
+        let (start, end) = self.line_range(line);
+        self.select_range(start, end);
+    }
+
+    /// 行全体の範囲（次の行があれば改行を含む）。
+    pub fn line_range(&self, line: usize) -> (TextPos, TextPos) {
+        if line + 1 < self.lines.len() {
+            ((line, 0), (line + 1, 0))
         } else {
-            (line, self.line_char_len(line))
-        };
-        self.select_range((line, 0), end);
+            ((line, 0), (line, self.line_char_len(line)))
+        }
     }
 
     /// 指定位置の単語の範囲（同じ文字種が続く区間）。
@@ -844,6 +859,25 @@ impl TextBuffer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_undo_history_cap_and_redo() {
+        let mut buf = TextBuffer::new();
+        for _ in 0..(MAX_UNDO_HISTORY + 5) {
+            buf.insert_text("x");
+        }
+        let mut undone = 0;
+        while buf.undo() {
+            undone += 1;
+        }
+        assert_eq!(undone, MAX_UNDO_HISTORY);
+        assert_eq!(buf.lines[0].len(), 5);
+        assert!(buf.redo());
+        assert_eq!(buf.lines[0].len(), 6);
+        // 改行コードをそろえる（CR が無ければコピーしない）
+        assert_eq!(normalize_newlines("a\r\nb\rc"), "a\nb\nc");
+        assert!(matches!(normalize_newlines("a\nb"), Cow::Borrowed(_)));
+    }
 
     #[test]
     fn test_diamond_movement_and_editing() {

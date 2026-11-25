@@ -15,6 +15,7 @@ use eframe::egui::{
     self, Align2, Color32, CornerRadius, Event, FontId, ImeEvent, Key, Pos2, Rect, Sense, Stroke,
     StrokeKind, Vec2,
 };
+use std::borrow::Cow;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -736,50 +737,55 @@ impl VzEditorApp {
     }
 
     fn set_bg_opacity(&mut self, percent: u8) {
-        let p = window_style::clamp_opacity(percent);
-        if self.persist_settings {
-            window_style::set_opacity_percent(p);
-        }
-        if p == self.bg_opacity {
-            self.status_message = format!(
-                "背景の不透明度は {p}% です ({}〜{}%)",
-                window_style::MIN_OPACITY,
-                window_style::MAX_OPACITY
-            );
-            return;
-        }
-        self.bg_opacity = p;
-        self.status_message = format!("背景の不透明度: {p}% (Alt+↑ 濃く / Alt+↓ 薄く / Alt+0 戻す)");
-        self.save_settings();
+        self.set_opacity(false, percent);
     }
 
     fn change_bg_opacity(&mut self, delta: i16) {
-        let next = (self.bg_opacity as i16 + delta).clamp(0, 100) as u8;
-        self.set_bg_opacity(next);
+        self.set_bg_opacity(Self::step_opacity(self.bg_opacity, delta));
     }
 
     fn set_text_opacity(&mut self, percent: u8) {
+        self.set_opacity(true, percent);
+    }
+
+    fn change_text_opacity(&mut self, delta: i16) {
+        self.set_text_opacity(Self::step_opacity(self.text_opacity, delta));
+    }
+
+    fn step_opacity(current: u8, delta: i16) -> u8 {
+        (current as i16 + delta).clamp(0, 100) as u8
+    }
+
+    /// 背景（text = false）または文字（text = true）の不透明度を設定する。
+    fn set_opacity(&mut self, text: bool, percent: u8) {
         let p = window_style::clamp_opacity(percent);
         if self.persist_settings {
-            window_style::set_text_opacity_percent(p);
+            if text {
+                window_style::set_text_opacity_percent(p);
+            } else {
+                window_style::set_opacity_percent(p);
+            }
         }
-        if p == self.text_opacity {
+        let (current, what) = if text {
+            (&mut self.text_opacity, "文字")
+        } else {
+            (&mut self.bg_opacity, "背景")
+        };
+        if p == *current {
             self.status_message = format!(
-                "文字の不透明度は {p}% です ({}〜{}%)",
+                "{what}の不透明度は {p}% です ({}〜{}%)",
                 window_style::MIN_OPACITY,
                 window_style::MAX_OPACITY
             );
             return;
         }
-        self.text_opacity = p;
-        self.status_message =
-            format!("文字の不透明度: {p}% (Alt+Shift++ 濃く / Alt+Shift+- 薄く / Alt+Shift+0 戻す)");
+        *current = p;
+        self.status_message = if text {
+            format!("文字の不透明度: {p}% (Alt+Shift++ 濃く / Alt+Shift+- 薄く / Alt+Shift+0 戻す)")
+        } else {
+            format!("背景の不透明度: {p}% (Alt+↑ 濃く / Alt+↓ 薄く / Alt+0 戻す)")
+        };
         self.save_settings();
-    }
-
-    fn change_text_opacity(&mut self, delta: i16) {
-        let next = (self.text_opacity as i16 + delta).clamp(0, 100) as u8;
-        self.set_text_opacity(next);
     }
 
     // --- Claude Code / Codex への送信 ---
@@ -937,12 +943,7 @@ impl VzEditorApp {
         if let Some(range) = buf.selection_range() {
             return range;
         }
-        let line = buf.cursor_line;
-        if line + 1 < buf.lines.len() {
-            ((line, 0), (line + 1, 0))
-        } else {
-            ((line, 0), (line, buf.line_char_len(line)))
-        }
+        buf.line_range(buf.cursor_line)
     }
 
     /// サクラの切り取り（Ctrl+X / Shift+Del / F7）。選択が無ければ現在行を切り取る。
@@ -992,9 +993,22 @@ impl VzEditorApp {
         self.need_scroll_to_cursor = true;
     }
 
+    /// 行の複製（Shift+F10 / Ctrl+I）。
+    fn sakura_duplicate_line(&mut self) {
+        if !self.view_mode_guard() {
+            self.cur_buf_mut().duplicate_line();
+            self.need_scroll_to_cursor = true;
+        }
+    }
+
+    /// 貼り付ける文字列（システムのクリップボード、取れなければ内部クリップボード）。
+    fn clipboard_text(&self) -> String {
+        read_system_clipboard().unwrap_or_else(|| self.internal_clipboard.clone())
+    }
+
     /// F9 の貼り付け（システムのクリップボード、無ければ内部クリップボード）。
     fn sakura_paste_from_clipboard(&mut self) {
-        let text = read_system_clipboard().unwrap_or_else(|| self.internal_clipboard.clone());
+        let text = self.clipboard_text();
         if text.is_empty() {
             self.status_message = "クリップボードが空です".to_string();
         } else {
@@ -1048,9 +1062,14 @@ impl VzEditorApp {
         }
     }
 
-    /// Markdown ビューでのサクラ互換キー（スクロール）。
-    fn sakura_md_view_key(&mut self, key: Key, ctrl: bool) -> bool {
-        let page = (self.cur_slot().md_viewport_h * 0.85).max(self.line_height * 4.0);
+    /// Markdown ビューの 1 ページ分のスクロール量。
+    fn md_page_step(&self) -> f32 {
+        (self.cur_slot().md_viewport_h * 0.85).max(self.line_height * 4.0)
+    }
+
+    /// Markdown ビューでのスクロールキー（両方のキー割り当て共通。Ctrl+P はサクラ互換のみ）。
+    fn md_view_key(&mut self, key: Key, ctrl: bool) -> bool {
+        let page = self.md_page_step();
         match (key, ctrl) {
             (Key::ArrowUp, _) => self.scroll_markdown_by(-self.line_height * 2.5),
             (Key::ArrowDown, _) => self.scroll_markdown_by(self.line_height * 2.5),
@@ -1141,10 +1160,7 @@ impl VzEditorApp {
                 return true;
             }
             (Key::F10, false, true) => {
-                if !self.view_mode_guard() {
-                    self.cur_buf_mut().duplicate_line();
-                    self.need_scroll_to_cursor = true;
-                }
+                self.sakura_duplicate_line();
                 return true;
             }
             (Key::F2 | Key::F3 | Key::F4 | Key::F5 | Key::F6 | Key::F7 | Key::F9 | Key::F10
@@ -1173,7 +1189,7 @@ impl VzEditorApp {
         }
 
         if in_md_view {
-            return self.sakura_md_view_key(key, ctrl);
+            return self.md_view_key(key, ctrl);
         }
 
         // --- 移動（Shift または F6 の選択モードで範囲選択） ---
@@ -1272,14 +1288,7 @@ impl VzEditorApp {
                     }
                 }
                 Key::E => {
-                    let (start, end) = {
-                        let buf = self.cur_buf();
-                        if cur.0 + 1 < buf.lines.len() {
-                            ((cur.0, 0), (cur.0 + 1, 0))
-                        } else {
-                            ((cur.0, 0), (cur.0, buf.line_char_len(cur.0)))
-                        }
-                    };
+                    let (start, end) = self.cur_buf().line_range(cur.0);
                     self.sakura_cut_range(start, end, false, "行");
                 }
                 Key::K => {
@@ -1298,12 +1307,7 @@ impl VzEditorApp {
                     let (s, e) = self.cur_buf().word_range_at(cur);
                     self.sakura_cut_range((cur.0, s), (cur.0, e), shift, "単語");
                 }
-                Key::I => {
-                    if !self.view_mode_guard() {
-                        self.cur_buf_mut().duplicate_line();
-                        self.need_scroll_to_cursor = true;
-                    }
-                }
+                Key::I => self.sakura_duplicate_line(),
                 Key::Backspace => {
                     let start = self.word_boundary_pos(false);
                     self.sakura_cut_range(start, cur, true, "単語の左側");
@@ -1496,22 +1500,31 @@ impl VzEditorApp {
         self.filer_modal = None;
         self.mode = AppMode::Editor;
         self.need_scroll_to_cursor = true;
-        if self.cur_slot().markdown_view {
-            self.cur_slot_mut().md_scroll_dirty = true;
-        }
-        let name = self.cur_buf().display_name();
-        let mode_tag = if self.cur_slot().markdown_view {
-            " [VIEW]"
-        } else {
-            ""
-        };
+        self.mark_md_scroll_dirty();
         self.status_message = format!(
             "エディタ [{}/{}]: {}{}",
             self.active_buf + 1,
             self.buffers.len(),
-            name,
-            mode_tag
+            self.cur_buf().display_name(),
+            self.view_tag()
         );
+    }
+
+    /// 表示中のバッファが Markdown ビューなら、スクロール位置の再計算を要求する。
+    fn mark_md_scroll_dirty(&mut self) {
+        let slot = self.cur_slot_mut();
+        if slot.markdown_view {
+            slot.md_scroll_dirty = true;
+        }
+    }
+
+    /// 表示中のバッファが Markdown ビューなら " [VIEW]"。
+    fn view_tag(&self) -> &'static str {
+        if self.cur_slot().markdown_view {
+            " [VIEW]"
+        } else {
+            ""
+        }
     }
 
     // --- Multi-Buffer Management ---
@@ -1658,51 +1671,31 @@ impl VzEditorApp {
 
     /// ファイルをバッファで開く。開けた（または既存バッファへ切り替えた）ら true。
     fn open_file_in_buffer(&mut self, path: PathBuf) -> bool {
-        let canon_target = fs::canonicalize(&path).unwrap_or_else(|_| path.clone());
-
         // If already open in an existing buffer, switch directly to it.
-        if let Some(existing_idx) = self.buffers.iter().position(|slot| {
-            slot.buffer.file_path.as_ref().is_some_and(|p| {
-                let canon_p = fs::canonicalize(p).unwrap_or_else(|_| p.clone());
-                canon_p == canon_target
-            })
-        }) {
+        if let Some(existing_idx) = self.find_buffer_by_path(&path) {
             self.active_buf = existing_idx;
             self.mode = AppMode::Editor;
             self.need_scroll_to_cursor = true;
-            if self.cur_slot().markdown_view {
-                self.cur_slot_mut().md_scroll_dirty = true;
-            }
-            let name = self.cur_buf().display_name();
+            self.mark_md_scroll_dirty();
             self.status_message = format!(
                 "既存バッファへ切替 [{}/{}]: {}",
                 self.active_buf + 1,
                 self.buffers.len(),
-                name
+                self.cur_buf().display_name()
             );
             return true;
         }
 
         match TextBuffer::from_file(&path) {
             Ok(buf) => {
-                let display_path = path.display().to_string();
-                let is_md = buf.is_markdown();
+                let hint = if buf.is_markdown() { " (^PでMDビュー切替)" } else { "" };
                 self.add_buffer(buf);
-                if is_md {
-                    self.status_message = format!(
-                        "開きました [{}/{}]: {} (^PでMDビュー切替)",
-                        self.active_buf + 1,
-                        self.buffers.len(),
-                        display_path
-                    );
-                } else {
-                    self.status_message = format!(
-                        "開きました [{}/{}]: {}",
-                        self.active_buf + 1,
-                        self.buffers.len(),
-                        display_path
-                    );
-                }
+                self.status_message = format!(
+                    "開きました [{}/{}]: {}{hint}",
+                    self.active_buf + 1,
+                    self.buffers.len(),
+                    path.display()
+                );
                 true
             }
             Err(e) => {
@@ -1733,21 +1726,7 @@ impl VzEditorApp {
             return;
         }
         let next = ((self.active_buf as isize + delta).rem_euclid(count as isize)) as usize;
-        self.active_buf = next;
-        self.prefix = PrefixKey::None;
-        self.ime_preedit.clear();
-        self.need_scroll_to_cursor = true;
-        if self.cur_slot().markdown_view {
-            self.cur_slot_mut().md_scroll_dirty = true;
-        }
-        let name = self.cur_buf().display_name();
-        let mode_tag = if self.cur_slot().markdown_view {
-            " [VIEW]"
-        } else {
-            ""
-        };
-        self.status_message =
-            format!("バッファ切替 [{}/{}]: {}{}", next + 1, count, name, mode_tag);
+        self.switch_buffer_to(next);
     }
 
     fn switch_buffer_to(&mut self, idx: usize) {
@@ -1756,33 +1735,22 @@ impl VzEditorApp {
             self.prefix = PrefixKey::None;
             self.ime_preedit.clear();
             self.need_scroll_to_cursor = true;
-            if self.cur_slot().markdown_view {
-                self.cur_slot_mut().md_scroll_dirty = true;
-            }
-            let name = self.cur_buf().display_name();
-            let mode_tag = if self.cur_slot().markdown_view {
-                " [VIEW]"
-            } else {
-                ""
-            };
+            self.mark_md_scroll_dirty();
             self.status_message = format!(
                 "バッファ切替 [{}/{}]: {}{}",
                 idx + 1,
                 self.buffers.len(),
-                name,
-                mode_tag
+                self.cur_buf().display_name(),
+                self.view_tag()
             );
         }
     }
 
     fn update_open_buffer_path(&mut self, old_path: &Path, new_path: &Path) {
-        let canon_old = fs::canonicalize(old_path).unwrap_or_else(|_| old_path.to_path_buf());
+        let canon_old = canonical_or_self(old_path);
         for slot in &mut self.buffers {
-            if let Some(p) = &slot.buffer.file_path {
-                let canon_p = fs::canonicalize(p).unwrap_or_else(|_| p.clone());
-                if canon_p == canon_old || p == old_path {
-                    slot.buffer.file_path = Some(new_path.to_path_buf());
-                }
+            if slot.buffer.file_path.as_deref().is_some_and(|p| same_file(p, old_path, &canon_old)) {
+                slot.buffer.file_path = Some(new_path.to_path_buf());
             }
         }
     }
@@ -1935,9 +1903,7 @@ impl VzEditorApp {
                 self.active_buf = self.buffers.len() - 1;
             }
             self.need_scroll_to_cursor = true;
-            if self.cur_slot().markdown_view {
-                self.cur_slot_mut().md_scroll_dirty = true;
-            }
+            self.mark_md_scroll_dirty();
             let next_name = self.cur_buf().display_name();
             self.status_message = format!(
                 "バッファを閉じました ({closed_name}) -> [{}/{}] {next_name}",
@@ -2311,12 +2277,10 @@ impl VzEditorApp {
 
     /// `path` を開いているバッファ（無題を除く）。
     fn find_buffer_by_path(&self, path: &Path) -> Option<usize> {
-        let target = fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
-        self.buffers.iter().position(|slot| {
-            slot.buffer.file_path.as_ref().is_some_and(|p| {
-                p.as_path() == path || fs::canonicalize(p).unwrap_or_else(|_| p.clone()) == target
-            })
-        })
+        let target = canonical_or_self(path);
+        self.buffers
+            .iter()
+            .position(|slot| slot.buffer.file_path.as_deref().is_some_and(|p| same_file(p, path, &target)))
     }
 
     /// 外部で変更された（まだ尋ねていない）ファイルのバッファ。
@@ -2528,23 +2492,14 @@ impl VzEditorApp {
         if self.mode != AppMode::Editor || self.is_markdown_view() {
             return;
         }
-        let pasted = read_system_clipboard().or_else(|| {
-            if self.internal_clipboard.is_empty() {
-                None
-            } else {
-                Some(self.internal_clipboard.clone())
-            }
-        });
-        match pasted {
-            Some(text) if !text.is_empty() => {
-                self.cur_buf_mut().insert_text(&text);
-                self.need_scroll_to_cursor = true;
-                self.status_message = "クリップボードから貼り付けました".to_string();
-            }
-            _ => {
-                self.status_message =
-                    "クリップボードが空です（Ctrl+V での貼り付けも利用できます）".to_string();
-            }
+        let text = self.clipboard_text();
+        if text.is_empty() {
+            self.status_message =
+                "クリップボードが空です（Ctrl+V での貼り付けも利用できます）".to_string();
+        } else {
+            self.cur_buf_mut().insert_text(&text);
+            self.need_scroll_to_cursor = true;
+            self.status_message = "クリップボードから貼り付けました".to_string();
         }
     }
 
@@ -3135,27 +3090,16 @@ impl VzEditorApp {
                     just_opened: true,
                 });
             }
-            FilerAction::Copy => {
+            FilerAction::Copy | FilerAction::Move => {
+                let is_move = action == FilerAction::Move;
                 let targets = self.filer.active_pane().target_entries();
                 if targets.is_empty() {
-                    self.status_message = "コピー対象を選択してください".to_string();
+                    let what = if is_move { "移動" } else { "コピー" };
+                    self.status_message = format!("{what}対象を選択してください");
                 } else {
                     let dst_dir = self.filer.inactive_pane().current_dir.clone();
                     self.filer_modal = Some(FilerModal::ConfirmCopyOrMove {
-                        is_move: false,
-                        targets,
-                        dst_dir,
-                    });
-                }
-            }
-            FilerAction::Move => {
-                let targets = self.filer.active_pane().target_entries();
-                if targets.is_empty() {
-                    self.status_message = "移動対象を選択してください".to_string();
-                } else {
-                    let dst_dir = self.filer.inactive_pane().current_dir.clone();
-                    self.filer_modal = Some(FilerModal::ConfirmCopyOrMove {
-                        is_move: true,
+                        is_move,
                         targets,
                         dst_dir,
                     });
@@ -3580,8 +3524,7 @@ impl VzEditorApp {
                             // Page up: Ctrl+R
                             Key::R => {
                                 if in_md_view {
-                                    let step = (self.cur_slot().md_viewport_h * 0.85)
-                                        .max(self.line_height * 4.0);
+                                    let step = self.md_page_step();
                                     self.scroll_markdown_by(-step);
                                 } else {
                                     let lines = self.last_visible_lines;
@@ -3601,31 +3544,8 @@ impl VzEditorApp {
                     // 5. Standard navigation & editing keys
                     if !ctrl && !modifiers.alt {
                         if in_md_view {
-                            match key {
-                                Key::ArrowUp => {
-                                    self.scroll_markdown_by(-self.line_height * 2.5);
-                                }
-                                Key::ArrowDown => {
-                                    self.scroll_markdown_by(self.line_height * 2.5);
-                                }
-                                Key::PageUp => {
-                                    let step = (self.cur_slot().md_viewport_h * 0.85)
-                                        .max(self.line_height * 4.0);
-                                    self.scroll_markdown_by(-step);
-                                }
-                                Key::PageDown | Key::Space => {
-                                    let step = (self.cur_slot().md_viewport_h * 0.85)
-                                        .max(self.line_height * 4.0);
-                                    self.scroll_markdown_by(step);
-                                }
-                                Key::Home => {
-                                    self.scroll_markdown_to_top();
-                                }
-                                Key::End => {
-                                    self.scroll_markdown_to_bottom();
-                                }
-                                _ => {}
-                            }
+                            // サクラ互換と同じスクロール（Ctrl なし）
+                            self.md_view_key(key, false);
                         } else {
                             match key {
                                 Key::ArrowUp => {
@@ -4018,8 +3938,6 @@ impl VzEditorApp {
                                             }
                                             let label_color = if !*enabled {
                                                 MENU_TEXT_DISABLED
-                                            } else if is_selected {
-                                                TEXT_WHITE
                                             } else {
                                                 TEXT_WHITE
                                             };
@@ -4703,7 +4621,6 @@ impl VzEditorApp {
         };
 
         // サクラ互換の F キー（F1〜F5 は VZ 互換と同じ。未対応のキーは空欄）
-        let sakura_left = keys_left;
         let sakura_right: &[(&str, &str, EditorAction)] = &[
             ("F6", "選択", EditorAction::BeginSelect),
             ("F7", "切取", EditorAction::Cut),
@@ -4711,62 +4628,9 @@ impl VzEditorApp {
             ("F9", "貼付", EditorAction::Paste),
             ("F10", "", EditorAction::Nop),
         ];
-        let (keys_left, keys_right) = if self.is_sakura() {
-            (sakura_left, sakura_right)
-        } else {
-            (keys_left, keys_right)
-        };
+        let keys_right = if self.is_sakura() { sakura_right } else { keys_right };
 
-        let mut clicked_action: Option<EditorAction> = None;
-
-        egui::TopBottomPanel::bottom("fkey_guide_bar")
-            .exact_height(34.0)
-            .frame(
-                egui::Frame::NONE
-                    .fill(bg(FKEY_BAR_BG))
-                    .inner_margin(egui::Margin::symmetric(8, 4))
-                    .stroke(Stroke::new(1.0_f32, BORDER_BLUE)),
-            )
-            .show(ctx, |ui| {
-                ui.multiply_opacity(window_style::text_alpha());
-                let avail_w = ui.available_width();
-                let block_gap = 18.0_f32;
-                let key_gap = 4.0_f32;
-                let btn_w = ((avail_w - block_gap - key_gap * 8.0) / 10.0).max(56.0);
-                let btn_h = ui.available_height().max(24.0);
-
-                ui.horizontal_centered(|ui| {
-                    ui.spacing_mut().item_spacing.x = key_gap;
-
-                    for &(fkey, label, action) in keys_left {
-                        if Self::paint_fkey_button(
-                            ui,
-                            fkey,
-                            label,
-                            Vec2::new(btn_w, btn_h),
-                            FKEY_NUM_BG,
-                        ) {
-                            clicked_action = Some(action);
-                        }
-                    }
-
-                    ui.add_space(block_gap - key_gap);
-
-                    for &(fkey, label, action) in keys_right {
-                        if Self::paint_fkey_button(
-                            ui,
-                            fkey,
-                            label,
-                            Vec2::new(btn_w, btn_h),
-                            FKEY_NUM_BG,
-                        ) {
-                            clicked_action = Some(action);
-                        }
-                    }
-                });
-            });
-
-        if let Some(action) = clicked_action {
+        if let Some(action) = Self::paint_fkey_bar(ctx, keys_left, keys_right, FKEY_NUM_BG) {
             self.execute_editor_action(action);
         }
     }
@@ -4787,7 +4651,19 @@ impl VzEditorApp {
             ("F10", "終了", FilerAction::Quit),
         ];
 
-        let mut clicked_action: Option<FilerAction> = None;
+        if let Some(action) = Self::paint_fkey_bar(ctx, keys_left, keys_right, FKEY_NUM_FILER_BG) {
+            self.execute_filer_action(ctx, action);
+        }
+    }
+
+    /// F キーの案内バー（左右 5 個ずつ）を描き、押されたボタンの動作を返す。
+    fn paint_fkey_bar<A: Copy>(
+        ctx: &egui::Context,
+        keys_left: &[(&str, &str, A)],
+        keys_right: &[(&str, &str, A)],
+        badge_color: Color32,
+    ) -> Option<A> {
+        let mut clicked_action: Option<A> = None;
 
         egui::TopBottomPanel::bottom("fkey_guide_bar")
             .exact_height(34.0)
@@ -4808,37 +4684,26 @@ impl VzEditorApp {
                 ui.horizontal_centered(|ui| {
                     ui.spacing_mut().item_spacing.x = key_gap;
 
-                    for &(fkey, label, action) in keys_left {
-                        if Self::paint_fkey_button(
-                            ui,
-                            fkey,
-                            label,
-                            Vec2::new(btn_w, btn_h),
-                            FKEY_NUM_FILER_BG,
-                        ) {
-                            clicked_action = Some(action);
+                    for (i, keys) in [keys_left, keys_right].into_iter().enumerate() {
+                        if i > 0 {
+                            ui.add_space(block_gap - key_gap);
                         }
-                    }
-
-                    ui.add_space(block_gap - key_gap);
-
-                    for &(fkey, label, action) in keys_right {
-                        if Self::paint_fkey_button(
-                            ui,
-                            fkey,
-                            label,
-                            Vec2::new(btn_w, btn_h),
-                            FKEY_NUM_FILER_BG,
-                        ) {
-                            clicked_action = Some(action);
+                        for &(fkey, label, action) in keys {
+                            if Self::paint_fkey_button(
+                                ui,
+                                fkey,
+                                label,
+                                Vec2::new(btn_w, btn_h),
+                                badge_color,
+                            ) {
+                                clicked_action = Some(action);
+                            }
                         }
                     }
                 });
             });
 
-        if let Some(action) = clicked_action {
-            self.execute_filer_action(ctx, action);
-        }
+        clicked_action
     }
 
     fn paint_fkey_button(
@@ -5331,7 +5196,7 @@ impl VzEditorApp {
                     }
 
                     let has_newline = last_seg && line_idx + 1 < total_lines;
-                    if is_current && seg == cursor_seg && !self.ime_preedit.is_empty() {
+                    let end_x = if is_current && seg == cursor_seg && !self.ime_preedit.is_empty() {
                         let byte_pos = char_to_byte_idx(line, cur_col_now.saturating_sub(seg_start));
                         let before = expand_tabs_for_display(&line[..byte_pos]);
                         let after = expand_tabs_for_display(&line[byte_pos..]);
@@ -5380,32 +5245,24 @@ impl VzEditorApp {
                             editor_painter.galley(Pos2::new(cur_x, text_y), g_after, TEXT_WHITE);
                             cur_x += w;
                         }
-
-                        if has_newline {
-                            editor_painter.text(
-                                Pos2::new(cur_x + 2.0, y + self.line_height * 0.5),
-                                Align2::LEFT_CENTER,
-                                "↵",
-                                FontId::monospace(marker_font_size),
-                                TEXT_CR_MARK,
-                            );
-                        }
+                        cur_x
                     } else {
                         let disp = expand_tabs_for_display(line);
                         let galley =
                             editor_painter.layout_no_wrap(disp, font_id.clone(), TEXT_WHITE);
                         let end_x = text_origin_x + galley.size().x;
                         editor_painter.galley(Pos2::new(text_origin_x, text_y), galley, TEXT_WHITE);
+                        end_x
+                    };
 
-                        if has_newline {
-                            editor_painter.text(
-                                Pos2::new(end_x + 2.0, y + self.line_height * 0.5),
-                                Align2::LEFT_CENTER,
-                                "↵",
-                                FontId::monospace(marker_font_size),
-                                TEXT_CR_MARK,
-                            );
-                        }
+                    if has_newline {
+                        editor_painter.text(
+                            Pos2::new(end_x + 2.0, y + self.line_height * 0.5),
+                            Align2::LEFT_CENTER,
+                            "↵",
+                            FontId::monospace(marker_font_size),
+                            TEXT_CR_MARK,
+                        );
                     }
                 }
 
@@ -5659,7 +5516,8 @@ impl VzEditorApp {
         let max_dir_cols = ((hdr_rect.width() - right_info_w - hdr_char_w * 6.0) / hdr_char_w)
             .floor()
             .max(8.0) as usize;
-        let dir_str = truncate_path_left(&pane.current_dir.display().to_string(), max_dir_cols);
+        let dir_full = pane.current_dir.display().to_string();
+        let dir_str = truncate_path_left(&dir_full, max_dir_cols);
 
         painter.text(
             Pos2::new(hdr_rect.min.x + 8.0, hdr_rect.center().y),
@@ -5851,12 +5709,12 @@ impl VzEditorApp {
             }
 
             // Name display
-            let display_name = if entry.is_parent {
-                "..".to_string()
+            let display_name: Cow<str> = if entry.is_parent {
+                Cow::Borrowed("..")
             } else if entry.is_dir {
-                format!("{}/", entry.name)
+                Cow::Owned(format!("{}/", entry.name))
             } else {
-                entry.name.clone()
+                Cow::Borrowed(&entry.name)
             };
             let max_chars = (name_max_w / name_char_w).floor().max(8.0) as usize;
             let clipped_name = truncate_display_right(&display_name, max_chars);
@@ -5878,12 +5736,12 @@ impl VzEditorApp {
 
             // Size column
             if show_size {
-                let size_text = if entry.is_parent {
-                    "<UP>".to_string()
+                let size_text: Cow<str> = if entry.is_parent {
+                    Cow::Borrowed("<UP>")
                 } else if entry.is_dir {
-                    "<DIR>".to_string()
+                    Cow::Borrowed("<DIR>")
                 } else {
-                    format_size(entry.size)
+                    Cow::Owned(format_size(entry.size))
                 };
                 list_painter.text(
                     Pos2::new(size_x, row_rect.center().y),
@@ -5952,16 +5810,8 @@ impl VzEditorApp {
             AppMode::Editor => "VZ Editor - エディタ キーバインド (F1 / ESC / クリックで閉じる)",
             AppMode::Filer => "VZ Filer - 2画面ファイラー操作 (F1 / ESC / クリックで閉じる)",
         };
-        egui::Window::new(title)
+        modal_window(ctx, title, TEXT_CYAN)
             .open(&mut open)
-            .collapsible(false)
-            .resizable(false)
-            .anchor(Align2::CENTER_CENTER, Vec2::ZERO)
-            .frame(
-                egui::Frame::window(&ctx.style())
-                    .fill(STATUS_BG)
-                    .stroke(Stroke::new(1.5_f32, TEXT_CYAN)),
-            )
             .show(ctx, |ui| {
                 let rows: &[(&str, &str)] = match self.mode {
                     AppMode::Editor if self.key_scheme == KeyScheme::Sakura => &[
@@ -6206,6 +6056,16 @@ impl VzEditorApp {
         self.show_about = open && (link_clicked || !close_clicked);
     }
 
+    /// ファイラーのコピー・移動・削除の後始末（マーク解除、両ペイン更新、結果の表示）。
+    fn finish_filer_op(&mut self, op_name: &str, ok_count: usize, last_err: Option<String>) {
+        self.filer.active_pane_mut().marked.clear();
+        self.filer.refresh_both();
+        self.status_message = match last_err {
+            Some(err) => format!("{op_name}: {ok_count}件完了 / エラー({err})"),
+            None => format!("{ok_count}件を{op_name}しました"),
+        };
+    }
+
     fn render_filer_modal(&mut self, ctx: &egui::Context) {
         let Some(mut modal) = self.filer_modal.take() else {
             return;
@@ -6221,15 +6081,7 @@ impl VzEditorApp {
             } => {
                 let mut do_submit = false;
                 let mut do_cancel = false;
-                egui::Window::new("リネーム (F2)")
-                    .collapsible(false)
-                    .resizable(false)
-                    .anchor(Align2::CENTER_CENTER, Vec2::ZERO)
-                    .frame(
-                        egui::Frame::window(&ctx.style())
-                            .fill(STATUS_BG)
-                            .stroke(Stroke::new(1.5_f32, TEXT_CYAN)),
-                    )
+                modal_window(ctx, "リネーム (F2)", TEXT_CYAN)
                     .show(ctx, |ui| {
                         ui.set_min_width(420.0);
                         ui.label(
@@ -6289,15 +6141,7 @@ impl VzEditorApp {
             } => {
                 let mut do_submit = false;
                 let mut do_cancel = false;
-                egui::Window::new("新規ファイル作成 (F3)")
-                    .collapsible(false)
-                    .resizable(false)
-                    .anchor(Align2::CENTER_CENTER, Vec2::ZERO)
-                    .frame(
-                        egui::Frame::window(&ctx.style())
-                            .fill(STATUS_BG)
-                            .stroke(Stroke::new(1.5_f32, TEXT_CYAN)),
-                    )
+                modal_window(ctx, "新規ファイル作成 (F3)", TEXT_CYAN)
                     .show(ctx, |ui| {
                         ui.set_min_width(420.0);
                         ui.label(
@@ -6356,15 +6200,7 @@ impl VzEditorApp {
             } => {
                 let mut do_submit = false;
                 let mut do_cancel = false;
-                egui::Window::new("新規フォルダ作成 (F7)")
-                    .collapsible(false)
-                    .resizable(false)
-                    .anchor(Align2::CENTER_CENTER, Vec2::ZERO)
-                    .frame(
-                        egui::Frame::window(&ctx.style())
-                            .fill(STATUS_BG)
-                            .stroke(Stroke::new(1.5_f32, TEXT_CYAN)),
-                    )
+                modal_window(ctx, "新規フォルダ作成 (F7)", TEXT_CYAN)
                     .show(ctx, |ui| {
                         ui.set_min_width(420.0);
                         ui.label(
@@ -6426,15 +6262,7 @@ impl VzEditorApp {
                 let mut do_exec = false;
                 let mut do_cancel = false;
 
-                egui::Window::new(format!("ファイル{op_name}確認"))
-                    .collapsible(false)
-                    .resizable(false)
-                    .anchor(Align2::CENTER_CENTER, Vec2::ZERO)
-                    .frame(
-                        egui::Frame::window(&ctx.style())
-                            .fill(STATUS_BG)
-                            .stroke(Stroke::new(1.5_f32, TEXT_CYAN)),
-                    )
+                modal_window(ctx, format!("ファイル{op_name}確認"), TEXT_CYAN)
                     .show(ctx, |ui| {
                         ui.set_min_width(440.0);
                         ui.label(
@@ -6459,26 +6287,9 @@ impl VzEditorApp {
                                     .color(TEXT_AMBER),
                             );
                         }
-                        if targets.len() > 6 {
-                            ui.label(
-                                egui::RichText::new(format!("  ... 他 {}件", targets.len() - 6))
-                                    .font(FontId::monospace(12.5))
-                                    .color(TEXT_DIM_CYAN),
-                            );
-                        }
+                        more_items_label(ui, targets.len());
                         ui.add_space(10.0);
-                        ui.horizontal(|ui| {
-                            if ui.button(format!("実行 (Enter / Y)")).clicked()
-                                || ui.input(|i| i.key_pressed(Key::Enter) || i.key_pressed(Key::Y))
-                            {
-                                do_exec = true;
-                            }
-                            if ui.button("キャンセル (ESC / N)").clicked()
-                                || ui.input(|i| i.key_pressed(Key::Escape) || i.key_pressed(Key::N))
-                            {
-                                do_cancel = true;
-                            }
-                        });
+                        (do_exec, do_cancel) = yes_no_row(ui, "実行 (Enter / Y)");
                     });
 
                 if do_exec {
@@ -6503,14 +6314,7 @@ impl VzEditorApp {
                             }
                         }
                     }
-                    self.filer.active_pane_mut().marked.clear();
-                    self.filer.refresh_both();
-                    if let Some(err) = last_err {
-                        self.status_message =
-                            format!("{op_name}: {ok_count}件完了 / エラー({err})");
-                    } else {
-                        self.status_message = format!("{ok_count}件を{op_name}しました");
-                    }
+                    self.finish_filer_op(op_name, ok_count, last_err);
                 } else if do_cancel {
                     keep_modal = false;
                     self.status_message = format!("{op_name}をキャンセルしました");
@@ -6521,15 +6325,7 @@ impl VzEditorApp {
                 let mut do_exec = false;
                 let mut do_cancel = false;
 
-                egui::Window::new("削除確認 (F6)")
-                    .collapsible(false)
-                    .resizable(false)
-                    .anchor(Align2::CENTER_CENTER, Vec2::ZERO)
-                    .frame(
-                        egui::Frame::window(&ctx.style())
-                            .fill(STATUS_BG)
-                            .stroke(Stroke::new(1.5_f32, TEXT_AMBER)),
-                    )
+                modal_window(ctx, "削除確認 (F6)", TEXT_AMBER)
                     .show(ctx, |ui| {
                         ui.set_min_width(420.0);
                         ui.label(
@@ -6549,26 +6345,9 @@ impl VzEditorApp {
                                     .color(TEXT_WHITE),
                             );
                         }
-                        if targets.len() > 6 {
-                            ui.label(
-                                egui::RichText::new(format!("  ... 他 {}件", targets.len() - 6))
-                                    .font(FontId::monospace(12.5))
-                                    .color(TEXT_DIM_CYAN),
-                            );
-                        }
+                        more_items_label(ui, targets.len());
                         ui.add_space(10.0);
-                        ui.horizontal(|ui| {
-                            if ui.button("削除実行 (Enter / Y)").clicked()
-                                || ui.input(|i| i.key_pressed(Key::Enter) || i.key_pressed(Key::Y))
-                            {
-                                do_exec = true;
-                            }
-                            if ui.button("キャンセル (ESC / N)").clicked()
-                                || ui.input(|i| i.key_pressed(Key::Escape) || i.key_pressed(Key::N))
-                            {
-                                do_cancel = true;
-                            }
-                        });
+                        (do_exec, do_cancel) = yes_no_row(ui, "削除実行 (Enter / Y)");
                     });
 
                 if do_exec {
@@ -6581,13 +6360,7 @@ impl VzEditorApp {
                             Err(e) => last_err = Some(format!("{}: {e}", entry.name)),
                         }
                     }
-                    self.filer.active_pane_mut().marked.clear();
-                    self.filer.refresh_both();
-                    if let Some(err) = last_err {
-                        self.status_message = format!("削除: {ok_count}件完了 / エラー({err})");
-                    } else {
-                        self.status_message = format!("{ok_count}件を削除しました");
-                    }
+                    self.finish_filer_op("削除", ok_count, last_err);
                 } else if do_cancel {
                     keep_modal = false;
                     self.status_message = "削除をキャンセルしました".to_string();
@@ -6598,15 +6371,7 @@ impl VzEditorApp {
                 let mut do_close = false;
                 let mut do_cancel = false;
                 let target_idx = *buf_idx;
-                egui::Window::new("バッファを閉じる確認")
-                    .collapsible(false)
-                    .resizable(false)
-                    .anchor(Align2::CENTER_CENTER, Vec2::ZERO)
-                    .frame(
-                        egui::Frame::window(&ctx.style())
-                            .fill(STATUS_BG)
-                            .stroke(Stroke::new(1.5_f32, TEXT_AMBER)),
-                    )
+                modal_window(ctx, "バッファを閉じる確認", TEXT_AMBER)
                     .show(ctx, |ui| {
                         ui.set_min_width(380.0);
                         ui.label(
@@ -6617,18 +6382,7 @@ impl VzEditorApp {
                             .color(TEXT_AMBER),
                         );
                         ui.add_space(10.0);
-                        ui.horizontal(|ui| {
-                            if ui.button("保存せず閉じる (Enter / Y)").clicked()
-                                || ui.input(|i| i.key_pressed(Key::Enter) || i.key_pressed(Key::Y))
-                            {
-                                do_close = true;
-                            }
-                            if ui.button("キャンセル (ESC / N)").clicked()
-                                || ui.input(|i| i.key_pressed(Key::Escape) || i.key_pressed(Key::N))
-                            {
-                                do_cancel = true;
-                            }
-                        });
+                        (do_close, do_cancel) = yes_no_row(ui, "保存せず閉じる (Enter / Y)");
                     });
 
                 if do_close {
@@ -6644,21 +6398,7 @@ impl VzEditorApp {
                 let mut do_save_quit = false;
                 let mut do_quit = false;
                 let mut do_cancel = false;
-                let dirty_names: Vec<String> = self
-                    .buffers
-                    .iter()
-                    .filter(|s| s.buffer.dirty)
-                    .map(|s| s.buffer.display_name())
-                    .collect();
-                egui::Window::new("終了確認 - 未保存の変更")
-                    .collapsible(false)
-                    .resizable(false)
-                    .anchor(Align2::CENTER_CENTER, Vec2::ZERO)
-                    .frame(
-                        egui::Frame::window(&ctx.style())
-                            .fill(STATUS_BG)
-                            .stroke(Stroke::new(1.5_f32, TEXT_AMBER)),
-                    )
+                modal_window(ctx, "終了確認 - 未保存の変更", TEXT_AMBER)
                     .show(ctx, |ui| {
                         ui.set_min_width(380.0);
                         ui.label(
@@ -6667,9 +6407,9 @@ impl VzEditorApp {
                                 .color(TEXT_AMBER),
                         );
                         ui.add_space(6.0);
-                        for name in &dirty_names {
+                        for slot in self.buffers.iter().filter(|s| s.buffer.dirty) {
                             ui.label(
-                                egui::RichText::new(format!("  * {name}"))
+                                egui::RichText::new(format!("  * {}", slot.buffer.display_name()))
                                     .font(FontId::monospace(13.0))
                                     .color(TEXT_WHITE),
                             );
@@ -6724,15 +6464,7 @@ impl VzEditorApp {
                         )
                     })
                     .unwrap_or_default();
-                egui::Window::new("外部での変更")
-                    .collapsible(false)
-                    .resizable(false)
-                    .anchor(Align2::CENTER_CENTER, Vec2::ZERO)
-                    .frame(
-                        egui::Frame::window(&ctx.style())
-                            .fill(STATUS_BG)
-                            .stroke(Stroke::new(1.5_f32, TEXT_AMBER)),
-                    )
+                modal_window(ctx, "外部での変更", TEXT_AMBER)
                     .show(ctx, |ui| {
                         ui.set_min_width(420.0);
                         ui.label(
@@ -6791,15 +6523,7 @@ impl VzEditorApp {
                     .file_name()
                     .map(|n| n.to_string_lossy().into_owned())
                     .unwrap_or_else(|| path.display().to_string());
-                egui::Window::new("外部の変更との衝突")
-                    .collapsible(false)
-                    .resizable(false)
-                    .anchor(Align2::CENTER_CENTER, Vec2::ZERO)
-                    .frame(
-                        egui::Frame::window(&ctx.style())
-                            .fill(STATUS_BG)
-                            .stroke(Stroke::new(1.5_f32, TEXT_AMBER)),
-                    )
+                modal_window(ctx, "外部の変更との衝突", TEXT_AMBER)
                     .show(ctx, |ui| {
                         ui.set_min_width(640.0);
                         ui.label(
@@ -6876,8 +6600,7 @@ impl VzEditorApp {
 
                 if let Some(choice) = choice {
                     keep_modal = false;
-                    let path = path.clone();
-                    self.resolve_conflict(&path, choice);
+                    self.resolve_conflict(path, choice);
                 }
             }
         }
@@ -6897,15 +6620,7 @@ impl VzEditorApp {
             } else {
                 "ファイルを開く (ファイルパスを入力)"
             };
-            egui::Window::new(title)
-                .collapsible(false)
-                .resizable(false)
-                .anchor(Align2::CENTER_CENTER, Vec2::ZERO)
-                .frame(
-                    egui::Frame::window(&ctx.style())
-                        .fill(STATUS_BG)
-                        .stroke(Stroke::new(1.5_f32, TEXT_CYAN)),
-                )
+            modal_window(ctx, title, TEXT_CYAN)
                 .show(ctx, |ui| {
                     ui.set_min_width(440.0);
                     let resp = ui.add(
@@ -6955,6 +6670,63 @@ impl VzEditorApp {
 /// ウィンドウスタイル用ショートカットの判定。該当しなければ None。
 /// Alt+C の2打目 → 送信先。C: Claude Code、X: Codex、P: GitHub Desktop の Push、
 /// N / M: Claude Code / Codex の新規セッション。Ctrl 付きは取り消し。
+/// 画面中央に固定したダイアログ（折りたたみ・サイズ変更なし、枠線の色 `stroke`）。
+fn modal_window(
+    ctx: &egui::Context,
+    title: impl Into<egui::WidgetText>,
+    stroke: Color32,
+) -> egui::Window<'static> {
+    egui::Window::new(title)
+        .collapsible(false)
+        .resizable(false)
+        .anchor(Align2::CENTER_CENTER, Vec2::ZERO)
+        .frame(
+            egui::Frame::window(&ctx.style())
+                .fill(STATUS_BG)
+                .stroke(Stroke::new(1.5_f32, stroke)),
+        )
+}
+
+/// 確認ダイアログのボタン行（Enter / Y で実行、ESC / N で取消）。(実行, 取消) を返す。
+fn yes_no_row(ui: &mut egui::Ui, yes_label: &str) -> (bool, bool) {
+    let mut yes = false;
+    let mut no = false;
+    ui.horizontal(|ui| {
+        if ui.button(yes_label).clicked()
+            || ui.input(|i| i.key_pressed(Key::Enter) || i.key_pressed(Key::Y))
+        {
+            yes = true;
+        }
+        if ui.button("キャンセル (ESC / N)").clicked()
+            || ui.input(|i| i.key_pressed(Key::Escape) || i.key_pressed(Key::N))
+        {
+            no = true;
+        }
+    });
+    (yes, no)
+}
+
+/// 一覧を 6 件で打ち切ったときの「... 他 N件」。
+fn more_items_label(ui: &mut egui::Ui, total: usize) {
+    if total > 6 {
+        ui.label(
+            egui::RichText::new(format!("  ... 他 {}件", total - 6))
+                .font(FontId::monospace(12.5))
+                .color(TEXT_DIM_CYAN),
+        );
+    }
+}
+
+/// 正規化したパス（できなければそのまま）。
+fn canonical_or_self(path: &Path) -> PathBuf {
+    fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
+}
+
+/// `p` が `raw`（正規化すると `canon`）と同じファイルか。
+fn same_file(p: &Path, raw: &Path, canon: &Path) -> bool {
+    p == raw || canonical_or_self(p) == canon
+}
+
 fn send_target_for_key(key: Key, ctrl: bool) -> Option<SendTarget> {
     match (key, ctrl) {
         (Key::C, false) => Some(SendTarget::ClaudeCode),
@@ -7034,33 +6806,31 @@ fn read_system_clipboard() -> Option<String> {
     None
 }
 
-fn truncate_path_left(s: &str, max_cols: usize) -> String {
+fn truncate_path_left(s: &str, max_cols: usize) -> Cow<'_, str> {
     use unicode_width::UnicodeWidthChar;
     let total_w: usize = s.chars().map(|c| c.width().unwrap_or(1)).sum();
     if total_w <= max_cols {
-        return s.to_string();
+        return Cow::Borrowed(s);
     }
     let budget = max_cols.saturating_sub(3);
-    let mut kept: Vec<char> = Vec::new();
+    let mut start = s.len();
     let mut acc = 0usize;
-    for c in s.chars().rev() {
+    for (i, c) in s.char_indices().rev() {
         let cw = c.width().unwrap_or(1);
         if acc + cw > budget {
             break;
         }
         acc += cw;
-        kept.push(c);
+        start = i;
     }
-    kept.reverse();
-    let tail: String = kept.into_iter().collect();
-    format!("...{tail}")
+    Cow::Owned(format!("...{}", &s[start..]))
 }
 
-fn truncate_display_right(s: &str, max_cols: usize) -> String {
+fn truncate_display_right(s: &str, max_cols: usize) -> Cow<'_, str> {
     use unicode_width::UnicodeWidthChar;
     let total_w: usize = s.chars().map(|c| c.width().unwrap_or(1)).sum();
     if total_w <= max_cols {
-        return s.to_string();
+        return Cow::Borrowed(s);
     }
     let budget = max_cols.saturating_sub(2);
     let mut out = String::new();
@@ -7074,7 +6844,7 @@ fn truncate_display_right(s: &str, max_cols: usize) -> String {
         out.push(c);
     }
     out.push('…');
-    out
+    Cow::Owned(out)
 }
 
 impl eframe::App for VzEditorApp {
@@ -7326,6 +7096,16 @@ mod tests {
         min.minimized = Some(true);
         assert_eq!(next_window_geometry(Some(g), &min, 1.0), None);
         assert_eq!(next_window_geometry(Some(g), &egui::ViewportInfo::default(), 1.0), None);
+    }
+
+    #[test]
+    fn test_truncate_helpers() {
+        assert!(matches!(truncate_path_left("abc", 5), Cow::Borrowed("abc")));
+        assert_eq!(truncate_path_left("C:/work/日本語/file.txt", 12), ".../file.txt");
+        // 幅 2 の文字は予算（7 - 3 = 4）に 2 文字まで
+        assert_eq!(truncate_path_left("ab日本語", 7), "...本語");
+        assert!(matches!(truncate_display_right("abc", 3), Cow::Borrowed("abc")));
+        assert_eq!(truncate_display_right("日本語テキスト", 8), "日本語…");
     }
 
     #[test]

@@ -192,13 +192,16 @@ fn wait_until(timeout: Duration, mut done: impl FnMut() -> bool) -> bool {
     done()
 }
 
+/// 受け取り済みの要求ファイル（`{REQUEST_FILE}.<pid>`）の名前か。
+fn is_claim_name(name: &std::ffi::OsStr) -> bool {
+    name.to_string_lossy()
+        .strip_prefix(REQUEST_FILE)
+        .is_some_and(|rest| rest.starts_with('.'))
+}
+
 fn has_claim(dir: &Path) -> bool {
     fs::read_dir(dir).is_ok_and(|rd| {
-        rd.flatten().any(|e| {
-            e.file_name()
-                .to_string_lossy()
-                .starts_with(&format!("{REQUEST_FILE}."))
-        })
+        rd.flatten().any(|e| is_claim_name(&e.file_name()))
     })
 }
 
@@ -210,7 +213,7 @@ pub fn request_save_and_quit(dir: &Path) -> io::Result<usize> {
     // 前回の失敗で残った受け取り済みファイルは消しておく（受け取った vz が居なければ完了しない）
     if let Ok(rd) = fs::read_dir(dir) {
         for e in rd.flatten() {
-            if e.file_name().to_string_lossy().starts_with(&format!("{REQUEST_FILE}.")) {
+            if is_claim_name(&e.file_name()) {
                 let _ = fs::remove_file(e.path());
             }
         }
@@ -232,6 +235,13 @@ pub fn request_save_and_quit(dir: &Path) -> io::Result<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_is_claim_name() {
+        assert!(is_claim_name(std::ffi::OsStr::new("quit-request.123")));
+        assert!(!is_claim_name(std::ffi::OsStr::new("quit-request")));
+        assert!(!is_claim_name(std::ffi::OsStr::new("quit-requestx.1")));
+    }
 
     #[test]
     fn test_session_roundtrip_and_garbage() {

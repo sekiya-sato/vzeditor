@@ -57,6 +57,16 @@ impl SendTarget {
         matches!(self, SendTarget::Codex)
     }
 
+    /// macOS のアプリ名・Linux のウィンドウクラス名。
+    #[cfg_attr(windows, allow(dead_code))]
+    pub fn app_name(self) -> &'static str {
+        match self {
+            SendTarget::ClaudeCode | SendTarget::ClaudeCodeNewSession => "Claude",
+            SendTarget::Codex | SendTarget::CodexNewSession => "Codex",
+            SendTarget::GitHubDesktop => "GitHub Desktop",
+        }
+    }
+
     /// Windows で対象ウィンドウを持つ実行ファイルか（ファイル名と配置先で判定）。
     #[cfg_attr(not(windows), allow(dead_code))]
     pub fn matches_exe_path(self, path: &str) -> bool {
@@ -80,13 +90,15 @@ pub type SendResult = Result<String, String>;
 
 /// 送る本文を作る。空白だけなら None。
 pub fn prepare_text(lines: &[String]) -> Option<String> {
-    let text = lines.join("\n");
+    let mut text = lines.join("\n");
     let trimmed = text.trim_end_matches(['\n', '\r', ' ', '\t']);
     if trimmed.trim().is_empty() {
-        None
-    } else {
-        Some(trimmed.to_string())
+        return None;
     }
+    // 末尾の空白・改行だけを切り詰める（コピーし直さない）
+    let len = trimmed.len();
+    text.truncate(len);
+    Some(text)
 }
 
 /// 別スレッドで送信する。
@@ -197,6 +209,16 @@ mod platform {
         false
     }
 
+    /// Ctrl を押しながら `vk` を押して離す入力列。
+    fn ctrl_chord(vk: VIRTUAL_KEY) -> [INPUT; 4] {
+        [
+            key_input(VK_CONTROL, false),
+            key_input(vk, false),
+            key_input(vk, true),
+            key_input(VK_CONTROL, true),
+        ]
+    }
+
     fn key_input(vk: VIRTUAL_KEY, up: bool) -> INPUT {
         INPUT {
             r#type: INPUT_KEYBOARD,
@@ -267,12 +289,7 @@ mod platform {
         }
         sleep_ms(250);
         let ok = unsafe { GetForegroundWindow() } == hwnd
-            && send_keys(&[
-                key_input(VK_CONTROL, false),
-                key_input(vk, false),
-                key_input(vk, true),
-                key_input(VK_CONTROL, true),
-            ]);
+            && send_keys(&ctrl_chord(vk));
         sleep_ms(300);
         if !vz_hwnd.is_null() {
             activate(vz_hwnd);
@@ -318,25 +335,14 @@ mod platform {
         // Electron が入力欄へフォーカスを戻すのを待つ
         sleep_ms(250);
 
-        let paste = [
-            key_input(VK_CONTROL, false),
-            key_input(VK_V, false),
-            key_input(VK_V, true),
-            key_input(VK_CONTROL, true),
-        ];
-        let ok_paste = send_keys(&paste);
+        let ok_paste = send_keys(&ctrl_chord(VK_V));
         // 貼り付けの反映を待ってから送信
         sleep_ms(400);
         let ok_enter = ok_paste
             && unsafe { GetForegroundWindow() } == hwnd
             && if target.submit_needs_modifier() {
                 // Codex: Ctrl+Enter
-                send_keys(&[
-                    key_input(VK_CONTROL, false),
-                    key_input(VK_RETURN, false),
-                    key_input(VK_RETURN, true),
-                    key_input(VK_CONTROL, true),
-                ])
+                send_keys(&ctrl_chord(VK_RETURN))
             } else {
                 send_keys(&[key_input(VK_RETURN, false), key_input(VK_RETURN, true)])
             };
@@ -366,14 +372,6 @@ mod platform {
     use super::{sleep_ms, SendResult, SendTarget};
     use std::process::Command;
 
-    fn app_name(target: SendTarget) -> &'static str {
-        match target {
-            SendTarget::ClaudeCode | SendTarget::ClaudeCodeNewSession => "Claude",
-            SendTarget::Codex | SendTarget::CodexNewSession => "Codex",
-            SendTarget::GitHubDesktop => "GitHub Desktop",
-        }
-    }
-
     fn osascript(script: &str) -> Result<(), String> {
         let out = Command::new("osascript")
             .args(["-e", script])
@@ -388,7 +386,7 @@ mod platform {
 
     pub fn send(target: SendTarget, text: &str) -> SendResult {
         let label = target.label();
-        let app = app_name(target);
+        let app = target.app_name();
         // Option キーなどが離されるのを少し待つ
         sleep_ms(300);
 
@@ -461,14 +459,6 @@ mod platform {
     use std::io::Write;
     use std::process::{Command, Stdio};
 
-    fn window_class(target: SendTarget) -> &'static str {
-        match target {
-            SendTarget::ClaudeCode | SendTarget::ClaudeCodeNewSession => "Claude",
-            SendTarget::Codex | SendTarget::CodexNewSession => "Codex",
-            SendTarget::GitHubDesktop => "GitHub Desktop",
-        }
-    }
-
     fn run(cmd: &str, args: &[&str]) -> Result<String, String> {
         let out = Command::new(cmd)
             .args(args)
@@ -506,7 +496,7 @@ mod platform {
         let me = run("xdotool", &["getactivewindow"]).ok();
         let win = run(
             "xdotool",
-            &["search", "--onlyvisible", "--class", window_class(target)],
+            &["search", "--onlyvisible", "--class", target.app_name()],
         )
         .ok()
         .and_then(|s| s.lines().next().map(str::to_string))
