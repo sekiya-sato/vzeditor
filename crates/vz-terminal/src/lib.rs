@@ -7,7 +7,7 @@ pub mod shell;
 
 use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
 use std::io::{Read, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 
 pub use shell::ShellCommand;
@@ -63,6 +63,8 @@ pub struct Terminal {
     rx: Receiver<Vec<u8>>,
     exit_code: Option<u32>,
     program: String,
+    /// シェルを起動したフォルダ（保存して終了・復元で使う）
+    cwd: PathBuf,
 }
 
 impl Terminal {
@@ -156,6 +158,7 @@ impl Terminal {
             rx,
             exit_code: None,
             program: shell.program.display().to_string(),
+            cwd: cwd.to_path_buf(),
         })
     }
 
@@ -207,6 +210,11 @@ impl Terminal {
     /// 起動したシェルのパス（表示用）。
     pub fn program(&self) -> &str {
         &self.program
+    }
+
+    /// シェルを起動したフォルダ（シェルの中で cd した先ではない）。
+    pub fn cwd(&self) -> &Path {
+        &self.cwd
     }
 
     /// OSC で設定されたタイトル。

@@ -30,6 +30,7 @@ impl VzEditorApp {
         self.prefix = PrefixKey::None;
         self.ime_preedit.clear();
         self.mode = AppMode::Browser;
+        self.browser_open = true;
         self.browser_focus_page = true;
 
         self.status_message = if !vz_browser::is_supported() {

@@ -104,6 +104,28 @@ impl VzEditorApp {
             }
             entries.push(entry);
         }
+        // ターミナルは起動したフォルダ、ブラウザは表示中の URL を残す（シェルの中身は戻せない）
+        if let Some(term) = &self.terminal {
+            entries.push(tool_entry(
+                EntryKind::Terminal,
+                self.mode == AppMode::Terminal,
+                Some(term.cwd().to_path_buf()),
+            ));
+        }
+        if self.browser_open {
+            let url = self
+                .browser
+                .as_ref()
+                .and_then(vz_browser::EmbeddedBrowser::url)
+                .or_else(|| self.browser_pending_url.clone())
+                .or_else(|| vz_browser::normalize_url(&self.browser_url_input))
+                .filter(|u| !u.starts_with("data:") && !u.starts_with("about:"));
+            entries.push(tool_entry(
+                EntryKind::Browser,
+                self.mode == AppMode::Browser,
+                url.map(PathBuf::from),
+            ));
+        }
         session::append_session(dir, &entries)
     }
 
@@ -115,8 +137,32 @@ impl VzEditorApp {
         }
         let mut active: Option<usize> = None;
         let mut restored = 0usize;
+        // 表示していた画面（ターミナル・ブラウザ。無ければエディター）
+        let mut tool_mode: Option<AppMode> = None;
         for e in &entries {
             let ok = match e.kind {
+                EntryKind::Terminal => {
+                    // シェルは最初のフレームで起動する（再描画の要求に egui の Context が要る）
+                    if let Some(cwd) = e.path.clone().filter(|d| d.is_dir()) {
+                        self.pending_terminal_cwd = Some(cwd);
+                        if e.active {
+                            tool_mode = Some(AppMode::Terminal);
+                        }
+                    }
+                    continue;
+                }
+                EntryKind::Browser => {
+                    self.browser_open = true;
+                    if let Some(url) = &e.path {
+                        let url = url.to_string_lossy().into_owned();
+                        self.browser_url_input = url.clone();
+                        self.browser_pending_url = Some(url);
+                    }
+                    if e.active {
+                        tool_mode = Some(AppMode::Browser);
+                    }
+                    continue;
+                }
                 EntryKind::File => {
                     let path = e.path.clone().unwrap_or_default();
                     let before = self.buffers.len();
@@ -177,12 +223,15 @@ impl VzEditorApp {
         if let Some(idx) = active {
             self.switch_buffer_to(idx);
         }
-        self.mode = AppMode::Editor;
+        self.mode = tool_mode.unwrap_or(AppMode::Editor);
+        self.return_mode = AppMode::Editor;
         self.need_scroll_to_cursor = true;
-        self.status_message = format!(
-            "前回の状態を復元しました: {restored} / {} 個のバッファ",
-            entries.len()
-        );
+        let buffer_entries = entries
+            .iter()
+            .filter(|e| !matches!(e.kind, EntryKind::Terminal | EntryKind::Browser))
+            .count();
+        self.status_message =
+            format!("前回の状態を復元しました: {restored} / {buffer_entries} 個のバッファ");
     }
 
     // --- 外部でのファイル変更の検知（再読み込みの確認）と、保存して終了時の衝突の確認 ---
@@ -337,4 +386,18 @@ impl VzEditorApp {
     }
 
     // --- Clipboard & Edit Menu Helpers ---
+}
+
+/// ターミナル・ブラウザの保存項目。
+fn tool_entry(kind: EntryKind, active: bool, path: Option<PathBuf>) -> SessionEntry {
+    SessionEntry {
+        kind,
+        line: 0,
+        col: 0,
+        markdown_view: false,
+        active,
+        crlf: false,
+        temp: None,
+        path,
+    }
 }

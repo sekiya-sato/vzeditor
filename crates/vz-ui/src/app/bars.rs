@@ -410,7 +410,7 @@ impl VzEditorApp {
     /// ファイルのタブの後ろにターミナル・ブラウザのタブを並べる（各 1 つ）。
     pub(super) fn render_buffer_strip(&mut self, ctx: &egui::Context) {
         let has_terminal = self.terminal.is_some();
-        let has_browser = self.browser.is_some() || self.mode == AppMode::Browser;
+        let has_browser = self.browser_open;
         if self.mode == AppMode::Filer || (self.buffers.len() < 2 && !has_terminal && !has_browser) {
             return;
         }

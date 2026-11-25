@@ -83,6 +83,19 @@ impl VzEditorApp {
         }
     }
 
+    /// 復元したターミナルを起動する（`--restore` の後の最初のフレーム）。
+    pub(super) fn start_pending_terminal(&mut self, ctx: &egui::Context) {
+        let Some(cwd) = self.pending_terminal_cwd.take() else {
+            return;
+        };
+        if self.terminal.is_none()
+            && self.start_terminal(ctx, &cwd)
+            && self.mode == AppMode::Terminal
+        {
+            self.status_message = format!("ターミナルを起動し直しました: {}", cwd.display());
+        }
+    }
+
     /// 届いた出力を画面モデルへ反映する（表示していなくても毎フレーム）。
     pub(super) fn poll_terminal(&mut self) {
         let Some(term) = self.terminal.as_mut() else {

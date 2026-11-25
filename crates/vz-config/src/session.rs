@@ -7,6 +7,8 @@
 //!   一時保存して（`conflict`）、復元後にどちらを採用するか確認する。
 //! - `vz --restore`: `session.ini` のバッファを開き直し（カーソル位置・Markdown ビュー・表示中のバッファも戻す）、
 //!   読み終えた `session.ini` と一時保存ファイルを削除する。
+//!   ターミナル（起動したフォルダ）とブラウザ（表示中の URL）も、開いていれば記録して開き直す。
+//!   シェルは新しく起動する（実行中のコマンドや画面の内容は戻らない）。
 //!
 //! 要求は設定フォルダの `session/quit-request` ファイルで伝える。起動中の vz は監視スレッドで
 //! このファイルを見つけると `quit-request.<pid>` へ改名して受け取り（同時に1つの vz だけが受け取る）、
@@ -36,6 +38,10 @@ pub enum EntryKind {
     /// 外部での変更と衝突したため上書きしなかった vz の編集内容。一時保存ファイルから無題のバッファに戻し、
     /// 復元後に `path` のファイルとの差分を見せて、どちらを採用するか確認する
     Conflict,
+    /// ターミナル。`path` はシェルを起動したフォルダ。`active` はターミナルを表示していたか
+    Terminal,
+    /// 簡易ブラウザ。`path` は表示中の URL（無ければ案内ページ）。`active` はブラウザを表示していたか
+    Browser,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -72,6 +78,8 @@ pub fn serialize(entries: &[SessionEntry]) -> String {
             EntryKind::File => "file",
             EntryKind::Unsaved => "unsaved",
             EntryKind::Conflict => "conflict",
+            EntryKind::Terminal => "terminal",
+            EntryKind::Browser => "browser",
         };
         out.push_str(&format!(
             "{kind}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
@@ -98,6 +106,8 @@ pub fn parse(text: &str) -> Vec<SessionEntry> {
             "file" => EntryKind::File,
             "unsaved" => EntryKind::Unsaved,
             "conflict" => EntryKind::Conflict,
+            "terminal" => EntryKind::Terminal,
+            "browser" => EntryKind::Browser,
             _ => continue,
         };
         let opt = |s: &str| (!s.is_empty()).then(|| PathBuf::from(s));
@@ -115,6 +125,8 @@ pub fn parse(text: &str) -> Vec<SessionEntry> {
             EntryKind::File => entry.path.is_some(),
             EntryKind::Unsaved => entry.temp.is_some(),
             EntryKind::Conflict => entry.temp.is_some() && entry.path.is_some(),
+            EntryKind::Terminal => entry.path.is_some(),
+            EntryKind::Browser => true,
         };
         if valid {
             entries.push(entry);
@@ -276,10 +288,30 @@ mod tests {
                 temp: Some(PathBuf::from("/tmp/unsaved-1-1.txt")),
                 path: Some(PathBuf::from("/work/README.md")),
             },
+            SessionEntry {
+                kind: EntryKind::Terminal,
+                line: 0,
+                col: 0,
+                markdown_view: false,
+                active: true,
+                crlf: false,
+                temp: None,
+                path: Some(PathBuf::from(r"C:\work")),
+            },
+            SessionEntry {
+                kind: EntryKind::Browser,
+                line: 0,
+                col: 0,
+                markdown_view: false,
+                active: false,
+                crlf: false,
+                temp: None,
+                path: Some(PathBuf::from("http://localhost:3000/a?b=1#c")),
+            },
         ];
-        // conflict は元のファイルのパスが無ければ捨てる
+        // conflict は元のファイルのパス、terminal はフォルダが無ければ捨てる。未知の種類（新しい版の項目）は読み飛ばす
         let text = format!(
-            "garbage\nfile\t1\t2\nconflict\t0\t0\t0\t0\t0\t/tmp/x.txt\t\n{}",
+            "garbage\nfile\t1\t2\nconflict\t0\t0\t0\t0\t0\t/tmp/x.txt\t\nterminal\t0\t0\t0\t1\t0\t\t\nfuture\t0\t0\t0\t0\t0\t\t/x\n{}",
             serialize(&entries)
         );
         assert_eq!(parse(&text), entries);

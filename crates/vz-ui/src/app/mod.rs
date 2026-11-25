@@ -410,6 +410,8 @@ pub struct VzEditorApp {
 
     /// 組み込みターミナル（Alt+K で初めて開いたときに起動する）
     terminal: Option<vz_terminal::Terminal>,
+    /// 復元したターミナルを起動するフォルダ（最初のフレームで起動する）
+    pending_terminal_cwd: Option<PathBuf>,
     /// ターミナル・ブラウザから戻る画面（エディターかファイラー）
     return_mode: AppMode,
     /// 簡易ブラウザ（初めて表示するときに WebView を作る）
@@ -426,6 +428,8 @@ pub struct VzEditorApp {
     browser_focus_page: bool,
     /// URL 欄に入力中（ページの読み込みで書き換えない）
     browser_url_editing: bool,
+    /// ブラウザを開いた（バッファ帯にタブを出す。WebView は表示するときに作る）
+    browser_open: bool,
 }
 
 impl VzEditorApp {
@@ -515,6 +519,7 @@ impl VzEditorApp {
             window_geometry: settings.window,
             pending_window_restore: settings.window,
             terminal: None,
+            pending_terminal_cwd: None,
             return_mode: AppMode::Editor,
             browser: None,
             browser_url_input: String::new(),
@@ -524,6 +529,7 @@ impl VzEditorApp {
             browser_error: None,
             browser_focus_page: false,
             browser_url_editing: false,
+            browser_open: false,
         };
         let session_dir = session::session_dir();
         if restore {
@@ -745,6 +751,7 @@ impl eframe::App for VzEditorApp {
         self.poll_dialog();
         self.poll_send(ctx);
         self.continue_save_and_quit(ctx);
+        self.start_pending_terminal(ctx);
         self.poll_terminal();
         self.handle_events(ctx);
 

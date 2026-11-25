@@ -50,6 +50,7 @@ fn make_test_app() -> VzEditorApp {
         window_geometry: None,
         pending_window_restore: None,
         terminal: None,
+        pending_terminal_cwd: None,
         return_mode: AppMode::Editor,
         browser: None,
         browser_url_input: String::new(),
@@ -59,6 +60,7 @@ fn make_test_app() -> VzEditorApp {
         browser_error: None,
         browser_focus_page: false,
         browser_url_editing: false,
+        browser_open: false,
     }
 }
 
@@ -1275,4 +1277,62 @@ fn test_buffer_strip_and_browser_screen_render_headless() {
     // ブラウザの領域がツールバーの下に決まる
     let rect = app.browser_view_rect.expect("view rect");
     assert!(rect.min.y > 24.0 && rect.width() > 500.0, "{rect:?}");
+}
+
+#[test]
+fn test_session_restores_browser_and_terminal() {
+    let dir = std::env::temp_dir().join(format!("vz_tool_session_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let session_dir = dir.join("session");
+
+    // ブラウザを表示したまま保存して終了
+    let mut app = make_test_app();
+    app.toggle_browser();
+    app.browser_url_input = "localhost:5173/app".to_string();
+    app.navigate_browser_input();
+    app.save_session_to(&session_dir).unwrap();
+
+    let mut app2 = make_test_app();
+    app2.restore_session_from(&session_dir);
+    assert_eq!(app2.mode, AppMode::Browser);
+    assert!(app2.browser_open);
+    assert_eq!(app2.browser_pending_url.as_deref(), Some("http://localhost:5173/app"));
+    assert_eq!(app2.return_mode, AppMode::Editor);
+
+    // ターミナルは起動したフォルダで、最初のフレームに起動し直す（フォルダが無ければ戻さない）
+    let work = dir.join("work");
+    std::fs::create_dir_all(&work).unwrap();
+    let entries = vec![
+        tool_session_entry(EntryKind::Terminal, true, Some(work.clone())),
+        tool_session_entry(EntryKind::Browser, false, None),
+    ];
+    session::append_session(&session_dir, &entries).unwrap();
+    let mut app3 = make_test_app();
+    app3.restore_session_from(&session_dir);
+    assert_eq!(app3.mode, AppMode::Terminal);
+    assert_eq!(app3.pending_terminal_cwd.as_deref(), Some(work.as_path()));
+    assert!(app3.browser_open);
+    assert_eq!(app3.browser_pending_url, None);
+
+    let gone = dir.join("gone");
+    session::append_session(&session_dir, &[tool_session_entry(EntryKind::Terminal, true, Some(gone))]).unwrap();
+    let mut app4 = make_test_app();
+    app4.restore_session_from(&session_dir);
+    assert_eq!(app4.mode, AppMode::Editor);
+    assert_eq!(app4.pending_terminal_cwd, None);
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+fn tool_session_entry(kind: EntryKind, active: bool, path: Option<PathBuf>) -> SessionEntry {
+    SessionEntry {
+        kind,
+        line: 0,
+        col: 0,
+        markdown_view: false,
+        active,
+        crlf: false,
+        temp: None,
+        path,
+    }
 }
