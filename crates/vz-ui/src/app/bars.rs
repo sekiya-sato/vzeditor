@@ -242,7 +242,7 @@ impl VzEditorApp {
                             .inner_margin(egui::Margin::symmetric(6, 1))
                             .show(ui, |ui| {
                                 ui.label(
-                                    egui::RichText::new("LZ FILER")
+                                    egui::RichText::new("FILER")
                                         .font(FontId::monospace(13.0))
                                         .strong()
                                         .color(STATUS_BADGE_FG),
