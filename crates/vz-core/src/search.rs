@@ -13,6 +13,7 @@ pub struct SearchOptions {
     pub regex: bool,
 }
 
+#[derive(Clone)]
 pub struct SearchPattern {
     regex: Regex,
     expand_captures: bool,

@@ -28,7 +28,7 @@ use eframe::egui::{
     self, Align2, Color32, CornerRadius, Event, FontId, ImeEvent, Key, Pos2, Rect, Sense, Stroke,
     StrokeKind, Vec2,
 };
-use search::{SearchDialog, SearchState};
+use search::{highlight_ranges, SearchDialog, SearchState};
 use std::borrow::Cow;
 use std::fs;
 use std::path::{Path, PathBuf};

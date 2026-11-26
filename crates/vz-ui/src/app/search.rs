@@ -69,6 +69,8 @@ pub(super) struct SearchState {
     results: Option<GrepResults>,
     line: String,
     display_row: bool,
+    /// 最後に実行した検索の条件。一致箇所を画面でハイライトする。
+    highlight: Option<SearchPattern>,
 }
 
 impl Default for SearchState {
@@ -96,6 +98,7 @@ impl Default for SearchState {
             results: None,
             line: String::new(),
             display_row: false,
+            highlight: None,
         }
     }
 }
@@ -112,6 +115,11 @@ impl SearchState {
 
     fn pattern(&self) -> Result<SearchPattern, String> {
         SearchPattern::new(&self.query, &self.options)
+    }
+
+    /// 画面でハイライトする検索条件（検索を実行するまでは無し）。
+    pub(super) fn highlight(&self) -> Option<&SearchPattern> {
+        self.highlight.as_ref()
     }
 
     fn render(
@@ -388,6 +396,41 @@ impl SearchState {
     }
 }
 
+/// `line` で `pattern` に一致する部分のうち、文字位置 `seg_start..seg_end`（表示行）にかかる範囲を、
+/// 表示行の先頭からの文字位置で返す。空一致は塗る幅が無いので除く。
+pub(super) fn highlight_ranges(
+    pattern: &SearchPattern,
+    line: &str,
+    seg_start: usize,
+    seg_end: usize,
+) -> Vec<(usize, usize)> {
+    let mut ranges = Vec::new();
+    // 文字数は直前の位置からの差分で数え、長い行で先頭から数え直さない
+    let (mut byte, mut chars) = (0, 0);
+    let mut char_at = |to: usize| {
+        chars += line[byte..to].chars().count();
+        byte = to;
+        chars
+    };
+    for hit in pattern.matches(line) {
+        if hit.is_empty() {
+            continue;
+        }
+        let start = char_at(hit.start());
+        if start >= seg_end {
+            break;
+        }
+        let end = char_at(hit.end());
+        if end > seg_start {
+            ranges.push((
+                start.max(seg_start) - seg_start,
+                end.min(seg_end) - seg_start,
+            ));
+        }
+    }
+    ranges
+}
+
 fn focus_and_select(ui: &egui::Ui, focus: bool, field: egui::Response, len: usize) {
     if focus {
         field.request_focus();
@@ -461,6 +504,7 @@ impl VzEditorApp {
     }
 
     fn find_match(&mut self, pattern: &SearchPattern, up: bool) -> bool {
+        self.search.highlight = Some(pattern.clone());
         if self.cur_buf().is_huge() {
             // 巨大ファイルは裏のスレッドで探し、見つかったら選択する
             self.start_huge_find(pattern, up, self.search.wrap);
@@ -940,6 +984,27 @@ mod tests {
         app.cur_buf_mut().select_range((0, 4), (0, 5));
         app.open_search_dialog(SearchDialog::Find);
         assert_eq!(app.search.query, "b");
+    }
+
+    #[test]
+    fn search_highlights_hits_within_display_row() {
+        let mut app = app_with_text("猫a猫\n犬");
+        assert!(app.search.highlight().is_none());
+        app.search.query = "猫".into();
+        app.repeat_search(false);
+        let pattern = app.search.highlight().expect("検索後はハイライトする");
+        assert_eq!(highlight_ranges(pattern, "猫a猫", 0, 3), [(0, 1), (2, 3)]);
+        // 折り返した 2 行目（桁 2..3）では、その行の先頭からの位置になる
+        assert_eq!(highlight_ranges(pattern, "猫a猫", 2, 3), [(0, 1)]);
+        assert!(highlight_ranges(pattern, "犬", 0, 1).is_empty());
+        // 表示行をまたぐ一致は切り詰め、空一致は塗らない
+        let regex = SearchOptions {
+            regex: true,
+            ..Default::default()
+        };
+        let wide = SearchPattern::new("a猫|$", &regex).unwrap();
+        assert_eq!(highlight_ranges(&wide, "猫a猫", 0, 2), [(1, 2)]);
+        assert_eq!(highlight_ranges(&wide, "猫a猫", 2, 3), [(0, 1)]);
     }
 
     #[test]

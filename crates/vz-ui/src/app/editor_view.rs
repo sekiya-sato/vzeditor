@@ -590,6 +590,7 @@ impl VzEditorApp {
                     .as_ref()
                     .filter(|(rev, _)| *rev == self.cur_buf().revision)
                     .map(|(_, lines)| lines);
+                let highlight = self.search.highlight();
 
                 for row_idx in first_row..end_row {
                     let (line_idx, seg) = row_to_line(row_idx);
@@ -639,26 +640,41 @@ impl VzEditorApp {
 
                     let text_origin_x = editor_rect.min.x + left_pad - scroll_x;
                     let text_y = y + (self.line_height - self.font_size) * 0.42;
+                    let x_of = |col: usize| -> f32 {
+                        if col == 0 {
+                            return 0.0;
+                        }
+                        let b = char_to_byte_idx(line, col);
+                        editor_painter
+                            .layout_no_wrap(
+                                expand_tabs_for_display(&line[..b]),
+                                font_id.clone(),
+                                TEXT_WHITE,
+                            )
+                            .size()
+                            .x
+                    };
+
+                    // 検索語のハイライト（表示中の行だけ照合する。巨大ファイルは読んだ窓の中だけ）
+                    if let Some(pattern) = highlight {
+                        for (from, to) in highlight_ranges(pattern, &full_line, seg_start, seg_end)
+                        {
+                            editor_painter.rect_filled(
+                                Rect::from_min_max(
+                                    Pos2::new(text_origin_x + x_of(from), y + 1.0),
+                                    Pos2::new(text_origin_x + x_of(to), y + self.line_height - 1.0),
+                                ),
+                                CornerRadius::ZERO,
+                                SEARCH_HIT_BG,
+                            );
+                        }
+                    }
 
                     // 範囲選択の背景（この表示行の範囲に切り詰める）
                     if let Some((from, to, newline)) = self.cur_buf().line_selection(line_idx) {
                         let from = from.saturating_sub(base).clamp(seg_start, seg_end) - seg_start;
                         let to = to.saturating_sub(base).clamp(seg_start, seg_end) - seg_start;
                         let newline = newline && last_seg;
-                        let x_of = |col: usize| -> f32 {
-                            if col == 0 {
-                                return 0.0;
-                            }
-                            let b = char_to_byte_idx(line, col);
-                            editor_painter
-                                .layout_no_wrap(
-                                    expand_tabs_for_display(&line[..b]),
-                                    font_id.clone(),
-                                    TEXT_WHITE,
-                                )
-                                .size()
-                                .x
-                        };
                         let x0 = text_origin_x + x_of(from);
                         let mut x1 = text_origin_x + x_of(to);
                         if newline {

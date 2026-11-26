@@ -46,6 +46,8 @@ pub(super) const CURSOR_FILL: Color32 = Color32::from_rgba_premultiplied(80, 220
 pub(super) const CURSOR_BAR: Color32 = Color32::from_rgb(120, 244, 255);
 /// 範囲選択の背景色
 pub(super) const SELECTION_BG: Color32 = Color32::from_rgb(38, 108, 190);
+/// 検索語のハイライトの背景色（白い文字が読める濃さの黄色）
+pub(super) const SEARCH_HIT_BG: Color32 = Color32::from_rgb(150, 116, 0);
 pub(super) const PREEDIT_BG: Color32 = Color32::from_rgb(28, 72, 134);
 pub(super) const PREEDIT_FG: Color32 = Color32::from_rgb(255, 246, 160);
 pub(super) const PREEDIT_UNDERLINE: Color32 = Color32::from_rgb(112, 236, 255);
