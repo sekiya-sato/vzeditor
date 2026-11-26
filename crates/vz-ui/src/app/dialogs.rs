@@ -813,6 +813,9 @@ impl VzEditorApp {
                 shown,
             } => {
                 let (idx, stamp) = (*buf_idx, *stamp);
+                if self.mode != AppMode::Editor || idx != self.active_buf {
+                    return;
+                }
                 // 表示直後の打鍵（入力中の Enter や Y）では答えない
                 let keys_ok = shown.elapsed() >= std::time::Duration::from_millis(400);
                 let mut do_reload = false;

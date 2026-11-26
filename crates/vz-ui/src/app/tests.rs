@@ -474,22 +474,21 @@ fn test_external_change_detect_and_reload() {
     let mut app = make_test_app();
     app.buffers = vec![BufferSlot::new(TextBuffer::from_file(&path).unwrap())];
     app.active_buf = 0;
-    assert!(app.find_externally_changed().is_none());
+    assert!(app.active_external_change().is_none());
 
     // 自分で保存した変更は外部の変更として扱わない
     app.cur_buf_mut().insert_text("x");
     let p = path.clone();
     app.cur_buf_mut().save_to_path(&p).unwrap();
-    assert!(app.find_externally_changed().is_none());
+    assert!(app.active_external_change().is_none());
 
     // 外部で変更されると検知する。「このまま」と答えた同じ変更は再度尋ねない
     fs::write(&path, "one\ntwo\nthree external").unwrap();
-    let (idx, stamp) = app
-        .find_externally_changed()
+    let stamp = app
+        .active_external_change()
         .expect("外部の変更を検知していない");
-    assert_eq!(idx, 0);
     app.buffers[0].ignored_stamp = Some(stamp);
-    assert!(app.find_externally_changed().is_none());
+    assert!(app.active_external_change().is_none());
 
     // 再読み込み（未保存の変更は破棄。元に戻すで戻せる）
     app.cur_buf_mut().insert_text("y");
@@ -500,16 +499,67 @@ fn test_external_change_detect_and_reload() {
     );
     assert!(!app.cur_buf().dirty);
     assert!(app.buffers[0].ignored_stamp.is_none());
-    assert!(app.find_externally_changed().is_none());
+    assert!(app.active_external_change().is_none());
     assert!(app.cur_buf_mut().undo());
     assert_eq!(app.cur_buf().text_lines(), vec!["xyone", "two"]);
     assert!(app.cur_buf().dirty);
 
     // 削除されたファイルは尋ねない
     fs::remove_file(&path).unwrap();
-    assert!(app.find_externally_changed().is_none());
+    assert!(app.active_external_change().is_none());
 
     let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_external_change_prompts_only_for_the_active_editor_tab() {
+    let dir = std::env::temp_dir().join(format!("vz_external_active_{}", std::process::id()));
+    fs::create_dir_all(&dir).unwrap();
+    let first = dir.join("first.txt");
+    let second = dir.join("second.txt");
+    fs::write(&first, "first").unwrap();
+    fs::write(&second, "second").unwrap();
+    let mut app = make_test_app();
+    app.buffers = vec![
+        BufferSlot::new(TextBuffer::from_file(&first).unwrap()),
+        BufferSlot::new(TextBuffer::from_file(&second).unwrap()),
+    ];
+    fs::write(&second, "second edited outside").unwrap();
+
+    let ctx = egui::Context::default();
+    let check = |app: &mut VzEditorApp| {
+        app.last_disk_check = std::time::Instant::now() - std::time::Duration::from_secs(1);
+        let _ = ctx.run(egui::RawInput::default(), |ctx| {
+            app.check_external_changes(ctx)
+        });
+    };
+    check(&mut app);
+    assert_eq!(app.active_buf, 0);
+    assert!(app.filer_modal.is_none());
+
+    app.switch_buffer_to(1);
+    app.enter_filer();
+    check(&mut app);
+    assert!(app.filer_modal.is_none());
+
+    app.enter_editor();
+    check(&mut app);
+    assert!(matches!(
+        app.filer_modal,
+        Some(FilerModal::ConfirmReload { buf_idx: 1, .. })
+    ));
+    assert_eq!(app.cur_buf().line(0), "second");
+
+    app.switch_buffer_to(0);
+    let _ = ctx.run(egui::RawInput::default(), |ctx| app.render_filer_modal(ctx));
+    assert!(app.filer_modal.is_none());
+    app.switch_buffer_to(1);
+    check(&mut app);
+    assert!(matches!(
+        app.filer_modal,
+        Some(FilerModal::ConfirmReload { buf_idx: 1, .. })
+    ));
+    fs::remove_dir_all(dir).unwrap();
 }
 
 #[test]

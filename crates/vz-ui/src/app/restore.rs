@@ -341,25 +341,23 @@ impl VzEditorApp {
         })
     }
 
-    /// 外部で変更された（まだ尋ねていない）ファイルのバッファ。
-    pub(super) fn find_externally_changed(&self) -> Option<(usize, FileStamp)> {
-        self.buffers.iter().enumerate().find_map(|(idx, slot)| {
-            // 巨大ファイルの保存中・置換中は、自分の書き込みを外部の変更と取り違えないよう調べない
-            if slot.huge_save.is_some() || slot.huge_replace.is_some() {
-                return None;
-            }
-            let stamp = slot.buffer.changed_on_disk()?;
-            (slot.ignored_stamp != Some(stamp)).then_some((idx, stamp))
-        })
+    /// 表示中のファイルで、まだ尋ねていない外部変更。
+    pub(super) fn active_external_change(&self) -> Option<FileStamp> {
+        let slot = self.cur_slot();
+        // 巨大ファイルの保存中・置換中は、自分の書き込みを外部の変更と取り違えないよう調べない
+        if slot.huge_save.is_some() || slot.huge_replace.is_some() {
+            return None;
+        }
+        let stamp = slot.buffer.changed_on_disk()?;
+        (slot.ignored_stamp != Some(stamp)).then_some(stamp)
     }
 
-    /// 1 秒ごとに開いているファイルの外部での変更を調べ、変わっていれば再読み込みを尋ねる。
+    /// エディターで表示中のファイルを 1 秒ごとに調べ、外部で変更されていれば再読み込みを尋ねる。
     /// 復元直後は、外部の変更と衝突したファイルの確認を先に出す。
     pub(super) fn check_external_changes(&mut self, ctx: &egui::Context) {
         let interval = std::time::Duration::from_secs(1);
-        if !self.conflict_queue.is_empty()
-            || self.buffers.iter().any(|s| s.buffer.disk_stamp.is_some())
-        {
+        let check_active = self.mode == AppMode::Editor && self.cur_buf().disk_stamp.is_some();
+        if !self.conflict_queue.is_empty() || check_active {
             ctx.request_repaint_after(interval);
         }
         if self.filer_modal.is_some()
@@ -377,16 +375,13 @@ impl VzEditorApp {
             self.open_conflict_dialog(path);
             return;
         }
-        if self.last_disk_check.elapsed() < interval {
+        if !check_active || self.last_disk_check.elapsed() < interval {
             return;
         }
         self.last_disk_check = std::time::Instant::now();
-        if let Some((idx, stamp)) = self.find_externally_changed() {
-            if self.mode == AppMode::Editor {
-                self.switch_buffer_to(idx);
-            }
+        if let Some(stamp) = self.active_external_change() {
             self.filer_modal = Some(FilerModal::ConfirmReload {
-                buf_idx: idx,
+                buf_idx: self.active_buf,
                 stamp,
                 shown: std::time::Instant::now(),
             });
