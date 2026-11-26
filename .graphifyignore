@@ -1,0 +1,107 @@
+# sudo apt install python3-pip;sudo apt install pipx;sudo apt install python-is-python3
+# pipx install graphifyy
+# export PATH="$HOME/.local/bin:$PATH"
+# .graphifyignore : graphify update .
+.vs/
+*.suo
+*.sln.docstates
+*.csproj.user
+*.slnLaunch.user
+*.user
+# Build outputs
+[Dd]ebug/
+[Rr]elease/
+x64/
+build/
+[Bb]in/
+[Oo]bj/
+# Test outputs
+[Tt]est[Rr]esult*/
+TestResults/
+[Bb]uild[Ll]og.*
+# Click-Once directory
+publish/
+# Logs / temporary files
+*.log
+*.tmp
+*.cachefile
+*.pidb
+*.back
+*~
+~$*
+# OS files
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+.DS_Store
+# Local / machine-specific configs
+appsettings.*.json
+systemsettings.json
+# Repository-specific generated or local files
+server-*.db
+test-*.db
+*.db-journal
+printstream.jar
+printdata/
+printdll/
+refer/
+Releases/
+Doc/wrk/
+CvServer/wrk
+CvServer/img
+CvServer/imgshain
+wrk/
+.omo/
+.opencode/
+.sisyphus/
+.playwright-mcp/
+.omo/
+.opencode/
+tmp-*
+graphify-out/
+.graphify*
+*.md
+*.doc
+# Optional local notes
+printform/
+output/
+*-shm
+*-wal
+*.json
+.agents
+.claude
+.codegraph
+.codex
+.git
+.github
+*.csproj
+*.csproj.user
+.claude/
+.codex/
+.mcp.json
+.omo-*/
+Doc/
+# Rust のビルド成果物（target\gnu は他 OS 向け型チェック用）
+/target/
+
+# 元作業フォルダorgeditor を保存（コミットしない）
+/org-editor/
+
+# エージェント・ツールのローカル設定
+.claude/
+.omo/
+
+# エディター・OS の一時ファイル
+.vs/
+.vscode/
+.idea/
+*.swp
+*~
+.DS_Store
+Thumbs.db
+release.md
+untitled*.txt
+/graphify-out/
+/tmp/
+

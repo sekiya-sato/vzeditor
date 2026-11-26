@@ -74,7 +74,7 @@
 
 ## Release 手順（Windows 版）
 
-@build.md に従うこと。
+@build.md があれば従うこと。
 
 ## 作業と報告
 
