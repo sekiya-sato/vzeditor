@@ -1794,6 +1794,108 @@ fn test_session_restores_browser_tabs() {
 }
 
 #[test]
+fn test_drag_file_tabs_in_the_buffer_strip() {
+    let ctx = egui::Context::default();
+    let mut app = make_test_app();
+    let dir = std::env::temp_dir().join(format!("vz_file_tab_order_{}", std::process::id()));
+    fs::create_dir_all(&dir).unwrap();
+    app.buffers = ["first.txt", "second.txt", "third.txt"]
+        .map(|name| {
+            let path = dir.join(name);
+            fs::write(&path, name).unwrap();
+            BufferSlot::new(TextBuffer::from_file(&path).unwrap())
+        })
+        .into();
+    app.active_buf = 1;
+    app.cur_buf_mut().cursor_col = 4;
+
+    let frame = |app: &mut VzEditorApp, events| {
+        ctx.run(
+            egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(1024.0, 680.0))),
+                events,
+                ..Default::default()
+            },
+            |ctx| app.render_buffer_strip(ctx),
+        )
+    };
+    let tab_positions = |output: egui::FullOutput| {
+        output
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) if text.galley.text().ends_with(".txt") => {
+                    Some(text.visual_bounding_rect().center())
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+    let button = |pos, pressed| Event::PointerButton {
+        pos,
+        button: egui::PointerButton::Primary,
+        pressed,
+        modifiers: egui::Modifiers::NONE,
+    };
+    let press = |app: &mut VzEditorApp, pos| {
+        frame(app, vec![Event::PointerMoved(pos), button(pos, true)]);
+    };
+    let order = |app: &VzEditorApp| {
+        app.buffers
+            .iter()
+            .map(|slot| slot.buffer.display_name())
+            .collect::<Vec<_>>()
+    };
+
+    let tabs = tab_positions(frame(&mut app, vec![]));
+    let (first, third) = (tabs[0], tabs[2]);
+    press(&mut app, first);
+    frame(&mut app, vec![Event::PointerMoved(third)]);
+    assert_eq!(order(&app), ["first.txt", "second.txt", "third.txt"]);
+    frame(&mut app, vec![button(third, false)]);
+    assert_eq!(order(&app), ["second.txt", "third.txt", "first.txt"]);
+    assert_eq!(app.active_buf, 0);
+    assert_eq!(app.cur_buf().cursor_col, 4);
+
+    // レイアウトを更新してから、右から左にも挿入する。
+    let tabs = tab_positions(frame(&mut app, vec![]));
+    let (left, right) = (tabs[0], tabs[2]);
+    press(&mut app, right);
+    frame(&mut app, vec![Event::PointerMoved(left)]);
+    frame(&mut app, vec![button(left, false)]);
+    assert_eq!(order(&app), ["first.txt", "second.txt", "third.txt"]);
+    assert_eq!(app.active_buf, 1);
+
+    let tabs = tab_positions(frame(&mut app, vec![]));
+    let third = tabs[2];
+    let outside = Pos2::new(third.x, 100.0);
+    press(&mut app, third);
+    frame(&mut app, vec![Event::PointerMoved(outside)]);
+    frame(&mut app, vec![button(outside, false)]);
+    assert_eq!(order(&app), ["first.txt", "second.txt", "third.txt"]);
+    assert_eq!(app.active_buf, 1);
+
+    press(&mut app, third);
+    frame(&mut app, vec![button(third, false)]);
+    assert_eq!(app.active_buf, 2);
+
+    frame(&mut app, vec![button(third, true)]);
+    frame(&mut app, vec![Event::PointerMoved(tabs[0])]);
+    frame(&mut app, vec![button(tabs[0], false)]);
+    assert_eq!(order(&app), ["third.txt", "first.txt", "second.txt"]);
+    assert_eq!(app.active_buf, 0);
+
+    let session_dir = dir.join("session");
+    app.save_session_to(&session_dir).unwrap();
+    let mut restored = make_test_app();
+    restored.buffers = vec![BufferSlot::new(TextBuffer::new())];
+    restored.restore_session_from(&session_dir);
+    assert_eq!(order(&restored), ["third.txt", "first.txt", "second.txt"]);
+    assert_eq!(restored.active_buf, 0);
+    fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
 fn test_buffer_strip_and_browser_screen_render_headless() {
     let mut app = make_test_app();
     app.toggle_browser();

@@ -32,7 +32,7 @@ use search::{SearchDialog, SearchState};
 use std::borrow::Cow;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::Receiver;
 use std::sync::Arc;
 use theme::*;
@@ -322,6 +322,8 @@ enum FilerModal {
 }
 
 struct BufferSlot {
+    /// 同名のタブや、ドラッグ中に位置が変わったタブも識別する。
+    tab_id: usize,
     buffer: TextBuffer,
     scroll_x: f32,
     /// 縦スクロール位置（ピクセル。巨大ファイルの行数でも精度が足りるよう f64）
@@ -361,7 +363,9 @@ struct BufferSlot {
 
 impl BufferSlot {
     fn new(buffer: TextBuffer) -> Self {
+        static NEXT_TAB_ID: AtomicUsize = AtomicUsize::new(0);
         Self {
+            tab_id: NEXT_TAB_ID.fetch_add(1, Ordering::Relaxed),
             wrap: None,
             search_marks: None,
             buffer,

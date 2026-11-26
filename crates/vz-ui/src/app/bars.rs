@@ -429,8 +429,23 @@ impl VzEditorApp {
         }
         let in_editor = self.mode == AppMode::Editor;
         let mut selected_idx: Option<usize> = None;
+        let mut tab_move = None;
         let mut terminal_clicked = false;
         let mut browser_clicked: Option<usize> = None;
+        let can_reorder = self.buffers.len() > 1
+            && self.filer_modal.is_none()
+            && self.inline_prompt.is_none()
+            && self.pending_dialog.is_none()
+            && self.open_menu.is_none()
+            && !self.show_help
+            && !self.show_about;
+        let file_tab_sense = if can_reorder {
+            Sense::click_and_drag()
+        } else {
+            Sense::click()
+        };
+        let primary = egui::PointerButton::Primary;
+        let released = ctx.input(|i| i.pointer.button_released(primary));
 
         egui::TopBottomPanel::top("buffer_strip")
             .exact_height(24.0)
@@ -450,6 +465,7 @@ impl VzEditorApp {
                     );
                     ui.add_space(4.0);
 
+                    let mut hovered_file_tab = None;
                     for (idx, slot) in self.buffers.iter().enumerate() {
                         let dirty_mark = if slot.buffer.dirty { "*" } else { "" };
                         let view_mark = if slot.markdown_view { "[V]" } else { "" };
@@ -460,8 +476,38 @@ impl VzEditorApp {
                             dirty_mark,
                             view_mark
                         );
-                        if strip_tab(ui, title, in_editor && idx == self.active_buf).clicked() {
+                        let response = ui
+                            .push_id(slot.tab_id, |ui| {
+                                strip_tab(
+                                    ui,
+                                    title,
+                                    in_editor && idx == self.active_buf,
+                                    file_tab_sense,
+                                )
+                            })
+                            .inner;
+                        if response.clicked() {
                             selected_idx = Some(idx);
+                        }
+                        if can_reorder {
+                            if response.drag_started_by(primary) {
+                                egui::DragAndDrop::set_payload(ctx, FileTabDrag(slot.tab_id));
+                            }
+                            if response.contains_pointer() {
+                                hovered_file_tab = Some((idx, response.rect));
+                            }
+                        }
+                    }
+                    if let Some((to, rect)) = hovered_file_tab {
+                        let source = egui::DragAndDrop::payload::<FileTabDrag>(ctx)
+                            .and_then(|drag| self.buffers.iter().position(|s| s.tab_id == drag.0));
+                        if let Some(from) = source.filter(|&from| from != to) {
+                            let x = if from < to { rect.right() } else { rect.left() };
+                            ui.painter()
+                                .vline(x, rect.y_range(), Stroke::new(2.0_f32, TEXT_CYAN));
+                            if released {
+                                tab_move = Some((from, to));
+                            }
                         }
                     }
 
@@ -476,8 +522,12 @@ impl VzEditorApp {
                     }
                     if let Some(term) = &self.terminal {
                         // シェルが終了したターミナルは poll_terminal が閉じるので、ここに来るのは動作中だけ
-                        let resp =
-                            strip_tab(ui, "ターミナル".to_string(), self.mode == AppMode::Terminal);
+                        let resp = strip_tab(
+                            ui,
+                            "ターミナル".to_string(),
+                            self.mode == AppMode::Terminal,
+                            Sense::click(),
+                        );
                         if resp
                             .on_hover_text(format!("Alt+K  {}", term.program()))
                             .clicked()
@@ -500,7 +550,7 @@ impl VzEditorApp {
                             format!("{head}:{}", truncate_display_right(label, 24))
                         };
                         let active = self.mode == AppMode::Browser && i == self.active_browser;
-                        let resp = strip_tab(ui, name, active);
+                        let resp = strip_tab(ui, name, active, Sense::click());
                         if resp
                             .on_hover_text("Alt+B / Ctrl+Tab で切替、Ctrl+W で閉じる")
                             .clicked()
@@ -511,7 +561,10 @@ impl VzEditorApp {
                 });
             });
 
-        if let Some(idx) = selected_idx {
+        if let Some((from, to)) = tab_move {
+            self.move_buffer_tab(from, to);
+            ctx.request_repaint();
+        } else if let Some(idx) = selected_idx {
             if self.mode != AppMode::Editor {
                 self.enter_editor();
             }
@@ -523,6 +576,17 @@ impl VzEditorApp {
         if let Some(i) = browser_clicked {
             self.show_browser_tab(i);
         }
+    }
+
+    fn move_buffer_tab(&mut self, from: usize, to: usize) {
+        let slot = self.buffers.remove(from);
+        self.buffers.insert(to, slot);
+        self.active_buf = match self.active_buf {
+            active if active == from => to,
+            active if from < active && active <= to => active - 1,
+            active if to <= active && active < from => active + 1,
+            active => active,
+        };
     }
 
     // --- Function Key Guide Bar (F1..F10 / F1..F12, blocks of 5+5(+2) keys) ---
@@ -750,13 +814,14 @@ impl VzEditorApp {
 }
 
 /// バッファ帯のタブ 1 つ。
-fn strip_tab(ui: &mut egui::Ui, title: String, active: bool) -> egui::Response {
+fn strip_tab(ui: &mut egui::Ui, title: String, active: bool, sense: Sense) -> egui::Response {
     ui.add(
         egui::Button::new(
             egui::RichText::new(title)
                 .font(FontId::monospace(12.5))
                 .color(if active { TEXT_WHITE } else { TEXT_DIM_CYAN }),
         )
+        .sense(sense)
         .fill(if active {
             BG_TAB_ACTIVE
         } else {
@@ -769,6 +834,8 @@ fn strip_tab(ui: &mut egui::Ui, title: String, active: bool) -> egui::Response {
         .corner_radius(CornerRadius::same(2)),
     )
 }
+
+struct FileTabDrag(usize);
 
 /// F キー欄に表示する修飾キーの段（Shift・Ctrl・Alt のどれか 1 つだけを押している間）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
