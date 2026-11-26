@@ -58,6 +58,7 @@
 
 ## テスト
 
+- 大規模ファイルそのものを対象とするテスト、またはユーザーが明示的に指示した場合に限り、10 GB 以上のファイルを扱う。
 - 単体テストは各ソースの `#[cfg(test)] mod tests`。アプリのテストは `crates/vz-ui/src/app/tests.rs`。
 - アプリのテストは `make_test_app()`（VZ 互換・`persist_settings: false`）で利用者の設定を書き換えない。サクラ互換は `make_sakura_app()` と `run_editor()`（イベントを入力処理に流す）。
 - ファイルを使うテストは `std::env::temp_dir()` 下にプロセス ID 付きフォルダを作り、最後に削除する。
