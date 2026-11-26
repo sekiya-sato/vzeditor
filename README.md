@@ -10,6 +10,8 @@ VZEditor has since evolved into an independent project with its own architecture
 
 We thank the original author and contributors for their work.
 
+![VZ Editor の画面](docs/screenshots/editor.png)
+
 ## 開発方針
 
 - 高速起動・軽量動作、GPU（OpenGL）による描画
