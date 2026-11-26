@@ -1,6 +1,6 @@
 [package]
 name = "vz-core"
-description = "VZ Editor: UI に依存しない編集モデル（バッファ・差分・ファイラーの操作）"
+description = "VZ Editor: UI に依存しない編集モデル（バッファ・巨大ファイル・文字コード・差分・ファイラーの操作）"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -9,7 +9,11 @@ publish = false
 
 [dependencies]
 chrono.workspace = true
+encoding_rs = "0.8"
 globset = "0.4"
+memchr = "2"
+memmap2 = "0.9"
+rayon = "1"
 regex = "1"
 unicode-width.workspace = true
 walkdir = "2"

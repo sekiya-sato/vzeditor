@@ -7,6 +7,7 @@ mod dialogs;
 mod editor_view;
 mod filer_view;
 mod files;
+mod huge;
 mod input;
 mod keys;
 mod menu;
@@ -39,10 +40,12 @@ use vz_config::session::{self, EntryKind, SessionEntry};
 use vz_config::settings::{KeyScheme, Settings, WindowGeometry};
 use vz_core::buffer::{char_to_byte_idx, expand_tabs_for_display, FileStamp, TextBuffer, TextPos};
 use vz_core::diff::{self, DiffKind};
+use vz_core::encoding::TextEncoding;
 use vz_core::filer::{
     copy_entry, create_dir, create_file, delete_entry, format_size, move_entry, rename_entry,
     ActivePane, FileEntry, FilerState,
 };
+use vz_core::huge::HugeDoc;
 use vz_platform::dialog::{spawn_open_dialog, spawn_save_dialog, DialogResult};
 use vz_platform::send_to_app::{prepare_text, spawn_send, SendResult, SendTarget};
 use vz_platform::{clipboard, monitor};
@@ -196,6 +199,8 @@ enum MenuAction {
     OpenFile,
     SaveFile,
     SaveAs,
+    /// 文字コードを選んで保存する（キーの割り当てなし）
+    SaveWithEncoding,
     CloseBuffer,
     ToggleFiler,
     Quit,
@@ -291,6 +296,11 @@ enum FilerModal {
         name: String,
     },
     ConfirmQuit,
+    /// 文字コードを選んで保存する（保存できなかった理由を message に出す）
+    ChooseEncoding {
+        selected: TextEncoding,
+        message: String,
+    },
     /// 開いているファイルが外部で変更された。再読み込みするか確認する
     ConfirmReload {
         buf_idx: usize,
@@ -309,7 +319,8 @@ enum FilerModal {
 struct BufferSlot {
     buffer: TextBuffer,
     scroll_x: f32,
-    scroll_y: f32,
+    /// 縦スクロール位置（ピクセル。巨大ファイルの行数でも精度が足りるよう f64）
+    scroll_y: f64,
     markdown_view: bool,
     md_scroll_y: f32,
     md_max_scroll_y: f32,
@@ -325,6 +336,16 @@ struct BufferSlot {
     ignored_stamp: Option<FileStamp>,
     /// 外部の変更と衝突して上書きしなかった vz の編集内容を持つ無題バッファなら、元のファイルのパス
     conflict_of: Option<PathBuf>,
+    /// 巨大ファイルを裏のスレッドで保存中
+    huge_save: Option<huge::HugeSaveJob>,
+    /// 巨大ファイルの検索（裏のスレッド）
+    huge_find: Option<huge::HugeFindJob>,
+    /// 巨大ファイルのすべて置換（裏のスレッド）
+    huge_replace: Option<huge::HugeReplaceJob>,
+    /// 巨大ファイルの行ジャンプで、索引が届くのを待っている行
+    pending_jump: Option<usize>,
+    /// 巨大ファイルの横スクロール位置（各行の何文字目から表示するか）
+    huge_hcol: usize,
 }
 
 impl BufferSlot {
@@ -344,12 +365,17 @@ impl BufferSlot {
             md_blocks: Vec::new(),
             ignored_stamp: None,
             conflict_of: None,
+            huge_save: None,
+            huge_find: None,
+            huge_replace: None,
+            pending_jump: None,
+            huge_hcol: 0,
         }
     }
 
     fn ensure_md_cache(&mut self) {
         if self.md_cache_rev != Some(self.buffer.revision) {
-            self.md_blocks = parse_markdown(&self.buffer.lines);
+            self.md_blocks = parse_markdown(self.buffer.text_lines());
             self.md_cache_rev = Some(self.buffer.revision);
         }
     }
@@ -357,8 +383,7 @@ impl BufferSlot {
     fn is_untouched_untitled(&self) -> bool {
         self.buffer.file_path.is_none()
             && !self.buffer.dirty
-            && self.buffer.lines.len() == 1
-            && self.buffer.lines[0].is_empty()
+            && matches!(self.buffer.text_lines(), [line] if line.is_empty())
     }
 }
 
@@ -794,6 +819,7 @@ impl eframe::App for VzEditorApp {
         self.start_pending_terminal(ctx);
         self.poll_terminal();
         self.handle_events(ctx);
+        self.poll_huge_buffers(ctx);
 
         self.render_menu_bar(ctx);
         self.render_status_bar(ctx);

@@ -4,6 +4,10 @@ use super::*;
 
 impl VzEditorApp {
     pub(super) fn toggle_markdown_view(&mut self) {
+        if self.cur_buf().is_huge() {
+            self.status_message = "巨大ファイルでは Markdown ビューを使えません".into();
+            return;
+        }
         self.prefix = PrefixKey::None;
         self.ime_preedit.clear();
         let slot = self.cur_slot_mut();
@@ -419,6 +423,11 @@ impl VzEditorApp {
     }
 
     pub(super) fn perform_save(&mut self, path: PathBuf) {
+        if self.cur_buf().is_huge() {
+            let encoding = self.cur_buf().encoding;
+            self.start_huge_save(path, encoding);
+            return;
+        }
         match self.cur_buf_mut().save_to_path(&path) {
             Ok(()) => {
                 self.status_message = format!("保存しました: {}", path.display());
@@ -428,6 +437,35 @@ impl VzEditorApp {
                 self.quit_after_save = false;
             }
         }
+    }
+
+    /// 文字コードを選んで保存するダイアログを開く（ファイル→文字コードを指定して保存、ステータスバーの文字コード）。
+    pub(super) fn open_encoding_dialog(&mut self) {
+        if self.mode != AppMode::Editor || self.filer_modal.is_some() {
+            return;
+        }
+        self.filer_modal = Some(FilerModal::ChooseEncoding {
+            selected: self.cur_buf().encoding,
+            message: String::new(),
+        });
+    }
+
+    /// 選んだ文字コードで保存する。無題なら文字コードを決めて保存先を尋ねる。失敗したら理由を返す。
+    pub(super) fn save_with_encoding(&mut self, encoding: TextEncoding) -> Result<(), String> {
+        let Some(path) = self.cur_buf().file_path.clone() else {
+            self.cur_buf_mut().encoding = encoding;
+            self.trigger_save();
+            return Ok(());
+        };
+        if self.cur_buf().is_huge() {
+            self.start_huge_save(path, encoding);
+            return Ok(());
+        }
+        self.cur_buf_mut()
+            .save_to_path_as(&path, encoding)
+            .map_err(|e| e.to_string())?;
+        self.status_message = format!("{encoding} で保存しました: {}", path.display());
+        Ok(())
     }
 
     pub(super) fn trigger_save(&mut self) {

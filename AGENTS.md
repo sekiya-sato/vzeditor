@@ -5,7 +5,7 @@
 - Rust 製。対象は Windows 11・Linux（Ubuntu 24 など）・macOS。
 - 原作 LZ Editor（MIT, © 2026 Touryu Tamane。https://github.com/TouryuTamane/lz-editor の `adab5d2`）をルートのクレートへ移植済み。背面透過・最前面固定などを追加する。
 - 原作の著作権表示は `LICENSE` と About ダイアログで維持する。
-- 仕様は [docs/基本設計.md](docs/基本設計.md)、利用者向け説明は [README.md](README.md)、キー対比は [docs/キー割り当て対比.md](docs/キー割り当て対比.md)。
+- 仕様は [docs/基本設計.md](docs/基本設計.md)（巨大ファイル対応は [docs/巨大ファイル詳細設計.md](docs/巨大ファイル詳細設計.md)）、利用者向け説明は [README.md](README.md)、キー対比は [docs/キー割り当て対比.md](docs/キー割り当て対比.md)。
 
 ## 構成
 

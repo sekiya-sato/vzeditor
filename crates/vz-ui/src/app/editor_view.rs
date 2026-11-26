@@ -55,14 +55,67 @@ impl VzEditorApp {
                 let marker_font_size = (self.font_size * 0.875).max(9.0);
 
                 let scrollbar_w = 12.0;
-                let total_lines = self.cur_buf().lines.len();
-                let line_digits = total_lines.max(999).to_string().len();
+                let total_lines = self.cur_buf().line_count();
+                let huge = self.cur_buf().is_huge();
+                let digits_for = self
+                    .cur_buf()
+                    .huge()
+                    .map_or(total_lines, |h| h.estimated_line_count());
+                let line_digits = digits_for.max(999).to_string().len();
+
+                // 巨大ファイルは行全体を読まず、画面に入る範囲（窓）だけを読む。
+                // 窓は横スクロール位置 hcol 文字目から window_cols 文字（全角を考えて 2 倍）
+                let cell_w0 = ui.fonts(|f| {
+                    (f.layout_no_wrap("M".repeat(10), font_id.clone(), TEXT_WHITE)
+                        .size()
+                        .x
+                        / 10.0)
+                        .max(1.0)
+                });
+                let window_cols = ((avail_rect.width() / cell_w0) as usize + 8) * 2;
+                // 巨大ファイルの横スクロールは文字単位（各行を hcol 文字目から表示する）。
+                // ピクセル単位にすると、全角を含む行で文字位置と表示位置がずれるため
+                let mut hcol = if huge { self.cur_slot().huge_hcol } else { 0 };
+                let (cursor_line, cursor_col) = self.cur_buf().cursor_pos();
+                if huge && self.need_scroll_to_cursor {
+                    let view_cols =
+                        ((avail_rect.width() - 120.0).max(cell_w0 * 8.0) / cell_w0) as usize;
+                    if cursor_col < hcol {
+                        // 行頭から半画面に入るなら行頭から表示する
+                        hcol = cursor_col.saturating_sub(view_cols / 2);
+                    } else {
+                        let span = cursor_col - hcol;
+                        let w = if span > window_cols {
+                            f32::INFINITY
+                        } else {
+                            let seg = expand_tabs_for_display(&self.cur_buf().line_segment(
+                                cursor_line,
+                                hcol,
+                                span,
+                            ));
+                            ui.fonts(|f| {
+                                f.layout_no_wrap(seg, font_id.clone(), TEXT_WHITE).size().x
+                            })
+                        };
+                        if w + cell_w0 * 4.0 > view_cols as f32 * cell_w0 {
+                            // 全角が続いても入るよう、表示幅の 1/3 の文字数だけ手前から表示する
+                            hcol = cursor_col.saturating_sub(view_cols / 3);
+                        }
+                    }
+                }
 
                 // Measure cursor X, preedit width, gutter width, and cursor cell width from actual font metrics
-                let cursor_line = self.cur_buf().cursor_line;
-                let cursor_col = self.cur_buf().cursor_col;
-                let cursor_line_str = self.cur_buf().current_line_str().to_string();
-                let cursor_byte = char_to_byte_idx(&cursor_line_str, cursor_col);
+                // カーソル行の窓の先頭（通常は 0）。巨大ファイルでカーソルが窓の外なら画面外に置く
+                let cursor_offscreen = huge && !(hcol..=hcol + window_cols).contains(&cursor_col);
+                let cursor_base = if cursor_offscreen { cursor_col } else { hcol };
+                let cursor_line_str = if huge {
+                    self.cur_buf()
+                        .line_segment(cursor_line, cursor_base, window_cols)
+                        .into_owned()
+                } else {
+                    self.cur_buf().current_line_str().into_owned()
+                };
+                let cursor_byte = char_to_byte_idx(&cursor_line_str, cursor_col - cursor_base);
                 let preedit_disp = expand_tabs_for_display(&self.ime_preedit);
                 let char_under_cursor = cursor_line_str[cursor_byte..].chars().next();
                 let cursor_sample = match char_under_cursor {
@@ -123,7 +176,8 @@ impl VzEditorApp {
                 self.last_visible_lines = (viewport_h / self.line_height).floor().max(1.0) as usize;
 
                 // 折り返し表示: 表示幅（セル数）で論理行を表示行に分ける。描画中は行割りをスロットから借りる
-                let wrap: Option<WrapLayout> = if self.word_wrap {
+                // 巨大ファイルは折り返さない
+                let wrap: Option<WrapLayout> = if self.word_wrap && !huge {
                     let cols = ((viewport_w - cursor_w) / cell_w).floor().max(8.0) as usize;
                     self.wrap_cols = cols;
                     self.ensure_wrap_layout(cols);
@@ -159,14 +213,20 @@ impl VzEditorApp {
                 let cursor_seg_byte = char_to_byte_idx(&cursor_line_str, cursor_seg_start);
                 let before_cursor_disp =
                     expand_tabs_for_display(&cursor_line_str[cursor_seg_byte..cursor_byte]);
-                let cursor_px_x = ui.fonts(|f| {
-                    f.layout_no_wrap(before_cursor_disp, font_id.clone(), TEXT_WHITE)
-                        .size()
-                        .x
-                });
+                let cursor_px_x = if cursor_offscreen {
+                    -10_000.0
+                } else {
+                    ui.fonts(|f| {
+                        f.layout_no_wrap(before_cursor_disp, font_id.clone(), TEXT_WHITE)
+                            .size()
+                            .x
+                    })
+                };
 
+                // 縦の位置は f64 で扱う（1 億行 × 行の高さは f32 では精度が足りない）
+                let line_h = f64::from(self.line_height);
                 let mut scroll_y = self.cur_slot().scroll_y;
-                let mut scroll_x = if wrap.is_some() {
+                let mut scroll_x = if wrap.is_some() || huge {
                     0.0
                 } else {
                     self.cur_slot().scroll_x
@@ -198,25 +258,29 @@ impl VzEditorApp {
                 if response.hovered() {
                     let scroll_delta = ctx.input(|i| i.smooth_scroll_delta);
                     if scroll_delta.y.abs() > 0.0 {
-                        scroll_y -= scroll_delta.y;
+                        scroll_y -= f64::from(scroll_delta.y);
                     }
                     if scroll_delta.x.abs() > 0.0 && wrap.is_none() {
-                        scroll_x -= scroll_delta.x;
+                        if huge {
+                            hcol = (hcol as f32 - scroll_delta.x / cell_w0).max(0.0) as usize;
+                        } else {
+                            scroll_x -= scroll_delta.x;
+                        }
                     }
                 }
 
                 // Auto-scroll to keep cursor inside viewport
-                let cursor_px_y = cursor_row as f32 * self.line_height;
+                let cursor_px_y = cursor_row as f64 * line_h;
                 if self.need_scroll_to_cursor {
                     if cursor_px_y < scroll_y {
                         scroll_y = cursor_px_y;
-                    } else if cursor_px_y + self.line_height > scroll_y + viewport_h {
-                        scroll_y = cursor_px_y + self.line_height - viewport_h;
+                    } else if cursor_px_y + line_h > scroll_y + f64::from(viewport_h) {
+                        scroll_y = cursor_px_y + line_h - f64::from(viewport_h);
                     }
 
                     let caret_end_x = cursor_px_x + preedit_px_w + cursor_w + 8.0;
-                    if wrap.is_some() {
-                        // 折り返し表示では横スクロールしない
+                    if wrap.is_some() || huge {
+                        // 折り返し表示では横スクロールしない（巨大ファイルは hcol で済ませた）
                     } else if cursor_px_x < scroll_x {
                         scroll_x = (cursor_px_x - cursor_w * 2.0).max(0.0);
                     } else if caret_end_x > scroll_x + viewport_w {
@@ -225,10 +289,10 @@ impl VzEditorApp {
                     self.need_scroll_to_cursor = false;
                 }
 
-                let total_content_h = (total_rows as f32 + 2.0) * self.line_height;
-                let max_scroll_y = (total_content_h - viewport_h).max(0.0);
+                let total_content_h = (total_rows as f64 + 2.0) * line_h;
+                let max_scroll_y = (total_content_h - f64::from(viewport_h)).max(0.0);
                 scroll_y = scroll_y.clamp(0.0, max_scroll_y);
-                scroll_x = if wrap.is_some() {
+                scroll_x = if wrap.is_some() || huge {
                     0.0
                 } else {
                     scroll_x.max(0.0)
@@ -248,12 +312,17 @@ impl VzEditorApp {
                     let shift_held = ctx.input(|i| i.modifiers.shift);
                     // 画面上の位置 → (行, 文字位置)
                     let hit = |this: &Self, pos: Pos2| -> TextPos {
-                        let rel_y = pos.y - editor_rect.min.y - top_pad + scroll_y;
-                        let target_row = ((rel_y / this.line_height).floor().max(0.0) as usize)
+                        let rel_y = f64::from(pos.y - editor_rect.min.y - top_pad) + scroll_y;
+                        let target_row = ((rel_y / line_h).floor().max(0.0) as usize)
                             .min(total_rows.saturating_sub(1));
                         let (target_line, seg) = row_to_line(target_row);
+                        let base = if huge { hcol } else { 0 };
                         let click_x = (pos.x - editor_rect.min.x - left_pad + scroll_x).max(0.0);
-                        let line_str = &this.cur_buf().lines[target_line];
+                        let line_str = if huge {
+                            this.cur_buf().line_segment(target_line, base, window_cols)
+                        } else {
+                            this.cur_buf().line(target_line)
+                        };
                         let line_len = line_str.chars().count();
                         let (seg_start, seg_end) = seg_range(target_line, seg, line_len);
                         // 最後以外の表示行の終端は次の表示行の先頭になるため、1文字手前までにする
@@ -293,7 +362,7 @@ impl VzEditorApp {
                                 }
                                 best_col
                             });
-                        (target_line, target_col)
+                        (target_line, base + target_col)
                     };
 
                     if sakura && response.drag_started() {
@@ -374,8 +443,8 @@ impl VzEditorApp {
                 );
 
                 // Virtualized painting（表示行単位。折り返しなしなら 表示行 = 論理行）
-                let first_row = (scroll_y / self.line_height).floor().max(0.0) as usize;
-                let last_row = ((scroll_y + viewport_h) / self.line_height).ceil() as usize;
+                let first_row = (scroll_y / line_h).floor().max(0.0) as usize;
+                let last_row = ((scroll_y + f64::from(viewport_h)) / line_h).ceil() as usize;
                 let end_row = (last_row + 1).min(total_rows);
 
                 let editor_painter = ui.painter_at(editor_rect);
@@ -392,14 +461,20 @@ impl VzEditorApp {
                 for row_idx in first_row..end_row {
                     let (line_idx, seg) = row_to_line(row_idx);
                     let y =
-                        editor_rect.min.y + top_pad + row_idx as f32 * self.line_height - scroll_y;
+                        editor_rect.min.y + top_pad + (row_idx as f64 * line_h - scroll_y) as f32;
                     let is_current = line_idx == cur_line_now;
-                    let full_line = &self.cur_buf().lines[line_idx];
+                    // 巨大ファイルは窓だけを読む（base はその行の窓の先頭の文字位置）
+                    let base = if huge { hcol } else { 0 };
+                    let full_line = if huge {
+                        self.cur_buf().line_segment(line_idx, base, window_cols)
+                    } else {
+                        self.cur_buf().line(line_idx)
+                    };
                     let line_len = full_line.chars().count();
                     let (seg_start, seg_end) = seg_range(line_idx, seg, line_len);
                     let last_seg = is_last_seg(line_idx, seg);
-                    let line = &full_line[char_to_byte_idx(full_line, seg_start)
-                        ..char_to_byte_idx(full_line, seg_end)];
+                    let line = &full_line[char_to_byte_idx(&full_line, seg_start)
+                        ..char_to_byte_idx(&full_line, seg_end)];
 
                     if is_current {
                         let line_bg_rect = Rect::from_min_size(
@@ -438,8 +513,8 @@ impl VzEditorApp {
 
                     // 範囲選択の背景（この表示行の範囲に切り詰める）
                     if let Some((from, to, newline)) = self.cur_buf().line_selection(line_idx) {
-                        let from = from.clamp(seg_start, seg_end) - seg_start;
-                        let to = to.clamp(seg_start, seg_end) - seg_start;
+                        let from = from.saturating_sub(base).clamp(seg_start, seg_end) - seg_start;
+                        let to = to.saturating_sub(base).clamp(seg_start, seg_end) - seg_start;
                         let newline = newline && last_seg;
                         let x_of = |col: usize| -> f32 {
                             if col == 0 {
@@ -472,10 +547,12 @@ impl VzEditorApp {
                         }
                     }
 
-                    let has_newline = last_seg && line_idx + 1 < total_lines;
+                    // 窓で切れた長い行には改行記号を付けない
+                    let cut = huge && line_len >= window_cols;
+                    let has_newline = last_seg && line_idx + 1 < total_lines && !cut;
                     let end_x = if is_current && seg == cursor_seg && !self.ime_preedit.is_empty() {
                         let byte_pos =
-                            char_to_byte_idx(line, cur_col_now.saturating_sub(seg_start));
+                            char_to_byte_idx(line, cur_col_now.saturating_sub(base + seg_start));
                         let before = expand_tabs_for_display(&line[..byte_pos]);
                         let after = expand_tabs_for_display(&line[byte_pos..]);
                         let mut cur_x = text_origin_x;
@@ -540,7 +617,7 @@ impl VzEditorApp {
 
                 // [EOF] marker
                 let eof_y =
-                    editor_rect.min.y + top_pad + total_rows as f32 * self.line_height - scroll_y;
+                    editor_rect.min.y + top_pad + (total_rows as f64 * line_h - scroll_y) as f32;
                 if eof_y >= editor_rect.min.y - self.line_height && eof_y <= editor_rect.max.y {
                     editor_painter.text(
                         Pos2::new(
@@ -556,7 +633,7 @@ impl VzEditorApp {
 
                 // Cursor rendering (dynamically scaled to current font_size & line_height)
                 let caret_x = editor_rect.min.x + left_pad + cursor_px_x + preedit_px_w - scroll_x;
-                let caret_y = editor_rect.min.y + top_pad + cursor_px_y - scroll_y;
+                let caret_y = editor_rect.min.y + top_pad + (cursor_px_y - scroll_y) as f32;
                 let caret_h = (self.line_height - 2.0).max(4.0);
                 let caret_bar_w = (self.font_size / 8.0).clamp(1.5, 4.0);
                 let cursor_rect = Rect::from_min_size(
@@ -622,10 +699,10 @@ impl VzEditorApp {
                     bg(BG_GUTTER),
                 );
                 if max_scroll_y > 0.0 {
-                    let ratio = (viewport_h / total_content_h).clamp(0.06, 1.0);
+                    let ratio = (f64::from(viewport_h) / total_content_h).clamp(0.06, 1.0) as f32;
                     let thumb_h = (sb_rect.height() * ratio).max(24.0);
                     let track_h = (sb_rect.height() - thumb_h).max(1.0);
-                    let thumb_y = sb_rect.min.y + (scroll_y / max_scroll_y) * track_h;
+                    let thumb_y = sb_rect.min.y + (scroll_y / max_scroll_y) as f32 * track_h;
                     let thumb_rect = Rect::from_min_size(
                         Pos2::new(sb_rect.min.x + 2.0, thumb_y),
                         Vec2::new(scrollbar_w - 4.0, thumb_h),
@@ -638,13 +715,14 @@ impl VzEditorApp {
                         if let Some(pos) = sb_resp.interact_pointer_pos() {
                             let norm =
                                 ((pos.y - sb_rect.min.y - thumb_h * 0.5) / track_h).clamp(0.0, 1.0);
-                            scroll_y = norm * max_scroll_y;
+                            scroll_y = f64::from(norm) * max_scroll_y;
                         }
                     }
                 }
 
                 let slot = self.cur_slot_mut();
                 slot.scroll_x = scroll_x;
+                slot.huge_hcol = hcol;
                 slot.scroll_y = scroll_y;
                 if wrap.is_some() {
                     slot.wrap = wrap;

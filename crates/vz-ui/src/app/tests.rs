@@ -235,10 +235,10 @@ fn test_save_session_and_restore() {
     );
     assert_eq!(app2.buffers[0].buffer.cursor_pos(), (2, 3));
     assert!(app2.buffers[1].markdown_view);
-    assert_eq!(app2.buffers[1].buffer.lines, vec!["# old new"]);
+    assert_eq!(app2.buffers[1].buffer.text_lines(), vec!["# old new"]);
     let u2 = &app2.buffers[2].buffer;
     assert!(u2.file_path.is_none() && u2.dirty);
-    assert_eq!(u2.lines, vec!["無題の内容", "2行目"]);
+    assert_eq!(u2.text_lines(), vec!["無題の内容", "2行目"]);
     assert_eq!(app2.active_buf, 2);
     // 状態ファイルと一時保存ファイルは消える
     assert_eq!(fs::read_dir(&session_dir).unwrap().count(), 0);
@@ -275,13 +275,13 @@ fn test_save_session_conflict_keeps_external_change() {
     // ファイルは外部の内容で開き、vz の編集内容は無題バッファに残る
     assert_eq!(app2.buffers.len(), 2);
     assert_eq!(
-        app2.buffers[0].buffer.lines,
+        app2.buffers[0].buffer.text_lines(),
         vec!["a", "b", "c", "external line"]
     );
     assert!(!app2.buffers[0].buffer.dirty);
     let u = &app2.buffers[1];
     assert!(u.buffer.file_path.is_none() && u.buffer.dirty);
-    assert_eq!(u.buffer.lines, vec!["a-vz", "b", "c"]);
+    assert_eq!(u.buffer.text_lines(), vec!["a-vz", "b", "c"]);
     assert_eq!(u.conflict_of.as_deref(), Some(path.as_path()));
     assert_eq!(app2.conflict_queue, vec![path.clone()]);
 
@@ -316,7 +316,7 @@ fn test_save_session_conflict_keeps_external_change() {
     assert_eq!(fs::read_to_string(&path).unwrap(), "a-vz\nb\nc");
     assert_eq!(app3.buffers.len(), 1);
     assert!(!app3.cur_buf().dirty);
-    assert_eq!(app3.cur_buf().lines, vec!["a-vz", "b", "c"]);
+    assert_eq!(app3.cur_buf().text_lines(), vec!["a-vz", "b", "c"]);
 
     // ファイルの内容を採用: 無題バッファを閉じるだけ
     app2.resolve_conflict(&path, Some(false));
@@ -357,12 +357,15 @@ fn test_external_change_detect_and_reload() {
     // 再読み込み（未保存の変更は破棄。元に戻すで戻せる）
     app.cur_buf_mut().insert_text("y");
     app.reload_buffer(0);
-    assert_eq!(app.cur_buf().lines, vec!["one", "two", "three external"]);
+    assert_eq!(
+        app.cur_buf().text_lines(),
+        vec!["one", "two", "three external"]
+    );
     assert!(!app.cur_buf().dirty);
     assert!(app.buffers[0].ignored_stamp.is_none());
     assert!(app.find_externally_changed().is_none());
     assert!(app.cur_buf_mut().undo());
-    assert_eq!(app.cur_buf().lines, vec!["xyone", "two"]);
+    assert_eq!(app.cur_buf().text_lines(), vec!["xyone", "two"]);
     assert!(app.cur_buf().dirty);
 
     // 削除されたファイルは尋ねない
@@ -645,7 +648,7 @@ fn test_headless_render_all_modes_and_font_sizes() {
     let mut app = make_test_app();
     // Load real README.md content into the buffer
     let readme = include_str!("../../../../tests/fixtures/markdown_sample.md");
-    app.cur_buf_mut().lines = readme.lines().map(String::from).collect();
+    *app.cur_buf_mut() = TextBuffer::from_lines(readme.lines().map(String::from).collect());
     app.cur_buf_mut().revision += 1;
     app.ime_preedit = "にほんご".to_string();
     app.ime_active = true;
@@ -1160,6 +1163,60 @@ fn make_sakura_app(text: &str) -> VzEditorApp {
 }
 
 #[test]
+fn test_huge_buffer_keys_with_word_wrap_and_save() {
+    let dir = std::env::temp_dir().join(format!("vz_app_huge_{}", std::process::id()));
+    fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("big.txt");
+    fs::write(&path, "line0\nline1\nline2\n").unwrap();
+    let ctx = egui::Context::default();
+    let mut app = make_sakura_app("");
+    // 折り返し表示がオンでも、巨大ファイルは論理行で上下に動く
+    app.word_wrap = true;
+    let mut buf = TextBuffer::open_huge(&path).unwrap();
+    buf.huge_mut().unwrap().wait_index();
+    app.buffers = vec![BufferSlot::new(buf)];
+    let none = mods(false, false);
+    run_editor(
+        &ctx,
+        &mut app,
+        none,
+        vec![
+            key_with(Key::ArrowDown, none),
+            key_with(Key::ArrowDown, none),
+            key_with(Key::End, none),
+        ],
+    );
+    run_editor(&ctx, &mut app, none, vec![Event::Text("X".into())]);
+    assert_eq!(app.cur_buf().cursor_pos(), (2, 6));
+    assert_eq!(app.cur_buf().line(2), "line2X");
+    assert!(app.cur_buf().dirty);
+    // Markdown ビュー・行マークは使えない（メッセージだけ）
+    app.toggle_markdown_view();
+    assert!(!app.cur_slot().markdown_view);
+
+    // 保存は裏のスレッドで行い、終わったら未保存の印が消える
+    app.trigger_save();
+    assert!(app.cur_slot().huge_save.is_some());
+    // 保存中は編集できない
+    run_editor(&ctx, &mut app, none, vec![Event::Text("Y".into())]);
+    assert_eq!(app.cur_buf().line(2), "line2X");
+    for _ in 0..200 {
+        let _ = ctx.run(egui::RawInput::default(), |ctx| app.poll_huge_buffers(ctx));
+        if app.cur_slot().huge_save.is_none() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert!(!app.cur_buf().dirty, "{}", app.status_message);
+    assert_eq!(fs::read_to_string(&path).unwrap(), "line0\nline1\nline2X\n");
+    // 保存後も Undo できる
+    assert!(app.cur_buf_mut().undo());
+    assert_eq!(app.cur_buf().line(2), "line2");
+    drop(app);
+    fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
 fn test_sakura_shift_select_and_replace() {
     let ctx = egui::Context::default();
     let mut app = make_sakura_app("abcdef\nghi");
@@ -1183,7 +1240,7 @@ fn test_sakura_shift_select_and_replace() {
         mods(false, false),
         vec![Event::Text("X".into())],
     );
-    assert_eq!(app.cur_buf().lines, vec!["Xdef", "ghi"]);
+    assert_eq!(app.cur_buf().text_lines(), vec!["Xdef", "ghi"]);
 
     // Shift なしの移動で選択は解除される
     run_editor(&ctx, &mut app, shift, vec![key_with(Key::End, shift)]);
@@ -1229,17 +1286,17 @@ fn test_enter_auto_indent_both_schemes() {
         app.cur_buf_mut().move_line_end();
         run_editor(&ctx, &mut app, none, vec![key_with(Key::Enter, none)]);
         assert_eq!(
-            app.cur_buf().lines,
+            app.cur_buf().text_lines(),
             vec!["\t\tこれはテスト", "\t\t"],
             "sakura={sakura}"
         );
         assert_eq!(app.cur_buf().cursor_pos(), (1, 2));
         run_editor(&ctx, &mut app, none, vec![Event::Text("次".into())]);
-        assert_eq!(app.cur_buf().lines[1], "\t\t次");
+        assert_eq!(app.cur_buf().text_lines()[1], "\t\t次");
 
         run_editor(&ctx, &mut app, shift, vec![key_with(Key::Enter, shift)]);
         assert_eq!(
-            app.cur_buf().lines,
+            app.cur_buf().text_lines(),
             vec!["\t\tこれはテスト", "\t\t次", ""],
             "sakura={sakura}"
         );
@@ -1250,7 +1307,7 @@ fn test_enter_auto_indent_both_schemes() {
         app.cur_buf_mut().undo();
         app.cur_buf_mut().undo();
         assert_eq!(
-            app.cur_buf().lines,
+            app.cur_buf().text_lines(),
             vec!["\t\tこれはテスト"],
             "sakura={sakura}"
         );
@@ -1264,7 +1321,7 @@ fn test_sakura_enter_replaces_selection_with_indent() {
     app.cur_buf_mut().select_range((0, 2), (1, 1));
     let none = mods(false, false);
     run_editor(&ctx, &mut app, none, vec![key_with(Key::Enter, none)]);
-    assert_eq!(app.cur_buf().lines, vec!["\ta", "\tef"]);
+    assert_eq!(app.cur_buf().text_lines(), vec!["\ta", "\tef"]);
     assert!(!app.cur_buf().has_selection());
 }
 
@@ -1278,7 +1335,7 @@ fn test_sakura_f2_f4_f5() {
     // F5: 割り当てなし（カーソルも内容も変わらない）
     run_editor(&ctx, &mut app, none, vec![key_with(Key::F5, none)]);
     assert_eq!(app.cur_buf().cursor_pos(), (0, 0));
-    assert_eq!(app.cur_buf().lines, vec!["abcdef", "ghi"]);
+    assert_eq!(app.cur_buf().text_lines(), vec!["abcdef", "ghi"]);
 
     // F2: 新規バッファ
     run_editor(&ctx, &mut app, none, vec![key_with(Key::F2, none)]);
@@ -1288,7 +1345,7 @@ fn test_sakura_f2_f4_f5() {
     // F4: 現在のバッファを閉じる（Ctrl+F4 と同じ）
     run_editor(&ctx, &mut app, none, vec![key_with(Key::F4, none)]);
     assert_eq!(app.buffers.len(), 1);
-    assert_eq!(app.cur_buf().lines, vec!["abcdef", "ghi"]);
+    assert_eq!(app.cur_buf().text_lines(), vec!["abcdef", "ghi"]);
 }
 
 #[test]
@@ -1305,21 +1362,21 @@ fn test_insert_key_toggles_overwrite_in_both_schemes() {
 
         // 上書き: カーソル位置の文字を置き換え、行末を越えたら追加する（改行は消さない）
         run_editor(&ctx, &mut app, none, vec![Event::Text("XY".into())]);
-        assert_eq!(app.cur_buf().lines, vec!["XYcdef", "ghi"]);
+        assert_eq!(app.cur_buf().text_lines(), vec!["XYcdef", "ghi"]);
         app.cur_buf_mut().set_cursor(0, 5);
         run_editor(&ctx, &mut app, none, vec![Event::Text("123".into())]);
-        assert_eq!(app.cur_buf().lines, vec!["XYcde123", "ghi"]);
+        assert_eq!(app.cur_buf().text_lines(), vec!["XYcde123", "ghi"]);
 
         // 貼り付けは挿入
         app.cur_buf_mut().set_cursor(1, 0);
         run_editor(&ctx, &mut app, none, vec![Event::Paste("P".into())]);
-        assert_eq!(app.cur_buf().lines[1], "Pghi");
+        assert_eq!(app.cur_buf().text_lines()[1], "Pghi");
 
         // もう一度 Ins で挿入に戻る
         run_editor(&ctx, &mut app, none, vec![key_with(Key::Insert, none)]);
         assert!(!app.overwrite_mode);
         run_editor(&ctx, &mut app, none, vec![Event::Text("Z".into())]);
-        assert_eq!(app.cur_buf().lines[1], "PZghi");
+        assert_eq!(app.cur_buf().text_lines()[1], "PZghi");
     }
 }
 
@@ -1334,13 +1391,13 @@ fn test_sakura_select_all_cut_undo_and_escape() {
         ctrl,
         vec![key_with(Key::A, ctrl), Event::Cut],
     );
-    assert_eq!(app.cur_buf().lines, vec![""]);
+    assert_eq!(app.cur_buf().text_lines(), vec![""]);
     assert_eq!(app.clipboard_out.as_deref(), Some("one\ntwo"));
 
     run_editor(&ctx, &mut app, ctrl, vec![key_with(Key::Z, ctrl)]);
-    assert_eq!(app.cur_buf().lines, vec!["one", "two"]);
+    assert_eq!(app.cur_buf().text_lines(), vec!["one", "two"]);
     run_editor(&ctx, &mut app, ctrl, vec![key_with(Key::Y, ctrl)]);
-    assert_eq!(app.cur_buf().lines, vec![""]);
+    assert_eq!(app.cur_buf().text_lines(), vec![""]);
     run_editor(&ctx, &mut app, ctrl, vec![key_with(Key::Z, ctrl)]);
 
     // 選択が無いときの Ctrl+C は現在行（改行付き）をコピー
@@ -1368,26 +1425,26 @@ fn test_sakura_line_and_word_cut_keys() {
     let cs = mods(true, true);
     // Ctrl+E: 行切り取り（改行込み）
     run_editor(&ctx, &mut app, ctrl, vec![key_with(Key::E, ctrl)]);
-    assert_eq!(app.cur_buf().lines, vec!["second", "third"]);
+    assert_eq!(app.cur_buf().text_lines(), vec!["second", "third"]);
     assert_eq!(app.clipboard_out.as_deref(), Some("first line\n"));
     // Ctrl+Shift+E: 行削除（クリップボードは変えない）
     app.clipboard_out = None;
     run_editor(&ctx, &mut app, cs, vec![key_with(Key::E, cs)]);
-    assert_eq!(app.cur_buf().lines, vec!["third"]);
+    assert_eq!(app.cur_buf().text_lines(), vec!["third"]);
     assert!(app.clipboard_out.is_none());
     // Ctrl+K: 行末まで切り取り / Ctrl+U: 行頭まで
     app.cur_buf_mut().set_cursor(0, 2);
     run_editor(&ctx, &mut app, ctrl, vec![key_with(Key::K, ctrl)]);
-    assert_eq!(app.cur_buf().lines, vec!["th"]);
+    assert_eq!(app.cur_buf().text_lines(), vec!["th"]);
     run_editor(&ctx, &mut app, ctrl, vec![key_with(Key::U, ctrl)]);
-    assert_eq!(app.cur_buf().lines, vec![""]);
+    assert_eq!(app.cur_buf().text_lines(), vec![""]);
     // Ctrl+I: 行の二重化
     app.cur_buf_mut().insert_text("dup");
     run_editor(&ctx, &mut app, ctrl, vec![key_with(Key::I, ctrl)]);
-    assert_eq!(app.cur_buf().lines, vec!["dup", "dup"]);
+    assert_eq!(app.cur_buf().text_lines(), vec!["dup", "dup"]);
     // サクラ互換の Ctrl+G は Grep を開き、VZ の1文字削除は実行しない。
     run_editor(&ctx, &mut app, ctrl, vec![key_with(Key::G, ctrl)]);
-    assert_eq!(app.cur_buf().lines, vec!["dup", "dup"]);
+    assert_eq!(app.cur_buf().text_lines(), vec!["dup", "dup"]);
     assert!(app.search.is_open());
 }
 
@@ -1411,7 +1468,7 @@ fn test_sakura_paste_markdown_toggle_and_scheme_switch() {
         ctrl,
         vec![key_with(Key::A, ctrl), Event::Paste("new".into())],
     );
-    assert_eq!(app.cur_buf().lines, vec!["new"]);
+    assert_eq!(app.cur_buf().text_lines(), vec!["new"]);
 
     // VZ 互換へ切り替えると選択は解除され、Ctrl+E は上移動に戻る
     app.cur_buf_mut().select_all();

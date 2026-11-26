@@ -20,7 +20,7 @@ impl VzEditorApp {
             self.pending_send = Some(spawn_send(target, String::new()));
             return;
         }
-        let Some(text) = prepare_text(&self.cur_buf().lines) else {
+        let Some(text) = prepare_text(self.cur_buf().text_lines()) else {
             self.status_message = format!("{} へ送る文字がありません", target.label());
             return;
         };

@@ -425,7 +425,7 @@ impl VzEditorApp {
                     // 直前の検索結果が選択されたままなら、正規表現などの検索条件を残す。
                     let is_last_hit = self.search.pattern().is_ok_and(|pattern| {
                         pattern
-                            .replacement_for(&self.cur_buf().lines[start.0], start.1, end.1, "")
+                            .replacement_for(&self.cur_buf().line(start.0), start.1, end.1, "")
                             .is_some()
                     });
                     if !is_last_hit {
@@ -438,7 +438,7 @@ impl VzEditorApp {
                 self.search.root = self.grep_current_dir().to_string_lossy().into_owned();
             }
             SearchDialog::Jump => {
-                if self.word_wrap && self.search.display_row {
+                if self.wrap_active() && self.search.display_row {
                     self.ensure_wrap_layout(self.wrap_cols);
                 }
                 let (line, col) = self.cur_buf().cursor_pos();
@@ -446,7 +446,7 @@ impl VzEditorApp {
                     .cur_slot()
                     .wrap
                     .as_ref()
-                    .filter(|_| self.word_wrap && self.search.display_row)
+                    .filter(|_| self.wrap_active() && self.search.display_row)
                     .map_or(line, |wrap| wrap.row_of(line, col));
                 self.search.line = (row + 1).to_string();
             }
@@ -455,6 +455,11 @@ impl VzEditorApp {
     }
 
     fn find_match(&mut self, pattern: &SearchPattern, up: bool) -> bool {
+        if self.cur_buf().is_huge() {
+            // 巨大ファイルは裏のスレッドで探し、見つかったら選択する
+            self.start_huge_find(pattern, up, self.search.wrap);
+            return true;
+        }
         if let Some((start, end)) = pattern.find(self.cur_buf(), up, self.search.wrap) {
             self.cur_slot_mut().markdown_view = false;
             self.cur_buf_mut().select_range(start, end);
@@ -492,8 +497,11 @@ impl VzEditorApp {
         } else {
             let pattern = self.search.pattern()?;
             let buf = self.cur_buf();
+            if buf.is_huge() {
+                return Err("巨大ファイルでは行マークは使えません".into());
+            }
             let rows: Vec<_> = buf
-                .lines
+                .text_lines()
                 .iter()
                 .enumerate()
                 .filter_map(|(i, line)| pattern.is_match(line).then_some(i))
@@ -519,6 +527,11 @@ impl VzEditorApp {
             } else {
                 None
             };
+            if self.cur_buf().is_huge() {
+                self.start_huge_replace_all(pattern, &replacement, scope)?;
+                self.search.message = self.status_message.clone();
+                return Ok(());
+            }
             let count = pattern.replace_all(self.cur_buf_mut(), scope, &replacement);
             self.status_message = format!("{count}件を置換しました");
         } else {
@@ -527,12 +540,7 @@ impl VzEditorApp {
             let output = if start.0 == end.0
                 && (selection.is_some() || self.cur_buf().anchor == Some(cursor))
             {
-                pattern.replacement_for(
-                    &self.cur_buf().lines[start.0],
-                    start.1,
-                    end.1,
-                    &replacement,
-                )
+                pattern.replacement_for(&self.cur_buf().line(start.0), start.1, end.1, &replacement)
             } else {
                 None
             };
@@ -547,6 +555,14 @@ impl VzEditorApp {
             }
             // サクラと同じく次の一致を選択する。置換後の位置の空一致は飛ばす。
             let wrap = self.search.wrap;
+            if self.cur_buf().is_huge() {
+                let cursor = self.cur_buf().cursor_pos();
+                self.cur_buf_mut().select_range(cursor, cursor);
+                self.start_huge_find(pattern, false, wrap);
+                self.status_message = "1件を置換しました（次を検索中）".into();
+                self.search.message = self.status_message.clone();
+                return Ok(());
+            }
             let buf = self.cur_buf_mut();
             let cursor = buf.cursor_pos();
             buf.select_range(cursor, cursor);
@@ -577,7 +593,7 @@ impl VzEditorApp {
             .ok()
             .and_then(|n| n.checked_sub(1))
             .ok_or("1以上の行番号を入力してください")?;
-        let (line, col) = if self.search.display_row && self.word_wrap {
+        let (line, col) = if self.search.display_row && self.wrap_active() {
             self.ensure_wrap_layout(self.wrap_cols);
             let layout = self
                 .cur_slot()
@@ -595,8 +611,11 @@ impl VzEditorApp {
                     .0,
             )
         } else {
-            if row >= self.cur_buf().lines.len() {
-                return Err(format!("行番号は1〜{}です", self.cur_buf().lines.len()));
+            if self.huge_jump_or_wait(row)? {
+                return Ok(());
+            }
+            if row >= self.cur_buf().line_count() {
+                return Err(format!("行番号は1〜{}です", self.cur_buf().line_count()));
             }
             (row, 0)
         };
@@ -605,7 +624,7 @@ impl VzEditorApp {
         Ok(())
     }
 
-    fn move_to_search_position(&mut self, line: usize, col: usize) {
+    pub(super) fn move_to_search_position(&mut self, line: usize, col: usize) {
         let slot = self.cur_slot_mut();
         slot.markdown_view = false;
         slot.buffer.clear_selection();
@@ -807,7 +826,7 @@ mod tests {
             vec![key_event(Key::N, egui::Modifiers::ALT)],
         );
         assert_eq!(app.cur_buf().selection_range(), Some(((1, 0), (1, 1))));
-        assert_eq!(app.cur_buf().lines, ["一 猫", "猫"]);
+        assert_eq!(app.cur_buf().text_lines(), ["一 猫", "猫"]);
     }
 
     #[test]
@@ -872,13 +891,13 @@ mod tests {
         assert_eq!(app.cur_buf().selection_range(), Some(((0, 0), (0, 1))));
         app.perform_search_action(&ctx, DialogAction::Replace)
             .unwrap();
-        assert_eq!(app.cur_buf().lines, ["bb a", "a"]);
+        assert_eq!(app.cur_buf().text_lines(), ["bb a", "a"]);
         assert_eq!(app.cur_buf().selection_range(), Some(((0, 3), (0, 4))));
         app.perform_search_action(&ctx, DialogAction::Replace)
             .unwrap();
         app.perform_search_action(&ctx, DialogAction::Replace)
             .unwrap();
-        assert_eq!(app.cur_buf().lines, ["bb bb", "bb"]);
+        assert_eq!(app.cur_buf().text_lines(), ["bb bb", "bb"]);
         assert!(!app.cur_buf().has_selection());
         // 空一致は置換後の位置で繰り返さない
         let mut app = app_with_text("x\ny");
@@ -890,7 +909,7 @@ mod tests {
             app.perform_search_action(&ctx, DialogAction::Replace)
                 .unwrap();
         }
-        assert_eq!(app.cur_buf().lines, ["x;", "y;"]);
+        assert_eq!(app.cur_buf().text_lines(), ["x;", "y;"]);
     }
 
     #[test]
@@ -904,7 +923,7 @@ mod tests {
         app.search.selection_only = true;
         app.perform_search_action(&ctx, DialogAction::ReplaceAll)
             .unwrap();
-        assert_eq!(app.cur_buf().lines, ["abcdefgh", "猫"]);
+        assert_eq!(app.cur_buf().text_lines(), ["abcdefgh", "猫"]);
         assert!(app.cur_buf_mut().undo());
         app.search.close();
         app.word_wrap = true;

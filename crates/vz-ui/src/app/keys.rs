@@ -72,7 +72,7 @@ impl VzEditorApp {
     pub(super) fn sakura_copy(&mut self) {
         let (text, msg) = if self.is_markdown_view() {
             (
-                self.cur_buf().lines.join(self.cur_buf().line_ending),
+                self.cur_buf().text_lines().join(self.cur_buf().line_ending),
                 "ドキュメント全体をコピーしました",
             )
         } else if let Some(text) = self.cur_buf().selected_text() {
@@ -368,7 +368,7 @@ impl VzEditorApp {
                     self.line_height
                 };
                 let slot = self.cur_slot_mut();
-                slot.scroll_y = (slot.scroll_y + dy).max(0.0);
+                slot.scroll_y = (slot.scroll_y + f64::from(dy)).max(0.0);
                 return true;
             }
             let extend = shift || self.select_mode;
@@ -448,7 +448,7 @@ impl VzEditorApp {
                     let buf = self.cur_buf();
                     let len = buf.line_char_len(cur.0);
                     // 行末にいるときは改行を対象にする
-                    let end = if cur.1 >= len && cur.0 + 1 < buf.lines.len() {
+                    let end = if cur.1 >= len && cur.0 + 1 < buf.line_count() {
                         (cur.0 + 1, 0)
                     } else {
                         (cur.0, len)

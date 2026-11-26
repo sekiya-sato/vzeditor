@@ -1,5 +1,7 @@
 //! UTF-8 テキストを対象にしたフォルダー検索。
 
+use crate::huge::search::{scan_lines, Matcher};
+use crate::huge::{DocSnapshot, HUGE_FILE_THRESHOLD};
 use crate::{buffer::read_lines, search::SearchPattern};
 use globset::{Glob, GlobSet, GlobSetBuilder};
 use std::path::{Path, PathBuf};
@@ -81,6 +83,19 @@ pub fn grep(pattern: &SearchPattern, options: &GrepOptions, cancelled: &AtomicBo
         {
             continue;
         }
+        // 巨大ファイルは全体を読み込まず、対応付けて順に調べる
+        if entry
+            .metadata()
+            .is_ok_and(|m| m.len() >= HUGE_FILE_THRESHOLD)
+        {
+            if grep_huge_file(entry.path(), pattern, options, &mut results, cancelled).is_err() {
+                results.skipped += 1;
+            }
+            if results.limited || cancelled.load(Ordering::Relaxed) {
+                return results;
+            }
+            continue;
+        }
         let Ok((lines, _)) = read_lines(entry.path()) else {
             results.skipped += 1;
             continue;
@@ -144,11 +159,99 @@ pub fn grep(pattern: &SearchPattern, options: &GrepOptions, cancelled: &AtomicBo
     results
 }
 
+/// 巨大ファイルを対応付けて先頭から調べる（行は 0 始まり、桁は文字位置）。
+fn grep_huge_file(
+    path: &Path,
+    pattern: &SearchPattern,
+    options: &GrepOptions,
+    results: &mut GrepResults,
+    cancelled: &AtomicBool,
+) -> std::io::Result<()> {
+    let file = std::fs::File::open(path)?;
+    // SAFETY: 読み取り専用で対応付け、調べ終わったら外す
+    let map = std::sync::Arc::new(unsafe { memmap2::Mmap::map(&file)? });
+    let snap = DocSnapshot::from_map(map);
+    let matcher = Matcher::new(pattern, snap.encoding).map_err(std::io::Error::other)?;
+    scan_lines(
+        &snap,
+        &matcher,
+        options.output == GrepOutput::Match && !options.first_only,
+        options.output == GrepOutput::NonMatch,
+        cancelled,
+        |hit| {
+            if results.hits.len() == RESULT_LIMIT {
+                results.limited = true;
+                return false;
+            }
+            results.hits.push(GrepHit {
+                path: path.to_path_buf(),
+                line: hit.line,
+                col: hit.col,
+                text: hit.text,
+            });
+            !options.first_only
+        },
+    );
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::search::SearchOptions;
     use std::fs;
+
+    #[test]
+    fn huge_file_path_matches_normal_path() {
+        let root = std::env::temp_dir().join(format!("vz-grep-huge-{}", std::process::id()));
+        fs::create_dir_all(&root).unwrap();
+        let path = root.join("a.txt");
+        let mut text = String::new();
+        for i in 0..30_000 {
+            match i % 1000 {
+                0 => text.push_str(&format!("{i} 猫 と 猫\r\n")),
+                1 => text.push_str("\r\n"),
+                _ => text.push_str(&format!("{i} 猫\r\n")),
+            }
+        }
+        fs::write(&path, &text).unwrap();
+        let cancel = AtomicBool::new(false);
+        for (output, query) in [
+            (GrepOutput::Line, "と"),
+            (GrepOutput::Match, "と|^1 "),
+            (GrepOutput::NonMatch, "猫"),
+        ] {
+            let options = GrepOptions {
+                root: root.clone(),
+                recursive: false,
+                include: file_patterns("*").unwrap(),
+                exclude_files: file_patterns("").unwrap(),
+                exclude_dirs: file_patterns("").unwrap(),
+                output,
+                first_only: false,
+            };
+            let pattern = SearchPattern::new(
+                query,
+                &SearchOptions {
+                    regex: true,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+            let normal = grep(&pattern, &options, &cancel);
+            let mut huge = GrepResults::default();
+            grep_huge_file(&path, &pattern, &options, &mut huge, &cancel).unwrap();
+            let key = |r: &GrepResults| -> Vec<(usize, usize, String)> {
+                r.hits
+                    .iter()
+                    .map(|h| (h.line, h.col, h.text.clone()))
+                    .collect()
+            };
+            assert!(!normal.hits.is_empty());
+            assert_eq!(key(&huge), key(&normal), "{query}");
+        }
+        fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn grep_matches_filters_and_reports_character_columns() {

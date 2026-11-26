@@ -36,7 +36,7 @@ impl VzEditorApp {
             return;
         }
         let text = if self.is_markdown_view() {
-            self.cur_buf().lines.join(self.cur_buf().line_ending)
+            self.cur_buf().text_lines().join(self.cur_buf().line_ending)
         } else {
             self.cur_buf().current_line_str().to_string()
         };
@@ -120,6 +120,12 @@ impl VzEditorApp {
                     shortcut: sc("Ctrl+Shift+S", ""),
                     action: MenuAction::SaveAs,
                     enabled: true,
+                },
+                MenuEntry::Item {
+                    label: "文字コードを指定して保存...",
+                    shortcut: "",
+                    action: MenuAction::SaveWithEncoding,
+                    enabled: in_editor,
                 },
                 MenuEntry::Item {
                     label: "現在のバッファを閉じる",
@@ -508,6 +514,7 @@ impl VzEditorApp {
             MenuAction::OpenFile => self.trigger_open(),
             MenuAction::SaveFile => self.trigger_save(),
             MenuAction::SaveAs => self.trigger_save_as(),
+            MenuAction::SaveWithEncoding => self.open_encoding_dialog(),
             MenuAction::CloseBuffer => self.close_current_buffer(),
             MenuAction::ToggleFiler => match self.mode {
                 AppMode::Filer => self.enter_editor(),

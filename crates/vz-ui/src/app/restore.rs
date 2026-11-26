@@ -40,7 +40,7 @@ impl VzEditorApp {
             // 衝突の確認待ちの無題バッファは、次の復元でも確認する
             if let Some(origin) = slot.conflict_of.clone() {
                 let temp = session::temp_path(dir, idx);
-                fs::write(&temp, slot.buffer.lines.join("\n"))?;
+                fs::write(&temp, slot.buffer.text_lines().join("\n"))?;
                 entries.push(SessionEntry {
                     kind: EntryKind::Conflict,
                     line: slot.buffer.cursor_line,
@@ -56,9 +56,11 @@ impl VzEditorApp {
             let buf = &mut slot.buffer;
             // 読み込み後に外部でファイルが変更されていたら上書きしない。
             // ファイルは外部の内容のまま開き直し、vz の編集内容は無題バッファに残して復元後に確認する
-            if buf.dirty && buf.changed_on_disk().is_some() && !buf.same_as_disk() {
+            // 巨大ファイルは読み比べず、そのまま保存する
+            if !buf.is_huge() && buf.dirty && buf.changed_on_disk().is_some() && !buf.same_as_disk()
+            {
                 let temp = session::temp_path(dir, idx);
-                fs::write(&temp, buf.lines.join("\n"))?;
+                fs::write(&temp, buf.text_lines().join("\n"))?;
                 entries.push(SessionEntry {
                     kind: EntryKind::File,
                     line: buf.cursor_line,
@@ -97,9 +99,10 @@ impl VzEditorApp {
                 temp: None,
                 path: buf.file_path.clone(),
             };
-            if !saved || buf.file_path.is_none() {
+            // 巨大ファイルは一時保存できないので、保存できなかったときはファイルを開き直すだけにする
+            if (!saved || buf.file_path.is_none()) && !buf.is_huge() {
                 let temp = session::temp_path(dir, idx);
-                fs::write(&temp, buf.lines.join("\n"))?;
+                fs::write(&temp, buf.text_lines().join("\n"))?;
                 entry.kind = EntryKind::Unsaved;
                 entry.temp = Some(temp);
             }
@@ -195,8 +198,9 @@ impl VzEditorApp {
                     let temp = e.temp.clone().unwrap_or_default();
                     match fs::read_to_string(&temp) {
                         Ok(text) => {
-                            let mut buf = TextBuffer::new();
-                            buf.lines = text.split('\n').map(String::from).collect();
+                            let mut buf = TextBuffer::from_lines(
+                                text.split('\n').map(String::from).collect(),
+                            );
                             buf.file_path = e.path.clone();
                             buf.line_ending = if e.crlf { "\r\n" } else { "\n" };
                             buf.dirty = true;
@@ -213,8 +217,9 @@ impl VzEditorApp {
                     let origin = e.path.clone().unwrap_or_default();
                     match fs::read_to_string(&temp) {
                         Ok(text) => {
-                            let mut buf = TextBuffer::new();
-                            buf.lines = text.split('\n').map(String::from).collect();
+                            let mut buf = TextBuffer::from_lines(
+                                text.split('\n').map(String::from).collect(),
+                            );
                             buf.line_ending = if e.crlf { "\r\n" } else { "\n" };
                             buf.dirty = true;
                             buf.revision = 1;
@@ -281,6 +286,10 @@ impl VzEditorApp {
     /// 外部で変更された（まだ尋ねていない）ファイルのバッファ。
     pub(super) fn find_externally_changed(&self) -> Option<(usize, FileStamp)> {
         self.buffers.iter().enumerate().find_map(|(idx, slot)| {
+            // 巨大ファイルの保存中・置換中は、自分の書き込みを外部の変更と取り違えないよう調べない
+            if slot.huge_save.is_some() || slot.huge_replace.is_some() {
+                return None;
+            }
             let stamp = slot.buffer.changed_on_disk()?;
             (slot.ignored_stamp != Some(stamp)).then_some((idx, stamp))
         })
@@ -358,7 +367,7 @@ impl VzEditorApp {
         let disk = vz_core::buffer::read_lines(&path)
             .map(|(l, _)| l)
             .unwrap_or_default();
-        let diff = diff::unified(&disk, &self.buffers[u].buffer.lines, 3);
+        let diff = diff::unified(&disk, self.buffers[u].buffer.text_lines(), 3);
         if diff.is_empty() {
             // 内容が同じなら確認は要らない
             self.force_close_buffer(u);
@@ -399,7 +408,7 @@ impl VzEditorApp {
                     format!("{name}: vz の編集内容は [無題] バッファに残しています（次回の復元でも確認します）");
             }
             Some(true) => {
-                let lines = self.buffers[u].buffer.lines.clone();
+                let lines = self.buffers[u].buffer.text_lines().to_vec();
                 let f = match self.find_buffer_by_path(path) {
                     Some(f) => f,
                     None => {

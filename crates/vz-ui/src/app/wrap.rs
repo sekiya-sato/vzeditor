@@ -48,7 +48,7 @@ impl WrapLayout {
     }
 
     pub(super) fn is_valid_for(&self, buf: &TextBuffer, cols: usize) -> bool {
-        self.rev == buf.revision && self.cols == cols && self.breaks.len() == buf.lines.len()
+        self.rev == buf.revision && self.cols == cols && self.breaks.len() == buf.text_lines().len()
     }
 
     pub(super) fn total_rows(&self) -> usize {
@@ -117,6 +117,11 @@ impl VzEditorApp {
         self.save_settings();
     }
 
+    /// 折り返し表示が効いているか（巨大ファイルは折り返さない）。
+    pub(super) fn wrap_active(&self) -> bool {
+        self.word_wrap && !self.cur_buf().is_huge()
+    }
+
     /// 現在のバッファの折り返し行割り（幅 `cols`）を、必要なら作り直して返す。
     pub(super) fn ensure_wrap_layout(&mut self, cols: usize) {
         let slot = &mut self.buffers[self.active_buf];
@@ -126,7 +131,7 @@ impl VzEditorApp {
             .is_some_and(|w| w.is_valid_for(&slot.buffer, cols))
         {
             slot.wrap = Some(WrapLayout::build(
-                &slot.buffer.lines,
+                slot.buffer.text_lines(),
                 cols,
                 slot.buffer.revision,
             ));
@@ -136,7 +141,7 @@ impl VzEditorApp {
     /// 折り返し表示のとき、カーソルを表示行単位で `delta` 行動かす（左端からの見た目の位置を保つ）。
     /// 折り返し表示でなければ何もせず false。
     pub(super) fn move_cursor_row(&mut self, delta: isize) -> bool {
-        if !self.word_wrap || self.is_markdown_view() {
+        if !self.wrap_active() || self.is_markdown_view() {
             return false;
         }
         let cols = self.wrap_cols;
@@ -148,7 +153,7 @@ impl VzEditorApp {
                 return false;
             };
             let buf = &slot.buffer;
-            let line_str = &buf.lines[line];
+            let line_str = buf.line(line);
             let seg = layout.seg_of(line, col);
             let (s, _) = layout.seg_range(line, seg, buf.line_char_len(line));
             let x: usize = line_str
@@ -171,7 +176,7 @@ impl VzEditorApp {
             };
             let mut acc = 0usize;
             let mut tcol = ts;
-            for c in buf.lines[tl].chars().skip(ts).take(limit - ts) {
+            for c in buf.line(tl).chars().skip(ts).take(limit - ts) {
                 let w = vz_core::buffer::char_display_width(c);
                 if acc + w > x {
                     break;

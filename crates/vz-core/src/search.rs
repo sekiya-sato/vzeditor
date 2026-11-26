@@ -16,6 +16,7 @@ pub struct SearchOptions {
 pub struct SearchPattern {
     regex: Regex,
     expand_captures: bool,
+    case_insensitive: bool,
 }
 
 impl SearchPattern {
@@ -38,7 +39,22 @@ impl SearchPattern {
         Ok(Self {
             regex,
             expand_captures: options.regex,
+            case_insensitive: !options.case_sensitive,
         })
+    }
+
+    /// 組み立てた正規表現（巨大ファイルの検索でバイト列用の正規表現を作るのに使う）。
+    pub fn regex_source(&self) -> &str {
+        self.regex.as_str()
+    }
+
+    pub fn case_insensitive(&self) -> bool {
+        self.case_insensitive
+    }
+
+    /// 置換文字列の $1 などを展開するか（正規表現のとき）。
+    pub fn expands_captures(&self) -> bool {
+        self.expand_captures
     }
 
     pub fn matches<'a>(&self, line: &'a str) -> regex::Matches<'_, 'a> {
@@ -54,9 +70,10 @@ impl SearchPattern {
         let (start, end) = buf.selection_range().unwrap_or((cursor, cursor));
         let origin = if up { start } else { end };
         let skip_origin = start == end && buf.anchor == Some(origin);
-        let boundary = char_to_byte_idx(&buf.lines[origin.0], origin.1);
+        let boundary = char_to_byte_idx(&buf.line(origin.0), origin.1);
         let find_line = |line: usize, wrapped: bool| {
-            let text = &buf.lines[line];
+            let text = buf.line(line);
+            let text = text.as_ref();
             let candidates = self.regex.find_iter(text).filter(|hit| {
                 if line != origin.0 || wrapped {
                     return true;
@@ -80,7 +97,7 @@ impl SearchPattern {
                 (line, text[..hit.end()].chars().count()),
             ))
         };
-        let len = buf.lines.len();
+        let len = buf.line_count();
         if up {
             (0..=origin.0)
                 .rev()
@@ -134,6 +151,10 @@ impl SearchPattern {
         } else {
             Cow::Borrowed(replacement)
         };
+        if buf.is_huge() {
+            // 巨大ファイルは別の経路（作業ファイルへの書き出し）で置換する
+            return 0;
+        }
         let last = buf.lines.len() - 1;
         let (start, end) = scope.unwrap_or(((0, 0), (last, buf.line_char_len(last))));
         let mut count = 0;

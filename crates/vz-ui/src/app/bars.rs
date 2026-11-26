@@ -160,16 +160,20 @@ impl VzEditorApp {
                         // Right-aligned encoding + line/column info + font size controls
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             let buf = self.cur_buf();
-                            let pos_text = if self.cur_slot().markdown_view {
-                                format!("全{}行 [VIEW]", buf.lines.len())
+                            let mut pos_text = if self.cur_slot().markdown_view {
+                                format!("全{}行 [VIEW]", buf.line_count())
                             } else {
                                 format!(
                                     "Ln {:>4}/{:<4}  Col {:>3}",
                                     buf.display_line_num(),
-                                    buf.lines.len(),
+                                    buf.line_count(),
                                     buf.display_col_num()
                                 )
                             };
+                            // 巨大ファイル: [巨大] と索引の作成中・保存中の進み具合
+                            if let Some(state) = self.huge_status() {
+                                pos_text = format!("{state}  {pos_text}");
+                            }
                             ui.label(
                                 egui::RichText::new(pos_text)
                                     .font(FontId::monospace(13.0))
@@ -189,11 +193,19 @@ impl VzEditorApp {
                             } else {
                                 "LF"
                             };
-                            ui.label(
-                                egui::RichText::new(format!("{} {}", buf.encoding, eol))
-                                    .font(FontId::monospace(13.0))
-                                    .color(TEXT_WHITE),
-                            );
+                            let enc_resp = ui
+                                .add(
+                                    egui::Label::new(
+                                        egui::RichText::new(format!("{} {}", buf.encoding, eol))
+                                            .font(FontId::monospace(13.0))
+                                            .color(TEXT_WHITE),
+                                    )
+                                    .sense(Sense::click()),
+                                )
+                                .on_hover_text("クリックで文字コードを指定して保存");
+                            if enc_resp.clicked() {
+                                win_cmd = Some(MenuAction::SaveWithEncoding);
+                            }
 
                             ui.add_space(6.0);
                             ui.label(

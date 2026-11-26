@@ -48,6 +48,8 @@ impl VzEditorApp {
                         ("Alt+C → N / Alt+C → M", "Claude Code / Codex で新規セッション (Ctrl+N)"),
                         ("Alt+C → P", "GitHub Desktop のカレントリポジトリを Push"),
                         ("Alt+K / Alt+B", "ターミナル / ブラウザ (編集中の HTML を表示) の切替"),
+                        ("ファイル→文字コードを指定して保存", "UTF-8 / UTF-8 BOM / Shift_JIS で保存"),
+                        ("128MB 以上のファイル", "巨大ファイルモード (折り返し・Markdown ビュー・行マークなし)"),
                         ("ツール→キー割り当て", "VZ 互換へ切替"),
                     ],
                     AppMode::Editor => &[
@@ -77,6 +79,8 @@ impl VzEditorApp {
                         ("Alt+K / Alt+B", "ターミナル / ブラウザ (編集中の HTML を表示) の切替"),
                         ("Alt+↑ / Alt+↓ / Alt+0", "背景を濃く / 薄く / 透過解除"),
                         ("Alt+Shift+「+」「-」「0」", "文字を濃く / 薄く / 透過解除"),
+                        ("ファイル→文字コードを指定して保存", "UTF-8 / UTF-8 BOM / Shift_JIS で保存"),
+                        ("128MB 以上のファイル", "巨大ファイルモード (折り返し・Markdown ビュー・行マークなし)"),
                     ],
                     AppMode::Filer => &[
                         ("Ctrl+E / X (↑ / ↓)", "ファイルカーソル移動"),
@@ -643,6 +647,67 @@ impl VzEditorApp {
                 }
             }
 
+            FilerModal::ChooseEncoding { selected, message } => {
+                let mut do_save = false;
+                let mut do_cancel = false;
+                modal_window(ctx, "文字コードを指定して保存", TEXT_CYAN).show(ctx, |ui| {
+                    ui.set_min_width(380.0);
+                    ui.label(
+                        egui::RichText::new(self.cur_buf().display_name())
+                            .font(FontId::monospace(12.5))
+                            .color(TEXT_DIM_CYAN),
+                    );
+                    ui.add_space(4.0);
+                    for enc in TextEncoding::ALL {
+                        ui.radio_value(
+                            selected,
+                            enc,
+                            egui::RichText::new(enc.label()).font(FontId::monospace(14.0)),
+                        );
+                    }
+                    // ↑↓ で選ぶ
+                    let pos = TextEncoding::ALL
+                        .iter()
+                        .position(|e| e == selected)
+                        .unwrap_or(0);
+                    let n = TextEncoding::ALL.len();
+                    if ui.input(|i| i.key_pressed(Key::ArrowDown)) {
+                        *selected = TextEncoding::ALL[(pos + 1) % n];
+                    }
+                    if ui.input(|i| i.key_pressed(Key::ArrowUp)) {
+                        *selected = TextEncoding::ALL[(pos + n - 1) % n];
+                    }
+                    if !message.is_empty() {
+                        ui.add_space(4.0);
+                        ui.label(
+                            egui::RichText::new(message.as_str())
+                                .font(FontId::monospace(12.5))
+                                .color(TEXT_AMBER),
+                        );
+                    }
+                    ui.add_space(8.0);
+                    ui.horizontal(|ui| {
+                        if ui.button("保存 (Enter)").clicked()
+                            || ui.input(|i| i.key_pressed(Key::Enter))
+                        {
+                            do_save = true;
+                        }
+                        if ui.button("キャンセル (ESC)").clicked()
+                            || ui.input(|i| i.key_pressed(Key::Escape))
+                        {
+                            do_cancel = true;
+                        }
+                    });
+                });
+                if do_save {
+                    match self.save_with_encoding(*selected) {
+                        Ok(()) => keep_modal = false,
+                        Err(e) => *message = e,
+                    }
+                } else if do_cancel {
+                    keep_modal = false;
+                }
+            }
             FilerModal::ConfirmQuit => {
                 let mut do_save_quit = false;
                 let mut do_quit = false;
