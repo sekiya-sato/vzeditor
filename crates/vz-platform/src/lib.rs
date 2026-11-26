@@ -7,3 +7,4 @@ pub mod keyboard;
 pub mod monitor;
 pub mod send_to_app;
 pub mod shell;
+pub mod virtual_desktop;

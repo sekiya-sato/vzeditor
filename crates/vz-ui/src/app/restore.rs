@@ -87,6 +87,8 @@ impl VzEditorApp {
             if let Some(dir) = session::session_dir() {
                 self.restore_saved_state_from(&session::saved_dir(&dir));
                 self.sync_window_title(ctx);
+                // 位置の合わせ直しは次のフレームで行う
+                ctx.request_repaint();
             }
             return;
         }
@@ -111,6 +113,7 @@ impl VzEditorApp {
             return;
         };
         let failed = self.restore_entries(&state.entries);
+        self.apply_session_window(state.window.clone());
         if let Err(e) = session::finish_saved_state(saved, &state, &failed) {
             self.status_message = format!("記録の後始末に失敗しました: {e}");
         }
@@ -309,14 +312,16 @@ impl VzEditorApp {
             false,
             Some(self.filer.right.current_dir.clone()),
         ));
-        session::append_session(dir, &entries)
+        session::append_session(dir, &entries, &self.capture_session_window())
     }
 
     /// `dir/session.ini` のバッファを開き直す。読み終えた一時保存ファイルは削除する。
     pub(super) fn restore_session_from(&mut self, dir: &Path) {
-        let entries = session::take_session(dir);
+        let (entries, window) = session::take_session(dir);
         // 戻せなかった巨大ファイルの編集は、一時保存をセッションのフォルダに残す
         self.restore_entries(&entries);
+        // 複数の vz の記録は 1 つのウィンドウにまとめるので、先頭の vz の位置とデスクトップを使う
+        self.apply_session_window(window);
     }
 
     /// 記録した項目を開き直す。戻せなかった項目（巨大ファイルの未保存の編集）を返す。

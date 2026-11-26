@@ -52,18 +52,101 @@ impl VzEditorApp {
             return;
         };
         self.pending_window_restore = None;
-        if window_title_bar_visible(&g) {
+        let ppp = native_ppp * ctx.zoom_factor();
+        let size = if window_title_bar_visible(&g) {
             // 作成時は主モニターの拡大率で換算されるので、物理ピクセルで合わせ直す
-            let ppp = native_ppp * ctx.zoom_factor();
             let target = egui::pos2(g.x as f32 / ppp, g.y as f32 / ppp);
             if (outer.min - target).length() > 0.5 {
                 ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(target));
             }
-        } else if let Some(cmd) = egui::ViewportCommand::center_on_screen(ctx) {
-            ctx.send_viewport_cmd(cmd);
+            // 記録のモニターでの物理サイズ。移動（拡大率の変更）の後に今の拡大率で換算されるよう、位置の後に送る
+            egui::vec2(g.width * g.scale / ppp, g.height * g.scale / ppp)
+        } else {
+            if let Some(cmd) = egui::ViewportCommand::center_on_screen(ctx) {
+                ctx.send_viewport_cmd(cmd);
+            }
+            egui::vec2(g.width, g.height)
+        };
+        // 状態の復元では起動時（settings.ini）と違うサイズのことがある
+        let (inner, maximized) = ctx.input(|i| {
+            (
+                i.viewport().inner_rect,
+                i.viewport().maximized == Some(true),
+            )
+        });
+        if !maximized && inner.is_some_and(|r| (r.size() - size).length() > 0.5) {
+            ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(size));
         }
-        if g.maximized {
-            ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(true));
+        if g.maximized != maximized {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(g.maximized));
+        }
+    }
+
+    /// 状態の記録に残すウィンドウ: 物理モニター（位置・サイズ・モニター名）と、取得できれば仮想デスクトップ。
+    /// 仮想デスクトップを取得できなければ、その行を書かないだけにする。
+    pub(super) fn capture_session_window(&self) -> SessionWindow {
+        let Some(g) = self.window_geometry else {
+            return SessionWindow::default();
+        };
+        let rect = [
+            g.x,
+            g.y,
+            g.x + (g.width * g.scale).round() as i32,
+            g.y + (g.height * g.scale).round() as i32,
+        ];
+        let desktop = self
+            .native_window
+            .as_ref()
+            .and_then(|w| VirtualDesktopManager::new().desktop_of(w))
+            .map(|d| DesktopState {
+                backend: d.backend,
+                id: d.id,
+                name: d.name,
+            });
+        SessionWindow {
+            monitor: Some(session::MonitorState {
+                geometry: g,
+                name: monitor::monitor_name(rect),
+            }),
+            desktop,
+        }
+    }
+
+    /// 復元した記録のウィンドウの位置と仮想デスクトップを、次のフレーム以降で合わせる。
+    /// 位置の記録が無い（古い記録）ときは何もしない（settings.ini の位置・今のデスクトップのまま）。
+    pub(super) fn apply_session_window(&mut self, window: SessionWindow) {
+        let Some(m) = window.monitor else {
+            return;
+        };
+        self.window_geometry = Some(m.geometry);
+        self.pending_window_restore = Some(m.geometry);
+        self.pending_desktop_restore = window.desktop;
+    }
+
+    /// 記録した仮想デスクトップへ移す。ウィンドウが表示された後（2 フレーム目以降）に 1 回だけ試し、
+    /// 移せなければ（取得できない環境・デスクトップが無い・失敗）今のデスクトップのままにする。
+    pub(super) fn restore_desktop(&mut self, ctx: &egui::Context) {
+        if self.pending_desktop_restore.is_none() {
+            return;
+        }
+        // eframe は最初の描画の後でウィンドウを表示する。入力が無くても次のフレームを描く
+        if ctx.cumulative_pass_nr() < 2 {
+            ctx.request_repaint();
+            return;
+        }
+        let (Some(saved), Some(window)) = (self.pending_desktop_restore.take(), self.native_window)
+        else {
+            return;
+        };
+        let target = VirtualDesktop {
+            backend: saved.backend,
+            id: saved.id,
+            name: saved.name,
+        };
+        if VirtualDesktopManager::new().restore(&window, &target) {
+            let name = target.name.as_deref().unwrap_or("記録したデスクトップ");
+            self.status_message
+                .push_str(&format!("（仮想デスクトップ「{name}」へ移動しました）"));
         }
     }
 

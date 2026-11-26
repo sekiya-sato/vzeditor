@@ -51,6 +51,8 @@ pub(super) fn make_test_app() -> VzEditorApp {
         wrap_cols: 80,
         window_geometry: None,
         pending_window_restore: None,
+        native_window: None,
+        pending_desktop_restore: None,
         terminal: None,
         term_selection: None,
         pending_terminal_cwd: None,
@@ -2200,7 +2202,7 @@ fn test_session_restores_browser_and_terminal() {
         tool_session_entry(EntryKind::Terminal, true, Some(work.clone())),
         tool_session_entry(EntryKind::Browser, false, None),
     ];
-    session::append_session(&session_dir, &entries).unwrap();
+    session::append_session(&session_dir, &entries, &SessionWindow::default()).unwrap();
     let mut app3 = make_test_app();
     app3.restore_session_from(&session_dir);
     assert_eq!(app3.mode, AppMode::Terminal);
@@ -2212,6 +2214,7 @@ fn test_session_restores_browser_and_terminal() {
     session::append_session(
         &session_dir,
         &[tool_session_entry(EntryKind::Terminal, true, Some(gone))],
+        &SessionWindow::default(),
     )
     .unwrap();
     let mut app4 = make_test_app();
@@ -2342,6 +2345,15 @@ fn test_save_state_keeps_files_and_restores_one_by_one() {
     b.insert_text(" new");
     app.buffers = vec![BufferSlot::new(b)];
     app.active_buf = 0;
+    let geometry = WindowGeometry {
+        x: 2000,
+        y: 50,
+        width: 900.0,
+        height: 600.0,
+        scale: 1.25,
+        maximized: false,
+    };
+    app.window_geometry = Some(geometry);
     app.save_state_to(&saved).unwrap();
     // ファイルは上書きしない
     assert_eq!(fs::read(&path).unwrap(), b"\xEF\xBB\xBFold");
@@ -2365,6 +2377,10 @@ fn test_save_state_keeps_files_and_restores_one_by_one() {
     // 読み込み時の状態も戻るので、閉じている間の外部変更に気付ける
     assert!(r.disk_stamp.is_some());
     assert!(r.changed_on_disk().is_none());
+    // 記録した vz の位置へ合わせる。テストのアプリはウィンドウが無く、仮想デスクトップは取得できないので戻さない
+    assert_eq!(restored.pending_window_restore, Some(geometry));
+    assert_eq!(restored.window_geometry, Some(geometry));
+    assert_eq!(restored.pending_desktop_restore, None);
 
     // 次の起動では 2 つ目の記録が戻り、その後は何も残らない
     let mut second = make_test_app();
@@ -2373,6 +2389,8 @@ fn test_save_state_keeps_files_and_restores_one_by_one() {
         .buffers
         .iter()
         .any(|slot| slot.buffer.text_lines() == vec!["無題"]));
+    // 位置の無い vz の記録では、起動時の位置のまま
+    assert_eq!(second.pending_window_restore, None);
     assert_eq!(fs::read_dir(&saved).unwrap().count(), 0);
     let mut third = make_test_app();
     let before = third.buffers.len();

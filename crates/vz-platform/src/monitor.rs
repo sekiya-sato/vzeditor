@@ -45,6 +45,48 @@ pub fn title_bar_visible(_bar: [i32; 4]) -> bool {
     true
 }
 
+/// Windows: `rect`（物理ピクセル）が一番重なるモニターの名前（`\\.\DISPLAY1` など）。
+/// 状態の記録に残すだけで、位置の補正には使わない（番号は抜き差しで変わる）。
+#[cfg(windows)]
+pub fn monitor_name(rect: [i32; 4]) -> Option<String> {
+    use windows_sys::Win32::Foundation::RECT;
+    use windows_sys::Win32::Graphics::Gdi::{
+        GetMonitorInfoW, MonitorFromRect, MONITORINFO, MONITORINFOEXW, MONITOR_DEFAULTTONULL,
+    };
+    let rect = RECT {
+        left: rect[0],
+        top: rect[1],
+        right: rect[2],
+        bottom: rect[3],
+    };
+    // SAFETY: RECT と MONITORINFOEXW は呼び出しの間だけ有効なローカル変数を渡す。
+    // MONITORINFOEXW は先頭が MONITORINFO で、cbSize で拡張版と伝える
+    unsafe {
+        let monitor = MonitorFromRect(&rect, MONITOR_DEFAULTTONULL);
+        if monitor.is_null() {
+            return None;
+        }
+        let mut info: MONITORINFOEXW = std::mem::zeroed();
+        info.monitorInfo.cbSize = std::mem::size_of::<MONITORINFOEXW>() as u32;
+        if GetMonitorInfoW(
+            monitor,
+            &mut info as *mut MONITORINFOEXW as *mut MONITORINFO,
+        ) == 0
+        {
+            return None;
+        }
+        let len = info.szDevice.iter().position(|c| *c == 0).unwrap_or(32);
+        let name = String::from_utf16_lossy(&info.szDevice[..len]);
+        (!name.is_empty()).then_some(name)
+    }
+}
+
+/// 他 OS はモニター名を記録しない。
+#[cfg(not(windows))]
+pub fn monitor_name(_rect: [i32; 4]) -> Option<String> {
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

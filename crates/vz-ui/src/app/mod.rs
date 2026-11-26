@@ -36,7 +36,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::Receiver;
 use std::sync::Arc;
 use theme::*;
-use vz_config::session::{self, EntryKind, SessionEntry};
+use vz_config::session::{self, DesktopState, EntryKind, SessionEntry, SessionWindow};
 use vz_config::settings::{KeyScheme, Settings, WindowGeometry};
 use vz_core::buffer::{char_to_byte_idx, expand_tabs_for_display, FileStamp, TextBuffer, TextPos};
 use vz_core::diff::{self, DiffKind};
@@ -48,6 +48,7 @@ use vz_core::filer::{
 use vz_core::huge::HugeDoc;
 use vz_platform::dialog::{spawn_open_dialog, spawn_save_dialog, DialogResult};
 use vz_platform::send_to_app::{prepare_text, spawn_send, SendResult, SendTarget};
+use vz_platform::virtual_desktop::{NativeWindow, VirtualDesktop, VirtualDesktopManager};
 use vz_platform::{clipboard, monitor};
 use wrap::WrapLayout;
 
@@ -487,6 +488,10 @@ pub struct VzEditorApp {
     window_geometry: Option<WindowGeometry>,
     /// 起動直後に合わせる前回の位置（合わせ終わるまで window_geometry を更新しない）
     pending_window_restore: Option<WindowGeometry>,
+    /// OS のウィンドウ（仮想デスクトップの取得・移動に使う。扱えない環境では None）
+    native_window: Option<NativeWindow>,
+    /// 状態の復元で戻す仮想デスクトップ（ウィンドウの表示後に 1 回だけ試す）
+    pending_desktop_restore: Option<DesktopState>,
 
     /// 組み込みターミナル（Alt+K で初めて開いたときに起動する）
     terminal: Option<vz_terminal::Terminal>,
@@ -608,6 +613,8 @@ impl VzEditorApp {
             wrap_cols: 80,
             window_geometry: settings.window,
             pending_window_restore: settings.window,
+            native_window: None,
+            pending_desktop_restore: None,
             terminal: None,
             term_selection: None,
             pending_terminal_cwd: None,
@@ -850,7 +857,11 @@ impl eframe::App for VzEditorApp {
     fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         window_style::set_opacity_percent(self.bg_opacity);
         window_style::set_text_opacity_percent(self.text_opacity);
+        if self.native_window.is_none() {
+            self.native_window = NativeWindow::from_handle(frame);
+        }
         self.restore_window_position(ctx);
+        self.restore_desktop(ctx);
         self.track_window_geometry(ctx);
         self.poll_shift_restore(ctx);
         self.handle_close_request(ctx);

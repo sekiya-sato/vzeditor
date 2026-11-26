@@ -23,6 +23,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use crate::settings::WindowGeometry;
+
 const SESSION_FILE: &str = "session.ini";
 const REQUEST_FILE: &str = "quit-request";
 
@@ -194,6 +196,117 @@ pub fn parse(text: &str) -> Vec<SessionEntry> {
     entries
 }
 
+/// ウィンドウの位置（物理モニター）。`session.ini` の `monitor` 行。
+#[derive(Debug, Clone, PartialEq)]
+pub struct MonitorState {
+    /// `settings.ini` の `window_*` と同じ意味
+    pub geometry: WindowGeometry,
+    /// モニターの名前（Windows の `\\.\DISPLAY1` など。記録に残すだけ）
+    pub name: Option<String>,
+}
+
+/// 仮想デスクトップ。`session.ini` の `desktop` 行（取得できたときだけ書く）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DesktopState {
+    /// 取得した仕組み（`windows` / `x11`）
+    pub backend: String,
+    /// Windows: GUID、X11: デスクトップ番号
+    pub id: String,
+    pub name: Option<String>,
+}
+
+/// 1 つの vz のウィンドウの状態。物理モニターと仮想デスクトップを別々に持つ。
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct SessionWindow {
+    pub monitor: Option<MonitorState>,
+    /// `monitor` が無いときは書かない・使わない
+    pub desktop: Option<DesktopState>,
+}
+
+/// 名前の欄: 行が壊れないようタブ・改行を空白にする。
+fn name_field(name: Option<&str>) -> String {
+    name.unwrap_or_default().replace(['\t', '\r', '\n'], " ")
+}
+
+fn opt_name(s: &str) -> Option<String> {
+    let s = s.trim();
+    (!s.is_empty()).then(|| s.to_string())
+}
+
+/// `monitor` 行と、その直後の `desktop` 行（位置が無ければ何も書かない）。
+pub fn serialize_window(w: &SessionWindow) -> String {
+    let Some(m) = &w.monitor else {
+        return String::new();
+    };
+    let g = &m.geometry;
+    let mut out = format!(
+        "monitor\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
+        g.x,
+        g.y,
+        g.width,
+        g.height,
+        g.scale,
+        flag(g.maximized),
+        name_field(m.name.as_deref())
+    );
+    if let Some(d) = &w.desktop {
+        out.push_str(&format!(
+            "desktop\t{}\t{}\t{}\n",
+            name_field(Some(&d.backend)),
+            name_field(Some(&d.id)),
+            name_field(d.name.as_deref())
+        ));
+    }
+    out
+}
+
+fn parse_monitor(line: &str) -> Option<MonitorState> {
+    let f: Vec<&str> = line.splitn(8, '\t').collect();
+    if f.len() != 8 || f[0] != "monitor" {
+        return None;
+    }
+    let positive = |s: &str| s.parse::<f32>().ok().filter(|v| v.is_finite() && *v > 0.0);
+    Some(MonitorState {
+        geometry: WindowGeometry {
+            x: f[1].parse().ok()?,
+            y: f[2].parse().ok()?,
+            width: positive(f[3])?,
+            height: positive(f[4])?,
+            scale: positive(f[5])?,
+            maximized: f[6] == "1",
+        },
+        name: opt_name(f[7]),
+    })
+}
+
+fn parse_desktop(line: &str) -> Option<DesktopState> {
+    let f: Vec<&str> = line.splitn(4, '\t').collect();
+    if f.len() != 4 || f[0] != "desktop" {
+        return None;
+    }
+    Some(DesktopState {
+        backend: opt_name(f[1])?,
+        id: opt_name(f[2])?,
+        name: opt_name(f[3]),
+    })
+}
+
+/// 最初の `monitor` 行と、その直後にある `desktop` 行を読む（複数の vz の追記で、
+/// 別の vz の位置とデスクトップを組み合わせないため）。
+pub fn parse_window(text: &str) -> SessionWindow {
+    let mut lines = text.lines();
+    while let Some(line) = lines.next() {
+        if let Some(monitor) = parse_monitor(line) {
+            let desktop = lines.next().and_then(parse_desktop);
+            return SessionWindow {
+                monitor: Some(monitor),
+                desktop,
+            };
+        }
+    }
+    SessionWindow::default()
+}
+
 /// 一時保存ファイルのパス（プロセス ID と連番で重複させない）。
 pub fn temp_path(dir: &Path, index: usize) -> PathBuf {
     dir.join(format!("unsaved-{}-{index}.txt", std::process::id()))
@@ -205,24 +318,32 @@ pub fn huge_edits_path(dir: &Path, index: usize) -> PathBuf {
 }
 
 /// 状態を追記する（複数の vz が順に終了した場合も、すべてのバッファを残す）。
-pub fn append_session(dir: &Path, entries: &[SessionEntry]) -> io::Result<()> {
+/// ウィンドウの行は項目の前に書く（1 回の書き込みで、ほかの vz の行と混ざらない）。
+pub fn append_session(
+    dir: &Path,
+    entries: &[SessionEntry],
+    window: &SessionWindow,
+) -> io::Result<()> {
     use std::io::Write;
     fs::create_dir_all(dir)?;
     let mut f = fs::OpenOptions::new()
         .create(true)
         .append(true)
         .open(dir.join(SESSION_FILE))?;
-    f.write_all(serialize(entries).as_bytes())
+    let mut text = serialize_window(window);
+    text.push_str(&serialize(entries));
+    f.write_all(text.as_bytes())
 }
 
 /// 保存された状態を読み、`session.ini` を削除する（一時保存ファイルは呼び出し側が読んでから消す）。
-pub fn take_session(dir: &Path) -> Vec<SessionEntry> {
+/// ウィンドウは先頭の vz のもの。
+pub fn take_session(dir: &Path) -> (Vec<SessionEntry>, SessionWindow) {
     let path = dir.join(SESSION_FILE);
     let Ok(text) = fs::read_to_string(&path) else {
-        return Vec::new();
+        return (Vec::new(), SessionWindow::default());
     };
     let _ = fs::remove_file(&path);
-    parse_in(dir, &text)
+    (parse_in(dir, &text), parse_window(&text))
 }
 
 /// `dir/session.ini` の内容を読む。一時保存のファイル名は `dir` からのパスにする（絶対パスはそのまま）。
@@ -255,6 +376,8 @@ pub struct SavedState {
     /// 記録した vz のプロセス ID（戻せなかった分の再公開に使う）
     pub pid: u32,
     pub entries: Vec<SessionEntry>,
+    /// 記録したウィンドウの位置と仮想デスクトップ
+    pub window: SessionWindow,
 }
 
 /// 公開済みの記録の名前（`<pid>` / `<pid>-<k>`）を (pid, k) にする。
@@ -334,13 +457,20 @@ pub fn take_saved_state(saved: &Path) -> Option<SavedState> {
         }
         let text = fs::read_to_string(dir.join(SESSION_FILE)).unwrap_or_default();
         let entries = parse_in(&dir, &text);
-        return Some(SavedState { dir, pid, entries });
+        let window = parse_window(&text);
+        return Some(SavedState {
+            dir,
+            pid,
+            entries,
+            window,
+        });
     }
     None
 }
 
 /// 復元を終える。`failed`（戻せなかった項目）が無ければフォルダを消し、
 /// あればその項目だけを `session.ini` に書き直して再公開する（次の Shift 起動で試し直す）。
+/// ウィンドウの行は書かない（試し直す vz の位置を動かさないため）。
 pub fn finish_saved_state(
     saved: &Path,
     state: &SavedState,
@@ -591,6 +721,74 @@ mod tests {
         assert_eq!(parse_saved_name("abc"), None);
     }
 
+    fn sample_window() -> SessionWindow {
+        SessionWindow {
+            monitor: Some(MonitorState {
+                geometry: WindowGeometry {
+                    x: -1920,
+                    y: 40,
+                    width: 1024.0,
+                    height: 680.5,
+                    scale: 1.5,
+                    maximized: true,
+                },
+                name: Some(r"\\.\DISPLAY2".into()),
+            }),
+            desktop: Some(DesktopState {
+                backend: "windows".into(),
+                id: "{AA509086-5CA9-4C25-8F95-589D3C07B48A}".into(),
+                name: Some("仕事\tA".into()),
+            }),
+        }
+    }
+
+    /// 読み直した `sample_window`（名前のタブは空白になる）
+    fn sample_window_read() -> SessionWindow {
+        let mut w = sample_window();
+        if let Some(d) = w.desktop.as_mut() {
+            d.name = Some("仕事 A".into());
+        }
+        w
+    }
+
+    #[test]
+    fn test_window_roundtrip_and_compat() {
+        let w = sample_window();
+        let text = serialize_window(&w);
+        assert_eq!(parse_window(&text), sample_window_read());
+        // 項目と混ぜても parse は項目だけを返す（古い版も monitor / desktop 行を読み飛ばす）
+        let entry = SessionEntry {
+            kind: EntryKind::File,
+            path: Some(PathBuf::from("a.txt")),
+            ..Default::default()
+        };
+        let all = format!("{text}{}", serialize(std::slice::from_ref(&entry)));
+        assert_eq!(parse(&all), vec![entry]);
+        assert_eq!(parse_window(&all), sample_window_read());
+        // 古い記録（行が無い）
+        assert_eq!(parse_window(&serialize(&[])), SessionWindow::default());
+        // 仮想デスクトップが取れなかった vz
+        let no_desktop = SessionWindow { desktop: None, ..w };
+        assert_eq!(parse_window(&serialize_window(&no_desktop)), no_desktop);
+        // 位置が無ければ何も書かない
+        assert_eq!(serialize_window(&SessionWindow::default()), "");
+    }
+
+    #[test]
+    fn test_desktop_must_follow_first_monitor() {
+        let a = SessionWindow {
+            desktop: None,
+            ..sample_window()
+        };
+        // A（デスクトップなし）の後に B が追記されても、A の位置と B のデスクトップを組み合わせない
+        let text = format!(
+            "{}file\t0\t0\t0\t0\t0\t\tx\n{}",
+            serialize_window(&a),
+            serialize_window(&sample_window())
+        );
+        assert_eq!(parse_window(&text), a);
+    }
+
     fn write_saved(saved: &Path, pid: u32, path: &str) -> PathBuf {
         let writing = begin_saved_state(saved).unwrap();
         let entry = SessionEntry {
@@ -598,7 +796,7 @@ mod tests {
             path: Some(PathBuf::from(path)),
             ..Default::default()
         };
-        append_session(&writing, &[entry]).unwrap();
+        append_session(&writing, &[entry], &sample_window()).unwrap();
         publish_saved_state(saved, &writing, pid).unwrap()
     }
 
@@ -658,8 +856,11 @@ mod tests {
             ..Default::default()
         };
         finish_saved_state(&saved, &state, std::slice::from_ref(&failed)).unwrap();
+        assert_eq!(state.window, sample_window_read());
         let again = take_saved_state(&saved).unwrap();
         assert_eq!(again.pid, 7);
+        // 再公開した記録にはウィンドウの行が無い
+        assert_eq!(again.window, SessionWindow::default());
         assert_eq!(again.entries.len(), 1);
         let temp = again.entries[0].temp.clone().unwrap();
         assert_eq!(fs::read_to_string(temp).unwrap(), "edits");

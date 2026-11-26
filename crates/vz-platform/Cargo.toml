@@ -7,6 +7,10 @@ license.workspace = true
 repository.workspace = true
 publish = false
 
+[dependencies]
+# 仮想デスクトップの対象ウィンドウ（eframe の生ハンドル）を受け取る
+raw-window-handle = "0.6"
+
 # Windows: ネイティブのファイルダイアログとクリップボード、関連付けでの実行（ShellExecute）、
 # Claude Code / Codex への送信（ウィンドウ検索・前面化・キー入力）
 [target.'cfg(windows)'.dependencies]
@@ -21,7 +25,17 @@ windows-sys = { version = "0.59", features = [
     "Win32_UI_Shell",
     "Win32_UI_WindowsAndMessaging",
 ] }
+# 仮想デスクトップ（IVirtualDesktopManager）。webview2-com と同じ版
+windows = { version = "0.62", features = [
+    "Win32_Foundation",
+    "Win32_System_Com",
+    "Win32_UI_Shell",
+] }
 
 # macOS: クリップボード（ファイルダイアログは osascript）
 [target.'cfg(target_os = "macos")'.dependencies]
 arboard = { version = "3", default-features = false }
+
+# Linux X11: 仮想デスクトップ（EWMH の _NET_WM_DESKTOP）。winit と同じ版
+[target.'cfg(target_os = "linux")'.dependencies]
+x11rb = "0.13"
