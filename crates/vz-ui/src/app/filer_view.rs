@@ -149,7 +149,7 @@ impl VzEditorApp {
         let max_dir_cols = ((hdr_rect.width() - right_info_w - hdr_char_w * 6.0) / hdr_char_w)
             .floor()
             .max(8.0) as usize;
-        let dir_full = pane.current_dir.display().to_string();
+        let dir_full = filer_dir_label(&pane.current_dir);
         let dir_str = truncate_path_left(&dir_full, max_dir_cols);
 
         painter.text(
@@ -433,4 +433,56 @@ impl VzEditorApp {
     }
 
     // --- Overlays & Modals ---
+}
+
+fn filer_dir_label(path: &Path) -> Cow<'_, str> {
+    #[cfg(windows)]
+    {
+        use std::path::{Component, Prefix};
+
+        // 日本語フォントでバックスラッシュが円記号に見えるため、通常のパスは / で区切る。
+        if let Some(Component::Prefix(prefix)) = path.components().next() {
+            match prefix.kind() {
+                Prefix::VerbatimDisk(_) | Prefix::VerbatimUNC(..) => {
+                    let plain = vz_platform::shell::plain_path(path);
+                    return Cow::Owned(plain.to_string_lossy().replace('\\', "/"));
+                }
+                Prefix::Verbatim(_) | Prefix::DeviceNS(_) => return path.to_string_lossy(),
+                _ => {}
+            }
+        }
+        let label = path.to_string_lossy();
+        if label.contains('\\') {
+            return Cow::Owned(label.replace('\\', "/"));
+        }
+        label
+    }
+    #[cfg(not(windows))]
+    path.to_string_lossy()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[cfg(windows)]
+    #[test]
+    fn filer_dir_label_displays_windows_paths() {
+        for (path, expected) in [
+            (r"\\?\C:\gitroot\日本語", "C:/gitroot/日本語"),
+            (r"C:\", "C:/"),
+            (r"\\?\UNC\server\share\dir", "//server/share/dir"),
+            (r"\\server\share", "//server/share"),
+            (r"\\?\Volume{guid}\dir", r"\\?\Volume{guid}\dir"),
+        ] {
+            assert_eq!(filer_dir_label(Path::new(path)), expected);
+        }
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn filer_dir_label_preserves_unix_paths() {
+        let path = r"/tmp/dir\name";
+        assert_eq!(filer_dir_label(Path::new(path)), path);
+    }
 }

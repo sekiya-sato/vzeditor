@@ -70,7 +70,7 @@ pub fn open_with_os(path: &Path) -> Result<(), String> {
 
 /// `\\?\C:\a` → `C:\a`、`\\?\UNC\server\share` → `\\server\share`。それ以外はそのまま。
 #[cfg(windows)]
-fn plain_path(path: &Path) -> std::path::PathBuf {
+pub fn plain_path(path: &Path) -> std::path::PathBuf {
     let s = path.to_string_lossy();
     if let Some(rest) = s.strip_prefix(r"\\?\UNC\") {
         format!(r"\\{rest}").into()
