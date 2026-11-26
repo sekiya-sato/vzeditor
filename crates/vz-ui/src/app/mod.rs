@@ -205,6 +205,8 @@ enum MenuAction {
     CloseBuffer,
     ToggleFiler,
     Quit,
+    /// 状態を記録して終了（Alt+Shift+F4。次に Shift を押して起動すると戻る）
+    SaveStateAndQuit,
     // Edit
     Undo,
     Redo,
@@ -451,6 +453,8 @@ pub struct VzEditorApp {
     quit_after_save: bool,
     /// 確認済みのため次の close_requested を止めない
     allow_close: bool,
+    /// 起動時の Shift を OS から読めない環境で、この時刻まで修飾キーの Shift を見て記録を戻す
+    shift_restore_until: Option<std::time::Instant>,
 
     // Claude Code / Codex への送信 (Alt+C → C / X)
     /// Alt+C を押して2打目を待っている
@@ -502,12 +506,25 @@ pub struct VzEditorApp {
     browser_url_editing: bool,
 }
 
+/// 起動時に戻す状態。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StartupRestore {
+    /// 戻さない
+    None,
+    /// 更新用（`--restore`）: `session/session.ini` をまとめて戻す
+    Update,
+    /// Shift を押して起動した: Alt+Shift+F4 の記録を 1 つ戻す
+    Saved,
+    /// Shift を OS から読めない環境: 起動直後のフレームで Shift を見て決める
+    SavedIfShift,
+}
+
 impl VzEditorApp {
     pub fn new(
         cc: &eframe::CreationContext<'_>,
         initial_paths: Vec<PathBuf>,
         settings: Settings,
-        restore: bool,
+        restore: StartupRestore,
     ) -> Self {
         configure_japanese_fonts(&cc.egui_ctx);
         Self::configure_visuals(&cc.egui_ctx);
@@ -576,6 +593,8 @@ impl VzEditorApp {
             persist_settings: true,
             quit_after_save: false,
             allow_close: false,
+            shift_restore_until: (restore == StartupRestore::SavedIfShift)
+                .then(|| std::time::Instant::now() + std::time::Duration::from_secs(1)),
             send_prefix: false,
             pending_send: None,
             key_scheme: settings.key_scheme,
@@ -599,9 +618,11 @@ impl VzEditorApp {
             browser_url_editing: false,
         };
         let session_dir = session::session_dir();
-        if restore {
-            if let Some(dir) = &session_dir {
-                app.restore_session_from(dir);
+        if let Some(dir) = &session_dir {
+            match restore {
+                StartupRestore::Update => app.restore_session_from(dir),
+                StartupRestore::Saved => app.restore_saved_state_from(&session::saved_dir(dir)),
+                StartupRestore::None | StartupRestore::SavedIfShift => {}
             }
         }
         if !initial_paths.is_empty() {
@@ -746,6 +767,9 @@ fn window_style_key_action(
         if key == Key::N {
             return Some(MenuAction::RepeatSearch(true));
         }
+        if key == Key::F4 {
+            return Some(MenuAction::SaveStateAndQuit);
+        }
         // 文字の不透明度: 物理キーで判定（無ければ論理キー）
         let phys = physical_key.unwrap_or(key);
         if phys == Key::Minus {
@@ -828,7 +852,9 @@ impl eframe::App for VzEditorApp {
         window_style::set_text_opacity_percent(self.text_opacity);
         self.restore_window_position(ctx);
         self.track_window_geometry(ctx);
+        self.poll_shift_restore(ctx);
         self.handle_close_request(ctx);
+        self.handle_save_state_key(ctx);
         self.poll_quit_request(ctx);
         self.check_external_changes(ctx);
         self.handle_dropped_files(ctx);

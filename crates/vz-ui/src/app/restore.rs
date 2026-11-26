@@ -1,8 +1,121 @@
 //! 保存して終了・状態の復元（`--save-and-quit` / `--restore`）と、外部でのファイル変更の検知。
 
 use super::*;
+use std::time::{Duration, UNIX_EPOCH};
+
+/// 状態を記録するときの未保存ファイルの扱い。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum SaveMode {
+    /// 更新用（`--save-and-quit`）: パスのある未保存ファイルは保存する
+    SaveFiles,
+    /// Alt+Shift+F4: ファイルは上書きせず、編集内容を一時保存する
+    KeepUnsaved,
+}
+
+fn stamp_to_record(stamp: Option<FileStamp>) -> Option<(u64, u64)> {
+    let (time, len) = stamp?;
+    let ns = time.duration_since(UNIX_EPOCH).ok()?.as_nanos();
+    Some((u64::try_from(ns).ok()?, len))
+}
+
+fn stamp_from_record(stamp: Option<(u64, u64)>) -> Option<FileStamp> {
+    stamp.map(|(ns, len)| (UNIX_EPOCH + Duration::from_nanos(ns), len))
+}
 
 impl VzEditorApp {
+    /// Alt+Shift+F4: 状態を `session/saved/<pid>` に記録して終了する（ファイルは上書きしない）。
+    /// 記録できなければ終了を中止する。
+    pub(super) fn save_state_and_quit(&mut self, ctx: &egui::Context) {
+        // 同じフレームで閉じる要求とキーの両方から呼ばれても、記録は 1 回だけ
+        if self.allow_close {
+            return;
+        }
+        let result = session::session_dir()
+            .ok_or_else(|| std::io::Error::other("設定フォルダがありません"))
+            .and_then(|d| self.save_state_to(&session::saved_dir(&d)));
+        match result {
+            Ok(_) => self.close_now(ctx),
+            Err(e) => {
+                if ctx.input(|i| i.viewport().close_requested()) {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+                }
+                self.status_message = format!("状態を記録できないため終了を中止しました: {e}");
+            }
+        }
+    }
+
+    /// Alt+Shift+F4 のキー。モーダル表示中も受け付けるよう、ほかのキー処理より先に取り出す。
+    pub(super) fn handle_save_state_key(&mut self, ctx: &egui::Context) {
+        let mut hit = false;
+        ctx.input_mut(|i| {
+            i.events.retain(|ev| {
+                let Event::Key {
+                    key,
+                    physical_key,
+                    pressed,
+                    modifiers,
+                    ..
+                } = ev
+                else {
+                    return true;
+                };
+                if window_style_key_action(*key, *physical_key, *modifiers)
+                    != Some(MenuAction::SaveStateAndQuit)
+                {
+                    return true;
+                }
+                hit |= *pressed;
+                false
+            });
+        });
+        if hit {
+            self.save_state_and_quit(ctx);
+        }
+    }
+
+    /// 起動時の Shift を OS から読めない環境（Linux）: 起動直後のフレームで Shift が押されていれば記録を戻す。
+    pub(super) fn poll_shift_restore(&mut self, ctx: &egui::Context) {
+        let Some(until) = self.shift_restore_until else {
+            return;
+        };
+        if std::time::Instant::now() >= until {
+            self.shift_restore_until = None;
+            return;
+        }
+        if ctx.input(|i| i.modifiers.shift) {
+            self.shift_restore_until = None;
+            if let Some(dir) = session::session_dir() {
+                self.restore_saved_state_from(&session::saved_dir(&dir));
+                self.sync_window_title(ctx);
+            }
+            return;
+        }
+        ctx.request_repaint_after(Duration::from_millis(50));
+    }
+
+    /// `saved` に自分の状態を書いて公開する。公開したフォルダを返す。
+    pub(super) fn save_state_to(&mut self, saved: &Path) -> std::io::Result<PathBuf> {
+        let writing = session::begin_saved_state(saved)?;
+        let published = self
+            .save_session_with(&writing, SaveMode::KeepUnsaved)
+            .and_then(|()| session::publish_saved_state(saved, &writing, std::process::id()));
+        if published.is_err() {
+            let _ = fs::remove_dir_all(&writing);
+        }
+        published
+    }
+
+    /// Shift を押して起動したとき: `saved` の記録を PID の小さい順に 1 つ戻す。無ければ何もしない。
+    pub(super) fn restore_saved_state_from(&mut self, saved: &Path) {
+        let Some(state) = session::take_saved_state(saved) else {
+            return;
+        };
+        let failed = self.restore_entries(&state.entries);
+        if let Err(e) = session::finish_saved_state(saved, &state, &failed) {
+            self.status_message = format!("記録の後始末に失敗しました: {e}");
+        }
+    }
+
     /// 外部からの終了要求を受け取っていれば、状態を保存して終了する。
     pub(super) fn poll_quit_request(&mut self, ctx: &egui::Context) {
         let requested = self
@@ -15,7 +128,7 @@ impl VzEditorApp {
         let Some(dir) = session::session_dir() else {
             return;
         };
-        if let Err(e) = self.save_session_to(&dir) {
+        if let Err(e) = self.save_session_with(&dir, SaveMode::SaveFiles) {
             // 保存できなければ終了しない（要求側には完了として返す）
             session::finish_request(&dir);
             self.status_message =
@@ -28,10 +141,22 @@ impl VzEditorApp {
 
     /// 未保存のファイルを保存し、無題・保存できなかったバッファは `dir` に一時保存して、
     /// 開いているバッファとツールの状態を `dir/session.ini` に追記する。
+    #[cfg(test)]
     pub(super) fn save_session_to(&mut self, dir: &Path) -> std::io::Result<()> {
+        self.save_session_with(dir, SaveMode::SaveFiles)
+    }
+
+    /// `mode` が `KeepUnsaved` なら、パスのある未保存ファイルも保存せずに一時保存する。
+    pub(super) fn save_session_with(&mut self, dir: &Path, mode: SaveMode) -> std::io::Result<()> {
         if self.buffers.iter().any(|slot| slot.huge_save.is_some()) {
             return Err(std::io::Error::other("巨大ファイルを保存中です"));
         }
+        if self.buffers.iter().any(|slot| slot.huge_replace.is_some()) {
+            return Err(std::io::Error::other(
+                "巨大ファイルのすべて置換を実行中です",
+            ));
+        }
+        let keep_unsaved = mode == SaveMode::KeepUnsaved;
         fs::create_dir_all(dir)?;
         let mut entries = Vec::new();
         for idx in 0..self.buffers.len() {
@@ -51,6 +176,8 @@ impl VzEditorApp {
                     markdown_view: false,
                     active,
                     crlf: slot.buffer.line_ending == "\r\n",
+                    encoding: None,
+                    disk_stamp: None,
                     temp: Some(temp),
                     path: Some(origin),
                 });
@@ -60,7 +187,12 @@ impl VzEditorApp {
             // 読み込み後に外部でファイルが変更されていたら上書きしない。
             // ファイルは外部の内容のまま開き直し、vz の編集内容は無題バッファに残して復元後に確認する
             // 巨大ファイルは読み比べず、そのまま保存する
-            if !buf.is_huge() && buf.dirty && buf.changed_on_disk().is_some() && !buf.same_as_disk()
+            // 上書きしない記録（KeepUnsaved）では衝突しないので確かめない
+            if !keep_unsaved
+                && !buf.is_huge()
+                && buf.dirty
+                && buf.changed_on_disk().is_some()
+                && !buf.same_as_disk()
             {
                 let temp = session::temp_path(dir, idx);
                 fs::write(&temp, buf.text_lines().join("\n"))?;
@@ -71,6 +203,8 @@ impl VzEditorApp {
                     markdown_view: slot.markdown_view,
                     active,
                     crlf: buf.line_ending == "\r\n",
+                    encoding: None,
+                    disk_stamp: None,
                     temp: None,
                     path: buf.file_path.clone(),
                 });
@@ -81,13 +215,17 @@ impl VzEditorApp {
                     markdown_view: false,
                     active: false,
                     crlf: buf.line_ending == "\r\n",
+                    encoding: None,
+                    disk_stamp: None,
                     temp: Some(temp),
                     path: buf.file_path.clone(),
                 });
                 continue;
             }
             let mut save_result = Ok(());
-            if buf.dirty {
+            if buf.dirty && keep_unsaved {
+                save_result = Err(std::io::Error::other("状態の記録では上書きしません"));
+            } else if buf.dirty {
                 save_result = match buf.file_path.clone() {
                     Some(path)
                         if buf.is_huge()
@@ -109,6 +247,8 @@ impl VzEditorApp {
                 markdown_view: slot.markdown_view,
                 active,
                 crlf: buf.line_ending == "\r\n",
+                encoding: None,
+                disk_stamp: None,
                 temp: None,
                 path: buf.file_path.clone(),
             };
@@ -134,6 +274,9 @@ impl VzEditorApp {
                 fs::write(&temp, buf.text_lines().join("\n"))?;
                 entry.kind = EntryKind::Unsaved;
                 entry.temp = Some(temp);
+                // 元のファイルの文字コードと、読み込んだ時点の状態（外部変更の検知用）も戻す
+                entry.encoding = Some(buf.encoding.label().to_string());
+                entry.disk_stamp = stamp_to_record(buf.disk_stamp);
             }
             entries.push(entry);
         }
@@ -172,8 +315,15 @@ impl VzEditorApp {
     /// `dir/session.ini` のバッファを開き直す。読み終えた一時保存ファイルは削除する。
     pub(super) fn restore_session_from(&mut self, dir: &Path) {
         let entries = session::take_session(dir);
+        // 戻せなかった巨大ファイルの編集は、一時保存をセッションのフォルダに残す
+        self.restore_entries(&entries);
+    }
+
+    /// 記録した項目を開き直す。戻せなかった項目（巨大ファイルの未保存の編集）を返す。
+    pub(super) fn restore_entries(&mut self, entries: &[SessionEntry]) -> Vec<SessionEntry> {
+        let mut failed = Vec::new();
         if entries.is_empty() {
-            return;
+            return failed;
         }
         let mut active: Option<usize> = None;
         let mut restored = 0usize;
@@ -183,7 +333,7 @@ impl VzEditorApp {
         let mut tool_mode: Option<AppMode> = None;
         // 戻せなかった巨大ファイルの未保存の編集（理由）
         let mut huge_errors: Vec<String> = Vec::new();
-        for e in &entries {
+        for e in entries {
             let ok = match e.kind {
                 EntryKind::Terminal => {
                     // シェルは最初のフレームで起動する（再描画の要求に egui の Context が要る）
@@ -234,6 +384,12 @@ impl VzEditorApp {
                             );
                             buf.file_path = e.path.clone();
                             buf.line_ending = if e.crlf { "\r\n" } else { "\n" };
+                            if let Some(enc) =
+                                e.encoding.as_deref().and_then(TextEncoding::from_label)
+                            {
+                                buf.encoding = enc;
+                            }
+                            buf.disk_stamp = stamp_from_record(e.disk_stamp);
                             buf.dirty = true;
                             buf.revision = 1;
                             self.add_buffer(buf);
@@ -255,6 +411,7 @@ impl VzEditorApp {
                         Err(err) => {
                             // 戻せなければファイルだけを開き、一時保存はセッションのフォルダに残す
                             huge_errors.push(format!("{}: {err}", path.display()));
+                            failed.push(e.clone());
                             let before = self.buffers.len();
                             self.open_paths(vec![path.clone()], true);
                             self.buffers.len() > before
@@ -326,6 +483,7 @@ impl VzEditorApp {
                 huge_errors.join(" / ")
             );
         }
+        failed
     }
 
     // --- 外部でのファイル変更の検知（再読み込みの確認）と、保存して終了時の衝突の確認 ---
@@ -515,7 +673,16 @@ fn tool_entry(kind: EntryKind, active: bool, path: Option<PathBuf>) -> SessionEn
         markdown_view: false,
         active,
         crlf: false,
+        encoding: None,
+        disk_stamp: None,
         temp: None,
         path,
     }
+}
+
+/// OS の閉じる要求が Alt+Shift+F4 によるものか（Alt と Shift が押されている）。
+/// WebView にフォーカスがあると egui にキーが届かないため、OS のキー状態も見る。
+pub(super) fn close_by_alt_shift_f4(ctx: &egui::Context) -> bool {
+    let m = ctx.input(|i| i.modifiers);
+    (m.alt && m.shift) || vz_platform::keyboard::alt_shift_held() == Some(true)
 }

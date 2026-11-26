@@ -3,6 +3,7 @@
 pub mod clipboard;
 pub mod dialog;
 pub mod file_info;
+pub mod keyboard;
 pub mod monitor;
 pub mod send_to_app;
 pub mod shell;

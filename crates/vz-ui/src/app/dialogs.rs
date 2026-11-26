@@ -45,6 +45,7 @@ impl VzEditorApp {
                         ("Alt+T / Alt+↑↓0", "最前面固定 / 背景の濃さ"),
                         ("Alt+W", "長い行の折り返し表示の切替"),
                         ("Alt+Shift+「+」「-」「0」", "文字の濃さ"),
+                        ("Alt+Shift+F4", "状態を記録して終了 (Shift を押して起動で復元)"),
                         ("Alt+C → C / Alt+C → X", "バッファ全体を Claude Code / Codex へ送信"),
                         ("Alt+C → N / Alt+C → M", "Claude Code / Codex で新規セッション (Ctrl+N)"),
                         ("Alt+C → P", "GitHub Desktop のカレントリポジトリを Push"),
@@ -81,6 +82,7 @@ impl VzEditorApp {
                         ("Alt+K / Alt+B", "ターミナル / ブラウザ (編集中の HTML を表示) の切替"),
                         ("Alt+↑ / Alt+↓ / Alt+0", "背景を濃く / 薄く / 透過解除"),
                         ("Alt+Shift+「+」「-」「0」", "文字を濃く / 薄く / 透過解除"),
+                        ("Alt+Shift+F4", "状態を記録して終了 (Shift を押して起動で復元)"),
                         ("ファイル→文字コードを指定して保存", "UTF-8 / UTF-8 BOM / Shift_JIS で保存"),
                         ("128MB 以上のファイル", "巨大ファイルモード (Markdown ビュー・行マークなし)"),
                         ("Esc (巨大ファイルの検索・置換中)", "検索・すべて置換を中止"),
@@ -100,6 +102,7 @@ impl VzEditorApp {
                         ("F10", "アプリケーション終了"),
                         ("Alt+T / Alt+↑ / Alt+↓", "最前面固定 / 背景の濃さ変更"),
                         ("Alt+Shift+「+」「-」「0」", "文字の濃さ変更 / 透過解除"),
+                        ("Alt+Shift+F4", "状態を記録して終了 (Shift を押して起動で復元)"),
                         ("Alt+K / Alt+B", "ターミナル / ブラウザの切替"),
                     ],
                     AppMode::Terminal => &[

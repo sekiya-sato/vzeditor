@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use vz_config::session;
 use vz_config::settings::Settings;
-use vz_ui::VzEditorApp;
+use vz_ui::{StartupRestore, VzEditorApp};
 
 fn main() -> eframe::Result<()> {
     // 複数ファイル・フォルダを引数で受け取る（エクスプローラーで exe へ複数ドロップした場合も同じ）
@@ -29,6 +29,16 @@ fn main() -> eframe::Result<()> {
             _ => initial_paths.push(PathBuf::from(arg)),
         }
     }
+    // Shift を押して起動したら、Alt+Shift+F4 で記録した状態を戻す（`--restore` が優先）
+    let restore = if restore {
+        StartupRestore::Update
+    } else {
+        match vz_platform::keyboard::shift_held() {
+            Some(true) => StartupRestore::Saved,
+            Some(false) => StartupRestore::None,
+            None => StartupRestore::SavedIfShift,
+        }
+    };
     let settings = Settings::load();
 
     let mut viewport = egui::ViewportBuilder::default()

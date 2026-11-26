@@ -567,6 +567,11 @@ impl VzEditorApp {
         if !ctx.input(|i| i.viewport().close_requested()) || self.allow_close {
             return;
         }
+        // Alt+Shift+F4 は OS の閉じる要求として届くことがある（Windows）。未保存の確認より先に見る
+        if restore::close_by_alt_shift_f4(ctx) {
+            self.save_state_and_quit(ctx);
+            return;
+        }
         if !self.has_any_dirty_buffer() {
             self.allow_close = true;
             return;

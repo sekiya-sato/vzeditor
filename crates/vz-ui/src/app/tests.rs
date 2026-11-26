@@ -37,6 +37,7 @@ pub(super) fn make_test_app() -> VzEditorApp {
         persist_settings: false,
         quit_after_save: false,
         allow_close: false,
+        shift_restore_until: None,
         send_prefix: false,
         pending_send: None,
         key_scheme: KeyScheme::Vz,
@@ -983,6 +984,12 @@ fn test_window_style_keys_do_not_overlap() {
         window_style_key_action(Key::W, Some(Key::W), alt_shift),
         None
     );
+    // Alt+Shift+F4: 状態を記録して終了（Alt+F4 は OS の終了のまま）
+    assert_eq!(
+        window_style_key_action(Key::F4, Some(Key::F4), alt_shift),
+        Some(MenuAction::SaveStateAndQuit)
+    );
+    assert_eq!(window_style_key_action(Key::F4, Some(Key::F4), alt), None);
     // Alt+K / Alt+B: ターミナル / ブラウザ（Shift・Ctrl 付きは対象外）
     assert_eq!(
         window_style_key_action(Key::K, Some(Key::K), alt),
@@ -2223,6 +2230,8 @@ fn tool_session_entry(kind: EntryKind, active: bool, path: Option<PathBuf>) -> S
         markdown_view: false,
         active,
         crlf: false,
+        encoding: None,
+        disk_stamp: None,
         temp: None,
         path,
     }
@@ -2314,4 +2323,61 @@ fn light_system_theme_keeps_dialog_controls_readable() {
             "File dialog: {label} needs white text under the light system theme"
         );
     }
+}
+
+#[test]
+fn test_save_state_keeps_files_and_restores_one_by_one() {
+    let dir = std::env::temp_dir().join(format!("vz_saved_state_{}", std::process::id()));
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).unwrap();
+    let saved = dir.join("saved");
+    // UTF-8 BOM のファイルを編集したまま記録する
+    let path = dir.join("bom.txt");
+    fs::write(&path, b"\xEF\xBB\xBFold").unwrap();
+
+    let mut app = make_test_app();
+    let mut b = TextBuffer::from_file(&path).unwrap();
+    assert_eq!(b.encoding, TextEncoding::Utf8Bom);
+    b.set_cursor(0, 3);
+    b.insert_text(" new");
+    app.buffers = vec![BufferSlot::new(b)];
+    app.active_buf = 0;
+    app.save_state_to(&saved).unwrap();
+    // ファイルは上書きしない
+    assert_eq!(fs::read(&path).unwrap(), b"\xEF\xBB\xBFold");
+
+    // 2 つ目の vz の記録（同じ PID は連番で残る）
+    let mut other = make_test_app();
+    let mut u = TextBuffer::new();
+    u.insert_text("無題");
+    other.buffers = vec![BufferSlot::new(u)];
+    other.active_buf = 0;
+    other.save_state_to(&saved).unwrap();
+
+    let mut restored = make_test_app();
+    restored.restore_saved_state_from(&saved);
+    let r = &restored.cur_slot().buffer;
+    assert_eq!(r.file_path.as_deref(), Some(path.as_path()));
+    assert_eq!(r.text_lines(), vec!["old new"]);
+    assert!(r.dirty);
+    assert_eq!(r.encoding, TextEncoding::Utf8Bom);
+    assert_eq!(r.cursor_pos(), (0, 7));
+    // 読み込み時の状態も戻るので、閉じている間の外部変更に気付ける
+    assert!(r.disk_stamp.is_some());
+    assert!(r.changed_on_disk().is_none());
+
+    // 次の起動では 2 つ目の記録が戻り、その後は何も残らない
+    let mut second = make_test_app();
+    second.restore_saved_state_from(&saved);
+    assert!(second
+        .buffers
+        .iter()
+        .any(|slot| slot.buffer.text_lines() == vec!["無題"]));
+    assert_eq!(fs::read_dir(&saved).unwrap().count(), 0);
+    let mut third = make_test_app();
+    let before = third.buffers.len();
+    third.restore_saved_state_from(&saved);
+    assert_eq!(third.buffers.len(), before);
+
+    let _ = fs::remove_dir_all(&dir);
 }

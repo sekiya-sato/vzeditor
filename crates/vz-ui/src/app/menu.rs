@@ -146,6 +146,12 @@ impl VzEditorApp {
                 },
                 MenuEntry::Separator,
                 MenuEntry::Item {
+                    label: "状態を記録して終了",
+                    shortcut: "Alt+Shift+F4",
+                    action: MenuAction::SaveStateAndQuit,
+                    enabled: true,
+                },
+                MenuEntry::Item {
                     label: "終了",
                     shortcut: sc("Alt+F4", "^K^Q"),
                     action: MenuAction::Quit,
@@ -521,6 +527,7 @@ impl VzEditorApp {
                 _ => self.enter_filer(),
             },
             MenuAction::Quit => self.request_quit(ctx),
+            MenuAction::SaveStateAndQuit => self.save_state_and_quit(ctx),
             MenuAction::Undo => self.menu_undo(),
             MenuAction::Redo => self.menu_redo(),
             MenuAction::Cut => self.menu_cut(ctx),

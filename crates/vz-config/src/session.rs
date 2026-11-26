@@ -31,9 +31,10 @@ pub fn session_dir() -> Option<PathBuf> {
     crate::settings::app_dir().map(|d| d.join("session"))
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub enum EntryKind {
     /// ファイルを開き直す（保存済み。未作成の新規ファイルを含む）
+    #[default]
     File,
     /// 内容を一時保存ファイルから戻し、未保存のバッファにする（無題、または保存できなかったファイル）
     Unsaved,
@@ -54,7 +55,7 @@ pub enum EntryKind {
     FilerRight,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct SessionEntry {
     pub kind: EntryKind,
     pub line: usize,
@@ -62,7 +63,11 @@ pub struct SessionEntry {
     pub markdown_view: bool,
     pub active: bool,
     pub crlf: bool,
-    /// 一時保存ファイル（Unsaved のとき）
+    /// 文字コードの名前（`TextEncoding::label`。Unsaved で元のファイルの文字コードを戻す）
+    pub encoding: Option<String>,
+    /// 読み込み・保存した時点のファイルの状態（更新時刻の UNIX ナノ秒, 長さ）。外部変更の検知用
+    pub disk_stamp: Option<(u64, u64)>,
+    /// 一時保存ファイル。`session.ini` にはファイル名だけを書き、読むときに同じフォルダで解決する
     pub temp: Option<PathBuf>,
     /// 元のファイルのパス（無題なら None）、またはツールのフォルダ・URL
     pub path: Option<PathBuf>,
@@ -74,6 +79,30 @@ fn flag(b: bool) -> &'static str {
     } else {
         "0"
     }
+}
+
+/// `改行[;文字コード[;更新時刻ns;長さ]]`（古い形式は `0` / `1` だけ）
+fn line_ending_field(e: &SessionEntry) -> String {
+    let mut out = flag(e.crlf).to_string();
+    if let Some(enc) = &e.encoding {
+        out.push(';');
+        out.push_str(enc);
+        if let Some((ns, len)) = e.disk_stamp {
+            out.push_str(&format!(";{ns};{len}"));
+        }
+    }
+    out
+}
+
+fn parse_line_ending_field(s: &str) -> (bool, Option<String>, Option<(u64, u64)>) {
+    let mut it = s.split(';');
+    let crlf = it.next() == Some("1");
+    let encoding = it.next().filter(|e| !e.is_empty()).map(String::from);
+    let stamp = match (it.next(), it.next()) {
+        (Some(ns), Some(len)) => ns.parse().ok().zip(len.parse().ok()),
+        _ => None,
+    };
+    (crlf, encoding, stamp)
 }
 
 fn path_field(p: &Option<PathBuf>) -> String {
@@ -102,8 +131,13 @@ pub fn serialize(entries: &[SessionEntry]) -> String {
             e.col,
             flag(e.markdown_view),
             flag(e.active),
-            flag(e.crlf),
-            path_field(&e.temp),
+            line_ending_field(e),
+            // フォルダを改名しても参照できるよう、一時保存はファイル名だけを書く
+            path_field(
+                &e.temp
+                    .as_ref()
+                    .map(|t| t.file_name().map_or_else(|| t.clone(), PathBuf::from))
+            ),
             path_field(&e.path),
         ));
     }
@@ -129,13 +163,16 @@ pub fn parse(text: &str) -> Vec<SessionEntry> {
             _ => continue,
         };
         let opt = |s: &str| (!s.is_empty()).then(|| PathBuf::from(s));
+        let (crlf, encoding, disk_stamp) = parse_line_ending_field(f[5]);
         let entry = SessionEntry {
             kind,
             line: f[1].parse().unwrap_or(0),
             col: f[2].parse().unwrap_or(0),
             markdown_view: f[3] == "1",
             active: f[4] == "1",
-            crlf: f[5] == "1",
+            crlf,
+            encoding,
+            disk_stamp,
             temp: opt(f[6]),
             path: opt(f[7]),
         };
@@ -185,7 +222,135 @@ pub fn take_session(dir: &Path) -> Vec<SessionEntry> {
         return Vec::new();
     };
     let _ = fs::remove_file(&path);
-    parse(&text)
+    parse_in(dir, &text)
+}
+
+/// `dir/session.ini` の内容を読む。一時保存のファイル名は `dir` からのパスにする（絶対パスはそのまま）。
+fn parse_in(dir: &Path, text: &str) -> Vec<SessionEntry> {
+    let mut entries = parse(text);
+    for e in &mut entries {
+        if let Some(t) = &e.temp {
+            e.temp = Some(dir.join(t));
+        }
+    }
+    entries
+}
+
+// --- Alt+Shift+F4 で記録した状態（vz ごと。Shift を押して起動すると 1 つずつ戻す） ---
+
+const SAVED_DIR: &str = "saved";
+const WRITING_PREFIX: &str = ".writing-";
+const RESTORING_PREFIX: &str = "restoring-";
+
+/// vz ごとの記録を置くフォルダ（`session/saved`）。
+pub fn saved_dir(session_dir: &Path) -> PathBuf {
+    session_dir.join(SAVED_DIR)
+}
+
+/// 記録したフォルダ（復元中）。
+#[derive(Debug)]
+pub struct SavedState {
+    /// 復元中のフォルダ（`restoring-<自分の pid>-<時刻>`）
+    pub dir: PathBuf,
+    /// 記録した vz のプロセス ID（戻せなかった分の再公開に使う）
+    pub pid: u32,
+    pub entries: Vec<SessionEntry>,
+}
+
+/// 公開済みの記録の名前（`<pid>` / `<pid>-<k>`）を (pid, k) にする。
+fn parse_saved_name(name: &str) -> Option<(u32, u32)> {
+    let (pid, k) = match name.split_once('-') {
+        Some((pid, k)) => (pid, k.parse().ok()?),
+        None => (name, 0),
+    };
+    Some((pid.parse().ok()?, k))
+}
+
+/// Windows ではウイルス対策ソフトなどが開いていると改名が一時的に失敗するので、少し待って試し直す。
+fn rename_retry(from: &Path, to: &Path) -> io::Result<()> {
+    let mut result = fs::rename(from, to);
+    for _ in 0..3 {
+        if result.is_ok() || to.exists() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+        result = fs::rename(from, to);
+    }
+    result
+}
+
+/// 書き込み用のフォルダ（`.writing-<pid>`）を空にして作る。
+pub fn begin_saved_state(saved: &Path) -> io::Result<PathBuf> {
+    let dir = saved.join(format!("{WRITING_PREFIX}{}", std::process::id()));
+    if dir.exists() {
+        fs::remove_dir_all(&dir)?;
+    }
+    fs::create_dir_all(&dir)?;
+    Ok(dir)
+}
+
+/// 書き終えたフォルダを `<pid>`（ふさがっていれば `<pid>-<k>`）へ改名して公開する。
+pub fn publish_saved_state(saved: &Path, from: &Path, pid: u32) -> io::Result<PathBuf> {
+    for k in 0..1000u32 {
+        let name = if k == 0 {
+            pid.to_string()
+        } else {
+            format!("{pid}-{k}")
+        };
+        let to = saved.join(name);
+        if to.exists() {
+            continue;
+        }
+        match rename_retry(from, &to) {
+            Ok(()) => return Ok(to),
+            // 同時に同じ名前が作られた場合は次の番号へ
+            Err(_) if to.exists() => continue,
+            Err(e) => return Err(e),
+        }
+    }
+    Err(io::Error::other("記録の名前が足りません"))
+}
+
+/// PID の小さい順に記録を 1 つ受け取る（改名に成功した 1 プロセスだけが受け取る）。無ければ None。
+pub fn take_saved_state(saved: &Path) -> Option<SavedState> {
+    let mut candidates: Vec<((u32, u32), PathBuf)> = fs::read_dir(saved)
+        .ok()?
+        .flatten()
+        .filter_map(|e| {
+            let key = parse_saved_name(&e.file_name().to_string_lossy())?;
+            let path = e.path();
+            path.join(SESSION_FILE).is_file().then_some((key, path))
+        })
+        .collect();
+    candidates.sort();
+    let stamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    for ((pid, _), path) in candidates {
+        let dir = saved.join(format!("{RESTORING_PREFIX}{}-{stamp}", std::process::id()));
+        if rename_retry(&path, &dir).is_err() {
+            continue;
+        }
+        let text = fs::read_to_string(dir.join(SESSION_FILE)).unwrap_or_default();
+        let entries = parse_in(&dir, &text);
+        return Some(SavedState { dir, pid, entries });
+    }
+    None
+}
+
+/// 復元を終える。`failed`（戻せなかった項目）が無ければフォルダを消し、
+/// あればその項目だけを `session.ini` に書き直して再公開する（次の Shift 起動で試し直す）。
+pub fn finish_saved_state(
+    saved: &Path,
+    state: &SavedState,
+    failed: &[SessionEntry],
+) -> io::Result<()> {
+    if failed.is_empty() {
+        return fs::remove_dir_all(&state.dir);
+    }
+    fs::write(state.dir.join(SESSION_FILE), serialize(failed))?;
+    publish_saved_state(saved, &state.dir, state.pid).map(|_| ())
 }
 
 fn claim_path(dir: &Path) -> PathBuf {
@@ -313,6 +478,8 @@ mod tests {
                 markdown_view: true,
                 active: false,
                 crlf: false,
+                encoding: None,
+                disk_stamp: None,
                 temp: None,
                 path: Some(PathBuf::from("C:\\work\\a b.md")),
             },
@@ -323,7 +490,9 @@ mod tests {
                 markdown_view: false,
                 active: true,
                 crlf: true,
-                temp: Some(PathBuf::from("/tmp/unsaved-1-0.txt")),
+                encoding: Some("Shift_JIS".into()),
+                disk_stamp: Some((1_732_600_000_123_456_789, 1234)),
+                temp: Some(PathBuf::from("unsaved-1-0.txt")),
                 path: None,
             },
             SessionEntry {
@@ -333,7 +502,9 @@ mod tests {
                 markdown_view: false,
                 active: false,
                 crlf: false,
-                temp: Some(PathBuf::from("/tmp/unsaved-1-1.txt")),
+                encoding: None,
+                disk_stamp: None,
+                temp: Some(PathBuf::from("unsaved-1-1.txt")),
                 path: Some(PathBuf::from("/work/README.md")),
             },
             SessionEntry {
@@ -343,7 +514,9 @@ mod tests {
                 markdown_view: false,
                 active: false,
                 crlf: true,
-                temp: Some(PathBuf::from("/tmp/huge-1-2.vzedit")),
+                encoding: None,
+                disk_stamp: None,
+                temp: Some(PathBuf::from("huge-1-2.vzedit")),
                 path: Some(PathBuf::from("/data/big.log")),
             },
             SessionEntry {
@@ -353,6 +526,8 @@ mod tests {
                 markdown_view: false,
                 active: true,
                 crlf: false,
+                encoding: None,
+                disk_stamp: None,
                 temp: None,
                 path: Some(PathBuf::from(r"C:\work")),
             },
@@ -363,6 +538,8 @@ mod tests {
                 markdown_view: false,
                 active: false,
                 crlf: false,
+                encoding: None,
+                disk_stamp: None,
                 temp: None,
                 path: Some(PathBuf::from("http://localhost:3000/a?b=1#c")),
             },
@@ -373,6 +550,120 @@ mod tests {
             serialize(&entries)
         );
         assert_eq!(parse(&text), entries);
+    }
+
+    #[test]
+    fn test_line_ending_field_old_and_new() {
+        assert_eq!(parse_line_ending_field("1"), (true, None, None));
+        assert_eq!(parse_line_ending_field("0"), (false, None, None));
+        assert_eq!(
+            parse_line_ending_field("0;UTF-8 BOM"),
+            (false, Some("UTF-8 BOM".into()), None)
+        );
+        assert_eq!(
+            parse_line_ending_field("1;UTF-8;5;6"),
+            (true, Some("UTF-8".into()), Some((5, 6)))
+        );
+    }
+
+    #[test]
+    fn test_temp_is_written_as_file_name_and_resolved_in_dir() {
+        let entry = SessionEntry {
+            kind: EntryKind::Unsaved,
+            temp: Some(PathBuf::from("/somewhere/old/unsaved-9-0.txt")),
+            ..Default::default()
+        };
+        let text = serialize(&[entry]);
+        assert!(text.contains("\tunsaved-9-0.txt\t"));
+        let dir = PathBuf::from("/new/place");
+        assert_eq!(
+            parse_in(&dir, &text)[0].temp,
+            Some(dir.join("unsaved-9-0.txt"))
+        );
+    }
+
+    #[test]
+    fn test_parse_saved_name() {
+        assert_eq!(parse_saved_name("123"), Some((123, 0)));
+        assert_eq!(parse_saved_name("123-2"), Some((123, 2)));
+        assert_eq!(parse_saved_name(".writing-123"), None);
+        assert_eq!(parse_saved_name("restoring-1-2"), None);
+        assert_eq!(parse_saved_name("abc"), None);
+    }
+
+    fn write_saved(saved: &Path, pid: u32, path: &str) -> PathBuf {
+        let writing = begin_saved_state(saved).unwrap();
+        let entry = SessionEntry {
+            kind: EntryKind::File,
+            path: Some(PathBuf::from(path)),
+            ..Default::default()
+        };
+        append_session(&writing, &[entry]).unwrap();
+        publish_saved_state(saved, &writing, pid).unwrap()
+    }
+
+    #[test]
+    fn test_saved_states_are_taken_one_by_one_in_pid_order() {
+        let saved = std::env::temp_dir().join(format!("vz_saved_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&saved);
+        assert!(take_saved_state(&saved).is_none());
+
+        assert_eq!(write_saved(&saved, 300, "c"), saved.join("300"));
+        write_saved(&saved, 20, "a");
+        // 同じ PID（再利用）は連番を付けて両方残す
+        assert_eq!(write_saved(&saved, 300, "d"), saved.join("300-1"));
+        // 書きかけ・名前が数値でないフォルダは対象外
+        fs::create_dir_all(saved.join("note")).unwrap();
+        fs::write(
+            saved.join("note").join(SESSION_FILE),
+            "file\t0\t0\t0\t0\t0\t\tx\n",
+        )
+        .unwrap();
+
+        let mut order = Vec::new();
+        while let Some(state) = take_saved_state(&saved) {
+            assert!(state
+                .dir
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .starts_with(RESTORING_PREFIX));
+            order.push((state.pid, state.entries[0].path.clone().unwrap()));
+            finish_saved_state(&saved, &state, &[]).unwrap();
+            assert!(!state.dir.exists());
+        }
+        assert_eq!(
+            order,
+            vec![
+                (20, PathBuf::from("a")),
+                (300, PathBuf::from("c")),
+                (300, PathBuf::from("d")),
+            ]
+        );
+        let _ = fs::remove_dir_all(&saved);
+    }
+
+    #[test]
+    fn test_failed_entries_are_published_again() {
+        let saved = std::env::temp_dir().join(format!("vz_saved_retry_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&saved);
+        write_saved(&saved, 7, "a");
+        let state = take_saved_state(&saved).unwrap();
+        let temp = state.dir.join("huge-7-0.vzedit");
+        fs::write(&temp, "edits").unwrap();
+        let failed = SessionEntry {
+            kind: EntryKind::HugeEdits,
+            temp: Some(temp),
+            path: Some(PathBuf::from("big.log")),
+            ..Default::default()
+        };
+        finish_saved_state(&saved, &state, std::slice::from_ref(&failed)).unwrap();
+        let again = take_saved_state(&saved).unwrap();
+        assert_eq!(again.pid, 7);
+        assert_eq!(again.entries.len(), 1);
+        let temp = again.entries[0].temp.clone().unwrap();
+        assert_eq!(fs::read_to_string(temp).unwrap(), "edits");
+        let _ = fs::remove_dir_all(&saved);
     }
 
     #[test]

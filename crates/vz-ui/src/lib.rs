@@ -5,4 +5,4 @@ mod fonts;
 mod markdown;
 pub mod window_style;
 
-pub use app::VzEditorApp;
+pub use app::{StartupRestore, VzEditorApp};
