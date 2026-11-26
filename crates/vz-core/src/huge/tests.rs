@@ -257,6 +257,89 @@ fn test_save_keeps_undo_and_converts_encoding() {
 }
 
 #[test]
+fn test_replace_result_saved_by_rename() {
+    let dir = TempDir::new("rename");
+    let path = dir.0.join("a.txt");
+    std::fs::write(&path, "x cat\ny cat\n").unwrap();
+    let mut doc = HugeDoc::open_with_chunk(&path, 4096).unwrap();
+    doc.wait_index();
+    assert_eq!(doc.whole_work_file(), None);
+    // すべて置換の結果を作業ファイルとして取り込む
+    let work = dir.0.join(".a.txt.vzwork-test.tmp");
+    std::fs::write(&work, "x dog\ny dog\n").unwrap();
+    doc.adopt_work_file(&work).unwrap();
+    doc.wait_index();
+    assert_eq!(doc.whole_work_file().as_deref(), Some(work.as_path()));
+    // rename だけで保存し、作業ファイルを元ファイルとして扱う
+    save_by_rename(&work, &path).unwrap();
+    doc.promote_work_file(&work, &path);
+    assert!(!work.exists());
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "x dog\ny dog\n");
+    assert_eq!(doc.whole_work_file(), None);
+    // 保存後も置換前に戻せる
+    doc.undo();
+    assert_eq!(doc.line_text(0), "x cat");
+    doc.redo();
+    assert_eq!(doc.line_text(1), "y dog");
+    drop(doc);
+    // 元ファイルとして扱うので、閉じても消さない
+    assert!(path.exists());
+}
+
+#[test]
+fn test_heap_backing_when_mmap_fails() {
+    let dir = TempDir::new("heap");
+    let path = dir.0.join("a.txt");
+    std::fs::write(&path, "one\ntwo\nthree").unwrap();
+    let mut doc = HugeDoc::open_heap_for_test(&path).unwrap();
+    doc.wait_index();
+    assert!(doc.is_heap_backed());
+    assert_eq!(doc.line_count(), 3);
+    doc.insert(doc.pos_to_offset(1, 3).unwrap(), "!").unwrap();
+    doc.snapshot();
+    let (p, c) = (AtomicU64::new(0), AtomicBool::new(false));
+    doc.doc_snapshot()
+        .save(&path, TextEncoding::Utf8, &p, &c)
+        .unwrap();
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "one\ntwo!\nthree");
+    doc.undo();
+    assert_eq!(doc.line_text(1), "two");
+}
+
+#[test]
+fn test_unsaved_edits_written_and_restored() {
+    let dir = TempDir::new("edits");
+    let path = dir.0.join("a.txt");
+    let orig = sample(11);
+    std::fs::write(&path, &orig).unwrap();
+    let mut doc = HugeDoc::open_with_chunk(&path, 4096).unwrap();
+    doc.wait_index();
+    doc.insert(doc.pos_to_offset(3, 2).unwrap(), "あいう\n追加")
+        .unwrap();
+    doc.delete(100, 5000).unwrap();
+    doc.snapshot();
+    let edited = doc.read(0, doc.len()).into_owned();
+    let edits = dir.0.join("a.vzedit");
+    doc.write_edits(&edits).unwrap();
+    drop(doc);
+
+    let mut back = HugeDoc::open_with_edits(&path, &edits).unwrap();
+    back.wait_index();
+    assert_eq!(back.read(0, back.len()).as_ref(), &edited[..]);
+    assert!(back.is_modified());
+    let mut rng = Rng(5);
+    check(&back, &edited, &mut rng);
+    // Undo 1 回で元ファイルの内容に戻る
+    back.undo();
+    assert_eq!(back.read(0, back.len()).as_ref(), &orig[..]);
+    drop(back);
+
+    // 元ファイルが変わっていたら戻さない
+    std::fs::write(&path, b"changed\n").unwrap();
+    assert!(HugeDoc::open_with_edits(&path, &edits).is_err());
+}
+
+#[test]
 fn test_long_line_columns() {
     let dir = TempDir::new("long");
     let path = dir.0.join("a.txt");

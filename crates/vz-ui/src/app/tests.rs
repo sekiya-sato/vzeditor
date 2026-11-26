@@ -247,6 +247,53 @@ fn test_save_session_and_restore() {
 }
 
 #[test]
+fn test_save_session_keeps_huge_edits_when_save_fails() {
+    let dir = std::env::temp_dir().join(format!("vz_session_huge_{}", std::process::id()));
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("big.log");
+    let session_dir = dir.join("session");
+    fs::write(&path, "line0\nline1\nline2\n").unwrap();
+
+    let mut app = make_test_app();
+    let mut b = TextBuffer::open_huge(&path).unwrap();
+    b.huge_mut().unwrap().wait_index();
+    b.set_cursor(1, 5);
+    b.insert_text("-vz");
+    app.buffers = vec![BufferSlot::new(b)];
+    app.active_buf = 0;
+    // 保存できないようにする（読み取り専用のファイルは置き換えられない）
+    let mut perm = fs::metadata(&path).unwrap().permissions();
+    perm.set_readonly(true);
+    fs::set_permissions(&path, perm.clone()).unwrap();
+    app.save_session_to(&session_dir).unwrap();
+    assert_eq!(fs::read_to_string(&path).unwrap(), "line0\nline1\nline2\n");
+    drop(app);
+
+    let mut app2 = make_test_app();
+    app2.buffers = vec![BufferSlot::new(TextBuffer::new())];
+    app2.active_buf = 0;
+    app2.restore_session_from(&session_dir);
+    let buf = &mut app2.cur_slot_mut().buffer;
+    assert!(buf.is_huge(), "{}", app2.status_message);
+    let buf = &mut app2.cur_slot_mut().buffer;
+    buf.huge_mut().unwrap().wait_index();
+    assert_eq!(buf.line(1), "line1-vz");
+    assert!(buf.dirty);
+    // 一時保存した編集内容は当て直した後に消す
+    assert!(fs::read_dir(&session_dir)
+        .map(|d| d
+            .flatten()
+            .all(|e| !e.file_name().to_string_lossy().ends_with(".vzedit")))
+        .unwrap_or(true));
+    drop(app2);
+    #[allow(clippy::permissions_set_readonly_false)]
+    perm.set_readonly(false);
+    fs::set_permissions(&path, perm).unwrap();
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn test_save_session_conflict_keeps_external_change() {
     let dir = std::env::temp_dir().join(format!("vz_session_conflict_{}", std::process::id()));
     let _ = fs::remove_dir_all(&dir);
@@ -1160,6 +1207,85 @@ fn make_sakura_app(text: &str) -> VzEditorApp {
     buf.set_cursor(0, 0);
     app.buffers = vec![BufferSlot::new(buf)];
     app
+}
+
+#[test]
+fn test_huge_wrap_cache_matches_full_wrap() {
+    let dir = std::env::temp_dir().join(format!("vz_app_hugewrap_{}", std::process::id()));
+    fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("big.txt");
+    // 長い行（表示行が 1,024 を大きく超える）・全角・タブ・空行を混ぜる
+    let long: String = (0..30_000)
+        .map(|i| {
+            if i % 7 == 0 {
+                'あ'
+            } else if i % 101 == 0 {
+                '\t'
+            } else {
+                'x'
+            }
+        })
+        .collect();
+    let text = format!("short\n{long}\n\nあいうえおかきくけこ\nend");
+    fs::write(&path, &text).unwrap();
+    let mut buf = TextBuffer::open_huge(&path).unwrap();
+    buf.huge_mut().unwrap().wait_index();
+    let cols = 10;
+    let mut cache = wrap::HugeWrapCache::default();
+    // 全部の表示行を先頭から取ると、通常の折り返し（wrap_breaks）と同じになる
+    let mut expected = Vec::new();
+    for (line, s) in text.split('\n').enumerate() {
+        let br = wrap::wrap_breaks(s, cols);
+        let len = s.chars().count();
+        let mut starts = vec![0];
+        starts.extend(br.iter().copied());
+        for (seg, &st) in starts.iter().enumerate() {
+            let last = seg + 1 == starts.len();
+            let end = if last { len } else { starts[seg + 1] };
+            expected.push(wrap::HugeRow {
+                line,
+                seg,
+                start: st,
+                end,
+                last,
+            });
+        }
+    }
+    let all = cache.rows_from(&buf, cols, (0, 0), expected.len() + 5);
+    assert_eq!(all, expected);
+    // 途中の表示行から取っても同じ。前後への移動は互いに戻る
+    for (i, row) in expected.iter().enumerate().step_by(997) {
+        let got = cache.rows_from(&buf, cols, (row.line, row.seg), 3);
+        assert_eq!(got[..], expected[i..(i + 3).min(expected.len())]);
+        assert_eq!(
+            cache.seg_of_col(&buf, cols, row.line, row.start),
+            (row.seg, row.start)
+        );
+        let fwd = cache.forward(&buf, cols, (row.line, row.seg), 1500);
+        let back_to = cache.back(&buf, cols, fwd, 1500);
+        if i + 1500 < expected.len() {
+            assert_eq!(back_to, (row.line, row.seg));
+        }
+    }
+    // アプリ: 折り返しオンで下へ動かすと、長い行の中を表示行単位で進む
+    let ctx = egui::Context::default();
+    let mut app = make_sakura_app("");
+    app.word_wrap = true;
+    app.wrap_cols = cols;
+    app.buffers = vec![BufferSlot::new(buf)];
+    let none = mods(false, false);
+    run_editor(
+        &ctx,
+        &mut app,
+        none,
+        vec![
+            key_with(Key::ArrowDown, none),
+            key_with(Key::ArrowDown, none),
+        ],
+    );
+    assert_eq!(app.cur_buf().cursor_pos(), (1, expected[2].start));
+    drop(app);
+    fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]

@@ -1,7 +1,6 @@
 //! ファイルの疎な行索引。裏のスレッドがチャンクごとに並列で作り、束ごとに送る。
 
 use memchr::memchr_iter;
-use memmap2::Mmap;
 use rayon::prelude::*;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, TryRecvError};
@@ -216,7 +215,7 @@ pub struct IndexJob {
 
 impl IndexJob {
     /// 索引スレッドを起動する。base は本文の開始位置（BOM の分）。
-    pub fn spawn(map: Arc<Mmap>, base: u64, chunk: u64) -> std::io::Result<Self> {
+    pub fn spawn(map: Arc<super::Backing>, base: u64, chunk: u64) -> std::io::Result<Self> {
         let (tx, rx) = mpsc::channel();
         let cancel = Arc::new(AtomicBool::new(false));
         let stop = Arc::clone(&cancel);
@@ -224,6 +223,15 @@ impl IndexJob {
             .name("vz-huge-index".into())
             .spawn(move || {
                 let data: &[u8] = &map;
+                // 索引を作る間だけ先読みを頼み、終わったら（中止でも）元に戻す
+                struct Sequential<'a>(&'a super::Backing);
+                impl Drop for Sequential<'_> {
+                    fn drop(&mut self) {
+                        self.0.advise_sequential(false);
+                    }
+                }
+                map.advise_sequential(true);
+                let _sequential = Sequential(&map);
                 let mut builder = Builder::new(data.len() as u64, chunk);
                 let mut first_nl = 0;
                 // 最初の束は 1 チャンクだけにして、先頭をすぐ表示できるようにする

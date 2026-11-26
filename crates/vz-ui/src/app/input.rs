@@ -473,7 +473,9 @@ impl VzEditorApp {
                     // 3. ESC: instant switch to 2-pane Filer! (Closes help first if open)
                     if key == Key::Escape {
                         suppress_text_this_frame = true;
-                        if self.show_help {
+                        if self.cancel_huge_task() {
+                            // 巨大ファイルの検索・置換の実行中は中止だけ
+                        } else if self.show_help {
                             self.show_help = false;
                         } else {
                             self.enter_filer();

@@ -13,6 +13,8 @@ pub(super) struct HugeSaveJob {
     encoding: TextEncoding,
     /// 保存を始めたときの内容の番号
     rev: u64,
+    /// すべて置換の作業ファイルを rename して保存したなら、その作業ファイル
+    renamed_work: Option<PathBuf>,
     total: u64,
     progress: Arc<AtomicU64>,
     cancel: Arc<AtomicBool>,
@@ -55,6 +57,9 @@ impl VzEditorApp {
             }
             match result {
                 Ok(()) => {
+                    if let (Some(work), Some(h)) = (&job.renamed_work, slot.buffer.huge_mut()) {
+                        h.promote_work_file(work, &job.path);
+                    }
                     slot.buffer
                         .finish_huge_save(&job.path, job.encoding, job.rev);
                     messages.push(format!(
@@ -83,6 +88,16 @@ impl VzEditorApp {
         }
     }
 
+    /// 巨大ファイルを保存する。ハードリンクがあるとリンクが切れるので、先に確認する。
+    pub(super) fn request_huge_save(&mut self, path: PathBuf, encoding: TextEncoding) {
+        let links = vz_platform::file_info::hard_link_count(&path).unwrap_or(1);
+        if links > 1 && self.filer_modal.is_none() {
+            self.filer_modal = Some(FilerModal::ConfirmHardLinkSave { path, encoding });
+            return;
+        }
+        self.start_huge_save(path, encoding);
+    }
+
     /// 巨大ファイルを裏のスレッドで保存する。保存中は編集できない。
     pub(super) fn start_huge_save(&mut self, path: PathBuf, encoding: TextEncoding) {
         let idx = self.active_buf;
@@ -94,6 +109,11 @@ impl VzEditorApp {
             return;
         };
         let rev = h.current_rev();
+        // すべて置換の結果をそのまま保存するなら、作業ファイルを rename するだけで済む
+        // （BOM を付けたり文字コードを変えたりするときは全体を書き出す）
+        let renamed_work = h
+            .whole_work_file()
+            .filter(|_| encoding == h.encoding && encoding.bom().is_empty());
         let snapshot = h.doc_snapshot();
         h.set_busy(true);
         let total = snapshot.len();
@@ -101,10 +121,15 @@ impl VzEditorApp {
         let cancel = Arc::new(AtomicBool::new(false));
         let (sender, receiver) = mpsc::channel();
         let (p, c, target) = (Arc::clone(&progress), Arc::clone(&cancel), path.clone());
+        let work = renamed_work.clone();
         let spawned = std::thread::Builder::new()
             .name("vz-huge-save".into())
             .spawn(move || {
-                let _ = sender.send(snapshot.save(&target, encoding, &p, &c));
+                let result = match work {
+                    Some(work) => vz_core::huge::save_by_rename(&work, &target),
+                    None => snapshot.save(&target, encoding, &p, &c),
+                };
+                let _ = sender.send(result);
             });
         if let Err(e) = spawned {
             if let Some(h) = self.buffers[idx].buffer.huge_mut() {
@@ -117,6 +142,7 @@ impl VzEditorApp {
             path,
             encoding,
             rev,
+            renamed_work,
             total,
             progress,
             cancel,
@@ -129,7 +155,12 @@ impl VzEditorApp {
     pub(super) fn huge_status(&self) -> Option<String> {
         let slot = self.cur_slot();
         let h = slot.buffer.huge()?;
-        let mut text = String::from("[巨大]");
+        // mmap できずにメモリへ読み込んだときは、そのことも示す
+        let mut text = String::from(if h.is_heap_backed() {
+            "[巨大・メモリ読込]"
+        } else {
+            "[巨大]"
+        });
         if let Some(job) = &slot.huge_save {
             let done = job.progress.load(Ordering::Relaxed);
             text.push_str(&format!(" 保存中 {}%", percent(done, job.total)));
@@ -170,6 +201,8 @@ impl Drop for HugeFindJob {
 /// 裏のスレッドで実行中のすべて置換（作業ファイルへの書き出し）。
 pub(super) struct HugeReplaceJob {
     path: PathBuf,
+    /// Esc で中止した（スレッドの終わりを待って作業ファイルを消す）
+    cancelled: bool,
     total: u64,
     progress: Arc<AtomicU64>,
     cancel: Arc<AtomicBool>,
@@ -293,6 +326,7 @@ impl VzEditorApp {
         }
         self.buffers[idx].huge_replace = Some(HugeReplaceJob {
             path: work,
+            cancelled: false,
             total,
             progress,
             cancel,
@@ -379,6 +413,10 @@ impl VzEditorApp {
             let Some(job) = self.buffers[idx].huge_replace.take() else {
                 return;
             };
+            if job.cancelled {
+                let _ = std::fs::remove_file(&job.path);
+                return;
+            }
             let buf = &mut self.buffers[idx].buffer;
             if let Some(h) = buf.huge_mut() {
                 h.set_busy(false);
@@ -399,6 +437,29 @@ impl VzEditorApp {
             };
             self.need_scroll_to_cursor = true;
         }
+    }
+
+    /// Esc: 巨大ファイルの検索・すべて置換・行ジャンプの待ちを中止する。中止したら true。
+    pub(super) fn cancel_huge_task(&mut self) -> bool {
+        let slot = self.cur_slot_mut();
+        let replacing = slot.huge_replace.as_mut().filter(|job| !job.cancelled);
+        let message = if let Some(job) = replacing {
+            // スレッドに中止を伝え、終わったら作業ファイルを消す（書き終えていても取り込まない）
+            job.cancel.store(true, Ordering::Relaxed);
+            job.cancelled = true;
+            if let Some(h) = slot.buffer.huge_mut() {
+                h.set_busy(false);
+            }
+            "すべて置換を中止しました"
+        } else if slot.huge_find.take().is_some() {
+            "検索を中止しました"
+        } else if slot.pending_jump.take().is_some() {
+            "行ジャンプを中止しました"
+        } else {
+            return false;
+        };
+        self.status_message = message.into();
+        true
     }
 
     /// 巨大ファイルで、検索・置換が実行中か（実行中は再描画を続ける）。

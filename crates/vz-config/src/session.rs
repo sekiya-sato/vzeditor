@@ -44,6 +44,9 @@ pub enum EntryKind {
     /// 簡易ブラウザのタブ（タブごとに 1 行、並び順のまま）。`path` は表示中の URL（無ければ案内ページ）。
     /// `active` はこのタブを表示していたか、`line` は 1 なら選択中のタブ（ブラウザを表示していなくても）
     Browser,
+    /// 保存できなかった巨大ファイル。`path` のファイルを開き直し、`temp` に一時保存した
+    /// 未保存の編集内容（ピース列と追加した文字）を当て直す
+    HugeEdits,
     /// ファイラーの左側。path はフォルダ、active はファイラーを表示していたか
     FilerLeft,
     /// ファイラーの右側。path はフォルダ
@@ -86,6 +89,7 @@ pub fn serialize(entries: &[SessionEntry]) -> String {
             EntryKind::File => "file",
             EntryKind::Unsaved => "unsaved",
             EntryKind::Conflict => "conflict",
+            EntryKind::HugeEdits => "huge-edits",
             EntryKind::Terminal => "terminal",
             EntryKind::Browser => "browser",
             EntryKind::FilerLeft => "filer-left",
@@ -116,6 +120,7 @@ pub fn parse(text: &str) -> Vec<SessionEntry> {
             "file" => EntryKind::File,
             "unsaved" => EntryKind::Unsaved,
             "conflict" => EntryKind::Conflict,
+            "huge-edits" => EntryKind::HugeEdits,
             "terminal" => EntryKind::Terminal,
             "browser" => EntryKind::Browser,
             "filer-left" => EntryKind::FilerLeft,
@@ -136,7 +141,9 @@ pub fn parse(text: &str) -> Vec<SessionEntry> {
         let valid = match entry.kind {
             EntryKind::File => entry.path.is_some(),
             EntryKind::Unsaved => entry.temp.is_some(),
-            EntryKind::Conflict => entry.temp.is_some() && entry.path.is_some(),
+            EntryKind::Conflict | EntryKind::HugeEdits => {
+                entry.temp.is_some() && entry.path.is_some()
+            }
             EntryKind::Terminal | EntryKind::FilerLeft | EntryKind::FilerRight => {
                 entry.path.is_some()
             }
@@ -152,6 +159,11 @@ pub fn parse(text: &str) -> Vec<SessionEntry> {
 /// 一時保存ファイルのパス（プロセス ID と連番で重複させない）。
 pub fn temp_path(dir: &Path, index: usize) -> PathBuf {
     dir.join(format!("unsaved-{}-{index}.txt", std::process::id()))
+}
+
+/// 巨大ファイルの未保存の編集内容を一時保存するパス。
+pub fn huge_edits_path(dir: &Path, index: usize) -> PathBuf {
+    dir.join(format!("huge-{}-{index}.vzedit", std::process::id()))
 }
 
 /// 状態を追記する（複数の vz が順に終了した場合も、すべてのバッファを残す）。
@@ -299,6 +311,16 @@ mod tests {
                 crlf: false,
                 temp: Some(PathBuf::from("/tmp/unsaved-1-1.txt")),
                 path: Some(PathBuf::from("/work/README.md")),
+            },
+            SessionEntry {
+                kind: EntryKind::HugeEdits,
+                line: 5_000_000,
+                col: 3,
+                markdown_view: false,
+                active: false,
+                crlf: true,
+                temp: Some(PathBuf::from("/tmp/huge-1-2.vzedit")),
+                path: Some(PathBuf::from("/data/big.log")),
             },
             SessionEntry {
                 kind: EntryKind::Terminal,

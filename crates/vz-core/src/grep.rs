@@ -1,7 +1,7 @@
 //! UTF-8 テキストを対象にしたフォルダー検索。
 
 use crate::huge::search::{scan_lines, Matcher};
-use crate::huge::{DocSnapshot, HUGE_FILE_THRESHOLD};
+use crate::huge::{Backing, DocSnapshot, HUGE_FILE_THRESHOLD};
 use crate::{buffer::read_lines, search::SearchPattern};
 use globset::{Glob, GlobSet, GlobSetBuilder};
 use std::path::{Path, PathBuf};
@@ -168,8 +168,8 @@ fn grep_huge_file(
     cancelled: &AtomicBool,
 ) -> std::io::Result<()> {
     let file = std::fs::File::open(path)?;
-    // SAFETY: 読み取り専用で対応付け、調べ終わったら外す
-    let map = std::sync::Arc::new(unsafe { memmap2::Mmap::map(&file)? });
+    // 読み取り専用で対応付け（できなければメモリに読み込み）、調べ終わったら外す
+    let map = std::sync::Arc::new(Backing::open(&file, path)?);
     let snap = DocSnapshot::from_map(map);
     let matcher = Matcher::new(pattern, snap.encoding).map_err(std::io::Error::other)?;
     scan_lines(

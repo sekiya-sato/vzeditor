@@ -320,7 +320,9 @@ impl VzEditorApp {
         }
 
         if key == Key::Escape {
-            if self.cur_buf().anchor.is_some() || self.select_mode {
+            if self.cancel_huge_task() {
+                // 巨大ファイルの検索・置換の実行中は中止だけ
+            } else if self.cur_buf().anchor.is_some() || self.select_mode {
                 self.cur_buf_mut().clear_selection();
                 self.select_mode = false;
                 self.status_message = "範囲選択を解除しました".to_string();

@@ -5,6 +5,7 @@
 //! 変更は vis の Change / Revision 方式で記録し、Undo / Redo はピース列の入れ替えで行う。
 //! 設計は docs/巨大ファイル詳細設計.md の 5 章。
 
+mod edits;
 pub mod index;
 pub mod search;
 pub mod tree;
@@ -31,6 +32,8 @@ const BLOCK_SIZE: usize = 1 << 20;
 const NODE_MAX: usize = 32;
 /// Undo の回数（通常ファイルモードと同じ）
 const MAX_UNDO: usize = 200;
+/// mmap できないとき、全体をメモリに読み込んで代わりにする上限
+const HEAP_FALLBACK_LIMIT: u64 = 2 << 30;
 /// 長い行で、文字位置→バイト位置の目印を何文字ごとに取るか
 const COL_STRIDE: usize = 4096;
 /// 文字位置の目印を覚えておく行の数
@@ -60,9 +63,70 @@ impl std::fmt::Display for EditError {
     }
 }
 
+/// ファイルの中身: mmap で対応付けたもの、または（mmap できないとき）メモリに読み込んだもの。
+pub enum Backing {
+    Mapped(Mmap),
+    Heap(Vec<u8>),
+}
+
+impl std::ops::Deref for Backing {
+    type Target = [u8];
+    fn deref(&self) -> &[u8] {
+        match self {
+            Self::Mapped(m) => m,
+            Self::Heap(v) => v,
+        }
+    }
+}
+
+impl Backing {
+    /// ファイルを読み取り専用で対応付ける。mmap できなければ、上限以下ならメモリに読み込む。
+    pub fn open(file: &File, path: &Path) -> io::Result<Self> {
+        // SAFETY: 読み取り専用で対応付ける。ほかのプロセスが対応付け中のファイルを切り詰めると
+        // 読み取りで異常終了しうる（Windows は切り詰めを拒む）。外部での変更は UI 側で検知する。
+        match unsafe { Mmap::map(file) } {
+            Ok(map) => Ok(Self::Mapped(map)),
+            Err(e) => Self::read_whole(file, path, e),
+        }
+    }
+
+    fn read_whole(file: &File, path: &Path, map_error: io::Error) -> io::Result<Self> {
+        let len = file.metadata()?.len();
+        if len > HEAP_FALLBACK_LIMIT {
+            return Err(io::Error::other(format!(
+                "ファイルを対応付けできず（{map_error}）、大きすぎてメモリにも読み込めません"
+            )));
+        }
+        Ok(Self::Heap(std::fs::read(path)?))
+    }
+
+    /// メモリに読み込んだか（mmap できなかったか）。
+    pub fn is_heap(&self) -> bool {
+        matches!(self, Self::Heap(_))
+    }
+
+    /// 先頭から順に読む間だけ、OS に先読みを頼む（Linux / macOS）。
+    /// WSL2 での実測（2GB・キャッシュなし）: 順に読む速さは約 15% 上がった。
+    /// Random にすると順に読むのが約 70 倍遅くなり、とびとびの読み出しも速くならなかったので使わない。
+    #[cfg(unix)]
+    pub(crate) fn advise_sequential(&self, on: bool) {
+        if let Self::Mapped(m) = self {
+            let advice = if on {
+                memmap2::Advice::Sequential
+            } else {
+                memmap2::Advice::Normal
+            };
+            let _ = m.advise(advice);
+        }
+    }
+
+    #[cfg(not(unix))]
+    pub(crate) fn advise_sequential(&self, _on: bool) {}
+}
+
 /// ファイルの対応付けと、その行索引。
 struct Source {
-    map: Arc<Mmap>,
+    map: Arc<Backing>,
     path: PathBuf,
     /// すべて置換の作業ファイルなら true（使われなくなったら消す）
     work_file: bool,
@@ -106,6 +170,8 @@ pub struct HugeDoc {
     busy: bool,
     /// 長い行の文字位置の目印: (行頭の文書内位置, marks[k] = k*COL_STRIDE 文字目の行内バイト位置)
     col_cache: RefCell<VecDeque<(u64, Vec<u64>)>>,
+    /// 開いた時点のファイルの状態（更新日時, サイズ）。未保存の編集の一時保存で、元ファイルが同じかを確かめる
+    opened_stamp: Option<(std::time::SystemTime, u64)>,
 }
 
 impl HugeDoc {
@@ -126,9 +192,13 @@ impl HugeDoc {
                 "空のファイルは巨大ファイルモードで開けません",
             ));
         }
-        // SAFETY: 読み取り専用で対応付ける。ほかのプロセスが対応付け中のファイルを切り詰めると
-        // 読み取りで異常終了しうる（Windows は切り詰めを拒む）。外部での変更は UI 側で検知する。
-        let map = Arc::new(unsafe { Mmap::map(&file)? });
+        let map = Arc::new(Backing::open(&file, path)?);
+        Self::from_backing(path, map, chunk)
+    }
+
+    /// 対応付け（またはメモリに読み込んだ中身）から文書を作る。
+    fn from_backing(path: &Path, map: Arc<Backing>, chunk: Option<u64>) -> io::Result<Self> {
+        let opened_stamp = edits::disk_stamp(path);
         let head = &map[..map.len().min(DETECT_SAMPLE)];
         let encoding = TextEncoding::detect(head, map.len() > DETECT_SAMPLE);
         let line_ending = if memchr::memmem::find(head, b"\r\n").is_some() {
@@ -175,6 +245,7 @@ impl HugeDoc {
             saved_rev: 0,
             last_insert: None,
             busy: false,
+            opened_stamp,
             col_cache: RefCell::new(VecDeque::new()),
         })
     }
@@ -221,6 +292,19 @@ impl HugeDoc {
             s.index = LineIndex::build_partial(&s.map, s.base, chunk, max_chunks);
         }
         self.resolve_pending();
+    }
+
+    /// 開いたファイルを mmap できず、メモリに読み込んだか。
+    pub fn is_heap_backed(&self) -> bool {
+        self.sources[0].as_ref().is_some_and(|s| s.map.is_heap())
+    }
+
+    /// mmap できなかったときと同じく、メモリに読み込んで開く（テスト用）。
+    #[cfg(test)]
+    fn open_heap_for_test(path: &Path) -> io::Result<Self> {
+        let file = File::open(path)?;
+        let map = Arc::new(Backing::read_whole(&file, path, io::Error::other("test"))?);
+        Self::from_backing(path, map, Some(INDEX_CHUNK))
     }
 
     pub fn is_indexing(&self) -> bool {
@@ -844,8 +928,7 @@ impl HugeDoc {
         let len = file.metadata()?.len();
         let mut new = Vec::new();
         if len > 0 {
-            // SAFETY: 自分で書き出した作業ファイルを読み取り専用で対応付ける
-            let map = Arc::new(unsafe { Mmap::map(&file)? });
+            let map = Arc::new(Backing::open(&file, path)?);
             let job = IndexJob::spawn(Arc::clone(&map), 0, INDEX_CHUNK)?;
             let id = u16::try_from(self.sources.len())
                 .map_err(|_| io::Error::other("すべて置換の回数が多すぎます"))?;
@@ -874,6 +957,30 @@ impl HugeDoc {
         self.current.push(Change { pos: 0, old, new });
         self.snapshot();
         Ok(())
+    }
+
+    /// 文書が「すべて置換の作業ファイル全体を指す 1 個のピース」だけなら、その作業ファイルのパス。
+    /// このときは作業ファイルを rename するだけで保存できる（BOM と文字コードの変換が要らなければ）。
+    pub fn whole_work_file(&self) -> Option<PathBuf> {
+        if self.tree.total().n != 1 {
+            return None;
+        }
+        let p = self.tree.get(0);
+        let Src::File(i) = p.src else {
+            return None;
+        };
+        let s = self.sources[i as usize].as_ref()?;
+        (s.work_file && p.start == 0 && p.len == s.map.len() as u64).then(|| s.path.clone())
+    }
+
+    /// 作業ファイルを rename で保存した後: その対応付けを保存先の元ファイルとして扱う（消さない）。
+    pub fn promote_work_file(&mut self, work: &Path, saved_to: &Path) {
+        for s in self.sources.iter_mut().flatten() {
+            if s.work_file && s.path == work {
+                s.work_file = false;
+                s.path = saved_to.to_path_buf();
+            }
+        }
     }
 
     /// どのピース（木と履歴）からも指されなくなった作業ファイルの対応付けを外して消す。
@@ -929,7 +1036,7 @@ impl Drop for HugeDoc {
 
 /// 裏のスレッドで読む文書の写し。
 pub struct DocSnapshot {
-    maps: Vec<Option<Arc<Mmap>>>,
+    maps: Vec<Option<Arc<Backing>>>,
     add: Vec<u8>,
     pieces: Vec<Piece>,
     /// starts[i] = ピース i の文書内の開始位置
@@ -940,7 +1047,7 @@ pub struct DocSnapshot {
 
 impl DocSnapshot {
     fn new(
-        maps: Vec<Option<Arc<Mmap>>>,
+        maps: Vec<Option<Arc<Backing>>>,
         add: Vec<u8>,
         pieces: Vec<Piece>,
         encoding: TextEncoding,
@@ -963,7 +1070,7 @@ impl DocSnapshot {
     }
 
     /// 対応付けたファイル全体（BOM を除く）を 1 つのピースとする写し（Grep 用）。
-    pub fn from_map(map: Arc<Mmap>) -> Self {
+    pub fn from_map(map: Arc<Backing>) -> Self {
         let head = &map[..map.len().min(DETECT_SAMPLE)];
         let encoding = TextEncoding::detect(head, map.len() > DETECT_SAMPLE);
         let line_ending = if memchr::memmem::find(head, b"\r\n").is_some() {
@@ -1045,10 +1152,7 @@ impl DocSnapshot {
         progress: &AtomicU64,
         cancel: &AtomicBool,
     ) -> io::Result<()> {
-        let target = match std::fs::symlink_metadata(path) {
-            Ok(m) if m.file_type().is_symlink() => std::fs::canonicalize(path)?,
-            _ => path.to_path_buf(),
-        };
+        let target = save_target(path)?;
         let name = target.file_name().and_then(|n| n.to_str()).unwrap_or("vz");
         let temp = target.with_file_name(format!(".{name}.vzsave.tmp"));
         let result = (|| {
@@ -1088,6 +1192,24 @@ impl DocSnapshot {
         }
         result
     }
+}
+
+/// 保存先の実体（シンボリックリンクならリンク先）。
+fn save_target(path: &Path) -> io::Result<PathBuf> {
+    match std::fs::symlink_metadata(path) {
+        Ok(m) if m.file_type().is_symlink() => std::fs::canonicalize(path),
+        _ => Ok(path.to_path_buf()),
+    }
+}
+
+/// すべて置換の作業ファイルを、ディスクへ書き切ってから保存先へ rename する（全体を書き出さない保存）。
+pub fn save_by_rename(work: &Path, path: &Path) -> io::Result<()> {
+    // Windows はディスクへの書き切り（FlushFileBuffers）に書き込みの権限が要る
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(work)?
+        .sync_all()?;
+    std::fs::rename(work, save_target(path)?)
 }
 
 /// bytes の n 文字目のバイト位置（足りなければ末尾）。

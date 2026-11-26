@@ -258,7 +258,25 @@ impl TextBuffer {
 
     /// 巨大ファイルモードで開く（大きさに関わらず。テストでも使う）。
     pub fn open_huge(path: &Path) -> io::Result<Self> {
-        let doc = HugeDoc::open(path)?;
+        Ok(Self::from_huge_doc(HugeDoc::open(path)?, path))
+    }
+
+    /// 巨大ファイルを開き、一時保存した未保存の編集内容を当て直す（`--restore`）。
+    pub fn open_huge_with_edits(path: &Path, edits: &Path) -> io::Result<Self> {
+        let mut buf = Self::from_huge_doc(HugeDoc::open_with_edits(path, edits)?, path);
+        buf.dirty = true;
+        Ok(buf)
+    }
+
+    /// 巨大ファイルの未保存の編集内容を一時保存する（保存して終了で保存できなかったとき）。
+    pub fn write_huge_edits(&self, out: &Path) -> io::Result<()> {
+        self.huge
+            .as_ref()
+            .ok_or_else(|| io::Error::other("巨大ファイルではありません"))?
+            .write_edits(out)
+    }
+
+    fn from_huge_doc(doc: HugeDoc, path: &Path) -> Self {
         let mut buf = Self::new();
         buf.encoding = doc.encoding;
         buf.line_ending = doc.line_ending;
@@ -266,7 +284,7 @@ impl TextBuffer {
         buf.file_path = Some(path.to_path_buf());
         buf.disk_stamp = file_stamp(path);
         buf.revision = 1;
-        Ok(buf)
+        buf
     }
 
     /// 巨大ファイルモードか。

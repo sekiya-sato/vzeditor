@@ -49,7 +49,8 @@ impl VzEditorApp {
                         ("Alt+C → P", "GitHub Desktop のカレントリポジトリを Push"),
                         ("Alt+K / Alt+B", "ターミナル / ブラウザ (編集中の HTML を表示) の切替"),
                         ("ファイル→文字コードを指定して保存", "UTF-8 / UTF-8 BOM / Shift_JIS で保存"),
-                        ("128MB 以上のファイル", "巨大ファイルモード (折り返し・Markdown ビュー・行マークなし)"),
+                        ("128MB 以上のファイル", "巨大ファイルモード (Markdown ビュー・行マークなし)"),
+                        ("Esc (巨大ファイルの検索・置換中)", "検索・すべて置換を中止"),
                         ("ツール→キー割り当て", "VZ 互換へ切替"),
                     ],
                     AppMode::Editor => &[
@@ -80,7 +81,8 @@ impl VzEditorApp {
                         ("Alt+↑ / Alt+↓ / Alt+0", "背景を濃く / 薄く / 透過解除"),
                         ("Alt+Shift+「+」「-」「0」", "文字を濃く / 薄く / 透過解除"),
                         ("ファイル→文字コードを指定して保存", "UTF-8 / UTF-8 BOM / Shift_JIS で保存"),
-                        ("128MB 以上のファイル", "巨大ファイルモード (折り返し・Markdown ビュー・行マークなし)"),
+                        ("128MB 以上のファイル", "巨大ファイルモード (Markdown ビュー・行マークなし)"),
+                        ("Esc (巨大ファイルの検索・置換中)", "検索・すべて置換を中止"),
                     ],
                     AppMode::Filer => &[
                         ("Ctrl+E / X (↑ / ↓)", "ファイルカーソル移動"),
@@ -706,6 +708,51 @@ impl VzEditorApp {
                     }
                 } else if do_cancel {
                     keep_modal = false;
+                }
+            }
+            FilerModal::ConfirmHardLinkSave { path, encoding } => {
+                let mut answer = None;
+                modal_window(ctx, "保存の確認 - ハードリンク", TEXT_AMBER).show(ctx, |ui| {
+                    ui.set_min_width(420.0);
+                    ui.label(
+                        egui::RichText::new(path.display().to_string())
+                            .font(FontId::monospace(12.5))
+                            .color(TEXT_DIM_CYAN),
+                    );
+                    ui.add_space(4.0);
+                    ui.label(
+                        egui::RichText::new(
+                            "このファイルにはハードリンクがあります。巨大ファイルは置き換えて保存するため、\nリンクが切れ、このファイルだけが新しい内容になります。保存しますか？",
+                        )
+                        .font(FontId::monospace(13.0))
+                        .color(TEXT_AMBER),
+                    );
+                    ui.add_space(8.0);
+                    ui.horizontal(|ui| {
+                        if ui.button("保存 (Enter / Y)").clicked()
+                            || ui.input(|i| i.key_pressed(Key::Enter) || i.key_pressed(Key::Y))
+                        {
+                            answer = Some(true);
+                        }
+                        if ui.button("キャンセル (ESC / N)").clicked()
+                            || ui.input(|i| i.key_pressed(Key::Escape) || i.key_pressed(Key::N))
+                        {
+                            answer = Some(false);
+                        }
+                    });
+                });
+                match answer {
+                    Some(true) => {
+                        keep_modal = false;
+                        let (path, encoding) = (path.clone(), *encoding);
+                        self.start_huge_save(path, encoding);
+                    }
+                    Some(false) => {
+                        keep_modal = false;
+                        self.quit_after_save = false;
+                        self.status_message = "保存をキャンセルしました".into();
+                    }
+                    None => {}
                 }
             }
             FilerModal::ConfirmQuit => {

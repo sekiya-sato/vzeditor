@@ -99,8 +99,17 @@ impl VzEditorApp {
                 temp: None,
                 path: buf.file_path.clone(),
             };
-            // 巨大ファイルは一時保存できないので、保存できなかったときはファイルを開き直すだけにする
-            if (!saved || buf.file_path.is_none()) && !buf.is_huge() {
+            if !saved && buf.is_huge() {
+                // 巨大ファイルを保存できなかった: 編集内容（ピース列と追加した文字）だけを一時保存する。
+                // 書けなければファイルを開き直すだけになる（編集内容は失われる）
+                let temp = session::huge_edits_path(dir, idx);
+                if buf.write_huge_edits(&temp).is_ok() {
+                    entry.kind = EntryKind::HugeEdits;
+                    entry.temp = Some(temp);
+                } else {
+                    let _ = fs::remove_file(&temp);
+                }
+            } else if !saved || buf.file_path.is_none() {
                 let temp = session::temp_path(dir, idx);
                 fs::write(&temp, buf.text_lines().join("\n"))?;
                 entry.kind = EntryKind::Unsaved;
@@ -152,6 +161,8 @@ impl VzEditorApp {
         let mut right_dir = None;
         // 表示していた画面（無ければエディター）
         let mut tool_mode: Option<AppMode> = None;
+        // 戻せなかった巨大ファイルの未保存の編集（理由）
+        let mut huge_errors: Vec<String> = Vec::new();
         for e in &entries {
             let ok = match e.kind {
                 EntryKind::Terminal => {
@@ -212,6 +223,24 @@ impl VzEditorApp {
                         Err(_) => false,
                     }
                 }
+                EntryKind::HugeEdits => {
+                    let temp = e.temp.clone().unwrap_or_default();
+                    let path = e.path.clone().unwrap_or_default();
+                    match TextBuffer::open_huge_with_edits(&path, &temp) {
+                        Ok(buf) => {
+                            self.add_buffer(buf);
+                            let _ = fs::remove_file(&temp);
+                            true
+                        }
+                        Err(err) => {
+                            // 戻せなければファイルだけを開き、一時保存はセッションのフォルダに残す
+                            huge_errors.push(format!("{}: {err}", path.display()));
+                            let before = self.buffers.len();
+                            self.open_paths(vec![path.clone()], true);
+                            self.buffers.len() > before
+                        }
+                    }
+                }
                 EntryKind::Conflict => {
                     let temp = e.temp.clone().unwrap_or_default();
                     let origin = e.path.clone().unwrap_or_default();
@@ -262,12 +291,21 @@ impl VzEditorApp {
             .filter(|e| {
                 matches!(
                     e.kind,
-                    EntryKind::File | EntryKind::Unsaved | EntryKind::Conflict
+                    EntryKind::File
+                        | EntryKind::Unsaved
+                        | EntryKind::Conflict
+                        | EntryKind::HugeEdits
                 )
             })
             .count();
         self.status_message =
             format!("前回の状態を復元しました: {restored} / {buffer_entries} 個のバッファ");
+        if !huge_errors.is_empty() {
+            self.status_message = format!(
+                "未保存の編集を戻せませんでした（一時保存は設定フォルダに残しました）: {}",
+                huge_errors.join(" / ")
+            );
+        }
     }
 
     // --- 外部でのファイル変更の検知（再読み込みの確認）と、保存して終了時の衝突の確認 ---

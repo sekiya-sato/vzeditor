@@ -425,7 +425,7 @@ impl VzEditorApp {
     pub(super) fn perform_save(&mut self, path: PathBuf) {
         if self.cur_buf().is_huge() {
             let encoding = self.cur_buf().encoding;
-            self.start_huge_save(path, encoding);
+            self.request_huge_save(path, encoding);
             return;
         }
         match self.cur_buf_mut().save_to_path(&path) {
@@ -458,7 +458,7 @@ impl VzEditorApp {
             return Ok(());
         };
         if self.cur_buf().is_huge() {
-            self.start_huge_save(path, encoding);
+            self.request_huge_save(path, encoding);
             return Ok(());
         }
         self.cur_buf_mut()

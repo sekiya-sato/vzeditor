@@ -296,6 +296,11 @@ enum FilerModal {
         name: String,
     },
     ConfirmQuit,
+    /// 巨大ファイルの保存でハードリンクが切れる。保存するか確認する
+    ConfirmHardLinkSave {
+        path: PathBuf,
+        encoding: TextEncoding,
+    },
     /// 文字コードを選んで保存する（保存できなかった理由を message に出す）
     ChooseEncoding {
         selected: TextEncoding,
@@ -346,6 +351,12 @@ struct BufferSlot {
     pending_jump: Option<usize>,
     /// 巨大ファイルの横スクロール位置（各行の何文字目から表示するか）
     huge_hcol: usize,
+    /// 巨大ファイルの折り返し表示で、先頭に表示している (論理行, 行内の表示行)
+    huge_wrap_top: (usize, usize),
+    /// 巨大ファイルの折り返しの計算結果（表示中の行だけ）
+    huge_wrap: wrap::HugeWrapCache,
+    /// 巨大ファイルの折り返し表示のホイールの端数（ピクセル）
+    huge_wrap_wheel: f32,
 }
 
 impl BufferSlot {
@@ -370,6 +381,9 @@ impl BufferSlot {
             huge_replace: None,
             pending_jump: None,
             huge_hcol: 0,
+            huge_wrap_top: (0, 0),
+            huge_wrap: wrap::HugeWrapCache::default(),
+            huge_wrap_wheel: 0.0,
         }
     }
 
