@@ -188,6 +188,8 @@ enum QuitSaveStep {
     Done,
     /// 無題のバッファ（索引）の保存先を尋ねる必要がある
     NeedSaveAs(usize),
+    /// 巨大ファイルの確認または保存を待つ
+    WaitingForHugeSave,
     /// 保存に失敗した
     Failed,
 }

@@ -29,6 +29,9 @@ impl VzEditorApp {
     /// 未保存のファイルを保存し、無題・保存できなかったバッファは `dir` に一時保存して、
     /// 開いているバッファとツールの状態を `dir/session.ini` に追記する。
     pub(super) fn save_session_to(&mut self, dir: &Path) -> std::io::Result<()> {
+        if self.buffers.iter().any(|slot| slot.huge_save.is_some()) {
+            return Err(std::io::Error::other("巨大ファイルを保存中です"));
+        }
         fs::create_dir_all(dir)?;
         let mut entries = Vec::new();
         for idx in 0..self.buffers.len() {
@@ -83,11 +86,21 @@ impl VzEditorApp {
                 });
                 continue;
             }
-            let mut saved = !buf.dirty;
+            let mut save_result = Ok(());
             if buf.dirty {
-                if let Some(path) = buf.file_path.clone() {
-                    saved = buf.save_to_path(&path).is_ok();
-                }
+                save_result = match buf.file_path.clone() {
+                    Some(path)
+                        if buf.is_huge()
+                            && vz_platform::file_info::hard_link_count(&path)
+                                .is_some_and(|n| n > 1) =>
+                    {
+                        Err(std::io::Error::other(
+                            "ハードリンクがあるため上書きしません",
+                        ))
+                    }
+                    Some(path) => buf.save_to_path(&path),
+                    None => Err(std::io::Error::other("保存先がありません")),
+                };
             }
             let mut entry = SessionEntry {
                 kind: EntryKind::File,
@@ -99,17 +112,24 @@ impl VzEditorApp {
                 temp: None,
                 path: buf.file_path.clone(),
             };
-            if !saved && buf.is_huge() {
-                // 巨大ファイルを保存できなかった: 編集内容（ピース列と追加した文字）だけを一時保存する。
-                // 書けなければファイルを開き直すだけになる（編集内容は失われる）
-                let temp = session::huge_edits_path(dir, idx);
-                if buf.write_huge_edits(&temp).is_ok() {
+            if buf.is_huge() {
+                if let Err(save_error) = save_result {
+                    // 本体を保存できないときも、編集を残せる場合だけ終了する。
+                    let temp = session::huge_edits_path(dir, idx);
+                    if let Err(edits_error) = buf.write_huge_edits(&temp) {
+                        let _ = fs::remove_file(&temp);
+                        for temp in entries.iter().filter_map(|entry| entry.temp.as_ref()) {
+                            let _ = fs::remove_file(temp);
+                        }
+                        return Err(std::io::Error::other(format!(
+                            "{}: 保存: {save_error} / 編集内容の一時保存: {edits_error}",
+                            buf.display_name()
+                        )));
+                    }
                     entry.kind = EntryKind::HugeEdits;
                     entry.temp = Some(temp);
-                } else {
-                    let _ = fs::remove_file(&temp);
                 }
-            } else if !saved || buf.file_path.is_none() {
+            } else if save_result.is_err() || buf.file_path.is_none() {
                 let temp = session::temp_path(dir, idx);
                 fs::write(&temp, buf.text_lines().join("\n"))?;
                 entry.kind = EntryKind::Unsaved;

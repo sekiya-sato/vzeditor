@@ -262,10 +262,8 @@ fn test_save_session_keeps_huge_edits_when_save_fails() {
     b.insert_text("-vz");
     app.buffers = vec![BufferSlot::new(b)];
     app.active_buf = 0;
-    // 保存できないようにする（読み取り専用のファイルは置き換えられない）
-    let mut perm = fs::metadata(&path).unwrap().permissions();
-    perm.set_readonly(true);
-    fs::set_permissions(&path, perm.clone()).unwrap();
+    // 一時ファイルと同名のディレクトリで、原子的保存を失敗させる。
+    fs::create_dir(dir.join(".big.log.vzsave.tmp")).unwrap();
     app.save_session_to(&session_dir).unwrap();
     assert_eq!(fs::read_to_string(&path).unwrap(), "line0\nline1\nline2\n");
     drop(app);
@@ -287,10 +285,102 @@ fn test_save_session_keeps_huge_edits_when_save_fails() {
             .all(|e| !e.file_name().to_string_lossy().ends_with(".vzedit")))
         .unwrap_or(true));
     drop(app2);
-    #[allow(clippy::permissions_set_readonly_false)]
-    perm.set_readonly(false);
-    fs::set_permissions(&path, perm).unwrap();
     let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_save_session_reports_failure_when_huge_edits_cannot_be_kept() {
+    let dir = std::env::temp_dir().join(format!("vz_session_huge_failed_{}", std::process::id()));
+    let session_dir = dir.join("session");
+    fs::create_dir_all(session::huge_edits_path(&session_dir, 0)).unwrap();
+    fs::create_dir(dir.join(".big.log.vzsave.tmp")).unwrap();
+    let path = dir.join("big.log");
+    fs::write(&path, "original\n").unwrap();
+
+    let mut app = make_test_app();
+    let mut buf = TextBuffer::open_huge(&path).unwrap();
+    buf.huge_mut().unwrap().wait_index();
+    buf.insert_text("edit ");
+    app.buffers = vec![BufferSlot::new(buf)];
+
+    let err = app.save_session_to(&session_dir).unwrap_err();
+    assert!(err.to_string().contains("編集内容の一時保存"));
+    assert!(!session_dir.join("session.ini").exists());
+    assert_eq!(fs::read_to_string(&path).unwrap(), "original\n");
+    assert_eq!(app.cur_buf().line(0), "edit original");
+    assert!(app.cur_buf().dirty);
+    drop(app);
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn test_huge_hard_links_in_both_quit_paths() {
+    let dir = std::env::temp_dir().join(format!("vz_quit_huge_links_{}", std::process::id()));
+    let session_dir = dir.join("session");
+    fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("big.log");
+    let link = dir.join("link.log");
+    fs::write(&path, "original\n").unwrap();
+    fs::hard_link(&path, &link).unwrap();
+
+    let mut app = make_test_app();
+    let mut buf = TextBuffer::open_huge(&path).unwrap();
+    buf.huge_mut().unwrap().wait_index();
+    buf.insert_text("edit ");
+    app.buffers = vec![BufferSlot::new(buf)];
+
+    // 外部コマンドの経路では、リンクを保ったまま編集内容を復元する。
+    app.save_session_to(&session_dir).unwrap();
+    assert_eq!(vz_platform::file_info::hard_link_count(&path), Some(2));
+    assert_eq!(fs::read_to_string(&link).unwrap(), "original\n");
+    drop(app);
+
+    let mut app = make_test_app();
+    app.restore_session_from(&session_dir);
+    app.cur_buf_mut().huge_mut().unwrap().wait_index();
+    assert_eq!(app.cur_buf().line(0), "edit original");
+    assert!(app.cur_buf().dirty);
+
+    // 画面の「保存して終了」では、確認を待っている間は上書きしない。
+    let ctx = egui::Context::default();
+    app.quit_after_save = true;
+    app.continue_save_and_quit(&ctx);
+    app.continue_save_and_quit(&ctx);
+    assert!(matches!(
+        app.filer_modal,
+        Some(FilerModal::ConfirmHardLinkSave { .. })
+    ));
+    assert!(app.cur_slot().huge_save.is_none());
+    assert!(!app.allow_close);
+    assert_eq!(vz_platform::file_info::hard_link_count(&path), Some(2));
+
+    let input = |key| egui::RawInput {
+        events: vec![key_event(key, false)],
+        ..Default::default()
+    };
+    let _ = ctx.run(input(Key::Escape), |ctx| app.render_filer_modal(ctx));
+    assert!(!app.quit_after_save);
+    assert!(app.cur_buf().dirty);
+    assert_eq!(vz_platform::file_info::hard_link_count(&path), Some(2));
+
+    app.quit_after_save = true;
+    app.continue_save_and_quit(&ctx);
+    let _ = ctx.run(input(Key::Enter), |ctx| app.render_filer_modal(ctx));
+    assert!(app.cur_slot().huge_save.is_some());
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while app.cur_slot().huge_save.is_some() {
+        assert!(std::time::Instant::now() < deadline);
+        app.continue_save_and_quit(&ctx);
+        app.poll_huge_buffers(&ctx);
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    app.continue_save_and_quit(&ctx);
+    assert!(app.allow_close);
+    assert_eq!(fs::read_to_string(&path).unwrap(), "edit original\n");
+    assert_eq!(fs::read_to_string(&link).unwrap(), "original\n");
+    assert_eq!(vz_platform::file_info::hard_link_count(&path), Some(1));
+    drop(app);
+    fs::remove_dir_all(dir).unwrap();
 }
 
 #[test]

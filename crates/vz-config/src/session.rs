@@ -13,14 +13,15 @@
 //!
 //! 要求は設定フォルダの `session/quit-request` ファイルで伝える。起動中の vz は監視スレッドで
 //! このファイルを見つけると `quit-request.<pid>` へ改名して受け取り（同時に1つの vz だけが受け取る）、
-//! 状態を書き終えたら削除する。複数の vz が起動中なら、要求側は受け取られなくなるまで繰り返す。
+//! 状態を書き終えたら削除する。複数の vz が起動中なら、要求側は同じ要求 ID で繰り返す。
+//! 終了を中止した vz は、次の要求 ID を受け付ける。
 
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const SESSION_FILE: &str = "session.ini";
 const REQUEST_FILE: &str = "quit-request";
@@ -200,13 +201,21 @@ pub fn start_watcher(dir: PathBuf, repaint: impl Fn() + Send + 'static) -> Arc<A
         .spawn(move || {
             let request = dir.join(REQUEST_FILE);
             let claim = claim_path(&dir);
+            let mut last_request = None;
             loop {
                 std::thread::sleep(Duration::from_millis(300));
+                let Ok(id) = fs::read_to_string(&request) else {
+                    continue;
+                };
+                // 同じコマンドから繰り返し届く要求は一度だけ処理する。
+                if last_request.as_ref() == Some(&id) || claim.exists() {
+                    continue;
+                }
                 // 改名に成功した1プロセスだけが受け取る
-                if request.exists() && fs::rename(&request, &claim).is_ok() {
+                if fs::rename(&request, &claim).is_ok() {
+                    last_request = Some(id);
                     flag2.store(true, Ordering::SeqCst);
                     repaint();
-                    break;
                 }
             }
         })
@@ -245,6 +254,15 @@ fn has_claim(dir: &Path) -> bool {
 pub fn request_save_and_quit(dir: &Path) -> io::Result<usize> {
     fs::create_dir_all(dir)?;
     let request = dir.join(REQUEST_FILE);
+    let request_id = format!(
+        "{}-{}",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos()
+    );
+    let pending = dir.join(format!(".{REQUEST_FILE}-{request_id}"));
     let mut handled = 0usize;
     // 前回の失敗で残った受け取り済みファイルは消しておく（受け取った vz が居なければ完了しない）
     if let Ok(rd) = fs::read_dir(dir) {
@@ -255,7 +273,13 @@ pub fn request_save_and_quit(dir: &Path) -> io::Result<usize> {
         }
     }
     loop {
-        fs::write(&request, b"")?;
+        // 監視側が要求 ID の書きかけを読まないよう、書き終えてから公開する。
+        if let Err(e) =
+            fs::write(&pending, &request_id).and_then(|()| fs::rename(&pending, &request))
+        {
+            let _ = fs::remove_file(&pending);
+            return Err(e);
+        }
         // 監視は 0.3 秒ごと。最小化中などで受け取りが遅れても待てるよう余裕を持たせる
         let claimed = wait_until(Duration::from_secs(3), || !request.exists());
         if !claimed {
@@ -358,17 +382,20 @@ mod tests {
         assert_eq!(request_save_and_quit(&dir).unwrap(), 0);
         assert!(!dir.join(REQUEST_FILE).exists());
 
-        // 監視スレッドが要求を受け取り、完了を知らせると 1 件として数える
+        // 同じウィンドウが開いたままなら、別のコマンドから再試行できる。
         let flag = start_watcher(dir.clone(), || {});
         let dir2 = dir.clone();
         let flag2 = flag.clone();
         let responder = std::thread::spawn(move || {
-            wait_until(Duration::from_secs(10), || flag2.load(Ordering::SeqCst));
-            finish_request(&dir2);
+            for _ in 0..2 {
+                assert!(wait_until(Duration::from_secs(10), || flag2
+                    .swap(false, Ordering::SeqCst)));
+                finish_request(&dir2);
+            }
         });
         assert_eq!(request_save_and_quit(&dir).unwrap(), 1);
+        assert_eq!(request_save_and_quit(&dir).unwrap(), 1);
         responder.join().unwrap();
-        assert!(flag.load(Ordering::SeqCst));
         let _ = fs::remove_dir_all(&dir);
     }
 }

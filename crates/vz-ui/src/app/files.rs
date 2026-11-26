@@ -581,6 +581,9 @@ impl VzEditorApp {
 
     /// 「保存して終了」: パスのある未保存バッファを保存し、無題のバッファは順に保存先を尋ねる。
     pub(super) fn save_dirty_buffers_for_quit(&mut self) -> QuitSaveStep {
+        if self.buffers.iter().any(|slot| slot.huge_save.is_some()) {
+            return QuitSaveStep::WaitingForHugeSave;
+        }
         for idx in 0..self.buffers.len() {
             if !self.buffers[idx].buffer.dirty {
                 continue;
@@ -588,6 +591,11 @@ impl VzEditorApp {
             let Some(path) = self.buffers[idx].buffer.file_path.clone() else {
                 continue;
             };
+            if self.buffers[idx].buffer.is_huge() {
+                self.switch_buffer_to(idx);
+                self.perform_save(path);
+                return QuitSaveStep::WaitingForHugeSave;
+            }
             if let Err(e) = self.buffers[idx].buffer.save_to_path(&path) {
                 self.switch_buffer_to(idx);
                 self.status_message = format!("保存エラーのため終了を中止しました: {e}");
@@ -601,7 +609,11 @@ impl VzEditorApp {
     }
 
     pub(super) fn continue_save_and_quit(&mut self, ctx: &egui::Context) {
-        if !self.quit_after_save || self.pending_dialog.is_some() || self.inline_prompt.is_some() {
+        if !self.quit_after_save
+            || self.pending_dialog.is_some()
+            || self.inline_prompt.is_some()
+            || self.filer_modal.is_some()
+        {
             return;
         }
         match self.save_dirty_buffers_for_quit() {
@@ -623,6 +635,7 @@ impl VzEditorApp {
             QuitSaveStep::Failed => {
                 self.quit_after_save = false;
             }
+            QuitSaveStep::WaitingForHugeSave => {}
         }
     }
 

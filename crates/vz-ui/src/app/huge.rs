@@ -136,6 +136,7 @@ impl VzEditorApp {
                 h.set_busy(false);
             }
             self.status_message = format!("保存エラー: {e}");
+            self.quit_after_save = false;
             return;
         }
         self.buffers[idx].huge_save = Some(HugeSaveJob {
