@@ -1896,6 +1896,69 @@ fn test_drag_file_tabs_in_the_buffer_strip() {
 }
 
 #[test]
+fn test_double_click_file_tab_copies_only_the_file_name() {
+    let ctx = egui::Context::default();
+    let mut app = make_test_app();
+    app.cur_buf_mut().file_path = None;
+    let mut file = TextBuffer::new();
+    let name = "議事録 final.md";
+    file.file_path = Some(PathBuf::from("project").join(name));
+    file.dirty = true;
+    let mut slot = BufferSlot::new(file);
+    slot.markdown_view = true;
+    app.buffers.push(slot);
+
+    let frame = |app: &mut VzEditorApp, events| {
+        ctx.run(
+            egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(1024.0, 680.0))),
+                events,
+                ..Default::default()
+            },
+            |ctx| app.render_buffer_strip(ctx),
+        )
+    };
+    let output = frame(&mut app, vec![]);
+    let tab_center = |label: &str| {
+        output
+            .shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) if text.galley.text().contains(label) => {
+                    Some(text.visual_bounding_rect().center())
+                }
+                _ => None,
+            })
+            .unwrap()
+    };
+    let click = |app: &mut VzEditorApp, pos| {
+        let button = |pressed| Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        frame(app, vec![Event::PointerMoved(pos), button(true)]);
+        frame(app, vec![button(false)]);
+    };
+
+    let file_tab = tab_center("議事録 final.md*[V]");
+    click(&mut app, file_tab);
+    assert_eq!(app.active_buf, 1);
+    assert!(app.clipboard_out.is_none());
+    click(&mut app, file_tab);
+    assert_eq!(app.clipboard_out.take().as_deref(), Some(name));
+    assert_eq!(app.internal_clipboard, name);
+
+    let untitled_tab = tab_center("[無題]");
+    click(&mut app, untitled_tab);
+    click(&mut app, untitled_tab);
+    assert_eq!(app.active_buf, 0);
+    assert!(app.clipboard_out.is_none());
+    assert_eq!(app.internal_clipboard, name);
+}
+
+#[test]
 fn test_buffer_strip_and_browser_screen_render_headless() {
     let mut app = make_test_app();
     app.toggle_browser();

@@ -428,17 +428,17 @@ impl VzEditorApp {
             return;
         }
         let in_editor = self.mode == AppMode::Editor;
-        let mut selected_idx: Option<usize> = None;
+        let mut selected_tab = None;
         let mut tab_move = None;
         let mut terminal_clicked = false;
         let mut browser_clicked: Option<usize> = None;
-        let can_reorder = self.buffers.len() > 1
-            && self.filer_modal.is_none()
+        let can_use_tab_gestures = self.filer_modal.is_none()
             && self.inline_prompt.is_none()
             && self.pending_dialog.is_none()
             && self.open_menu.is_none()
             && !self.show_help
             && !self.show_about;
+        let can_reorder = self.buffers.len() > 1 && can_use_tab_gestures;
         let file_tab_sense = if can_reorder {
             Sense::click_and_drag()
         } else {
@@ -469,13 +469,8 @@ impl VzEditorApp {
                     for (idx, slot) in self.buffers.iter().enumerate() {
                         let dirty_mark = if slot.buffer.dirty { "*" } else { "" };
                         let view_mark = if slot.markdown_view { "[V]" } else { "" };
-                        let title = format!(
-                            "{}:{}{}{}",
-                            idx + 1,
-                            slot.buffer.display_name(),
-                            dirty_mark,
-                            view_mark
-                        );
+                        let name = slot.buffer.display_name();
+                        let title = format!("{}:{name}{dirty_mark}{view_mark}", idx + 1);
                         let response = ui
                             .push_id(slot.tab_id, |ui| {
                                 strip_tab(
@@ -487,7 +482,10 @@ impl VzEditorApp {
                             })
                             .inner;
                         if response.clicked() {
-                            selected_idx = Some(idx);
+                            let copy_name = can_use_tab_gestures
+                                && response.double_clicked_by(primary)
+                                && slot.buffer.file_path.is_some();
+                            selected_tab = Some((idx, copy_name.then_some(name)));
                         }
                         if can_reorder {
                             if response.drag_started_by(primary) {
@@ -564,11 +562,15 @@ impl VzEditorApp {
         if let Some((from, to)) = tab_move {
             self.move_buffer_tab(from, to);
             ctx.request_repaint();
-        } else if let Some(idx) = selected_idx {
+        } else if let Some((idx, copied_name)) = selected_tab {
             if self.mode != AppMode::Editor {
                 self.enter_editor();
             }
             self.switch_buffer_to(idx);
+            if let Some(name) = copied_name {
+                self.status_message = format!("ファイル名をコピーしました: {name}");
+                self.copy_to_clipboard(name);
+            }
         }
         if terminal_clicked && self.mode != AppMode::Terminal {
             self.toggle_terminal(ctx);
