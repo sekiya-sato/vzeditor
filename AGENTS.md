@@ -72,7 +72,7 @@
 - ブラウザ（WebView2）の中のキーは、SendKeys の合成入力だと `KeyboardEvent.code` が空になるなど実キーと違う。ページ内のキー操作の判定は `keyCode` も見る。
 - 未確認の OS は README・報告に明記する（現状: Windows 11 は実機、Linux は WSL2、macOS は GitHub Actions のビルド・テスト・起動のみ）。
 
-## Release 手順（Windows 版）
+## Release 手順 (Windows)
 
 @build.md があれば従うこと。
 
