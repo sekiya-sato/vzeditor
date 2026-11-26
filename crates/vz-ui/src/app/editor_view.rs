@@ -126,7 +126,7 @@ impl VzEditorApp {
                     None => "M".to_string(),
                 };
 
-                let (cell_w, preedit_px_w, gutter_text_w, cursor_w) = ui.fonts(|f| {
+                let (cell_w, preedit_px_w, gutter_text_w, cursor_w, half_cell_w) = ui.fonts(|f| {
                     let pw = if preedit_disp.is_empty() {
                         0.0
                     } else {
@@ -158,8 +158,11 @@ impl VzEditorApp {
                         .x
                         / 10.0)
                         .max(1.0);
-                    (cell_w, pw, gw, char_w.max(half_cell_w))
+                    (cell_w, pw, gw, char_w.max(half_cell_w), half_cell_w)
                 });
+                // 折り返し桁数は行末キャレット（半角1文字）の分だけ空ける。
+                // カーソル下の文字幅（全角・タブ）で変えると、カーソル位置で画面全体の折り返しが変わる
+                let wrap_reserve_w = half_cell_w;
 
                 let gutter_pad = (self.font_size * 1.1).clamp(14.0, 28.0);
                 let gutter_w = (gutter_text_w + gutter_pad).max(48.0);
@@ -180,7 +183,7 @@ impl VzEditorApp {
                 // 折り返し表示: 表示幅（セル数）で論理行を表示行に分ける。描画中は行割りをスロットから借りる
                 // 巨大ファイルは折り返さない
                 let wrap: Option<WrapLayout> = if self.word_wrap && !huge {
-                    let cols = ((viewport_w - cursor_w) / cell_w).floor().max(8.0) as usize;
+                    let cols = ((viewport_w - wrap_reserve_w) / cell_w).floor().max(8.0) as usize;
                     self.wrap_cols = cols;
                     self.ensure_wrap_layout(cols);
                     self.cur_slot_mut().wrap.take()
@@ -191,7 +194,7 @@ impl VzEditorApp {
                 // 表示行の番号はこの画面の中の番号（0 = 先頭）で、縦のピクセル位置は使わない
                 let visible_rows = self.last_visible_lines + 1;
                 let huge_rows: Vec<wrap::HugeRow> = if huge_wrap {
-                    let cols = ((viewport_w - cursor_w) / cell_w).floor().max(8.0) as usize;
+                    let cols = ((viewport_w - wrap_reserve_w) / cell_w).floor().max(8.0) as usize;
                     self.wrap_cols = cols;
                     let wheel = if response.hovered() {
                         ctx.input(|i| i.smooth_scroll_delta.y)
