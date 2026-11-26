@@ -82,7 +82,6 @@ enum PrefixKey {
 enum EditorAction {
     ToggleHelp,
     NewBuffer,
-    OpenFile,
     MoveLineStart,
     MoveLineEnd,
     DeleteLine,
@@ -96,8 +95,8 @@ enum EditorAction {
     Paste,
     BeginSelect,
     CloseBuffer,
-    /// 前を検索（Shift+F3）
-    FindPrev,
+    /// 次を検索（F3）または前を検索（Shift+F3）
+    RepeatSearch(bool),
     /// 行の複製（Shift+F10）
     DuplicateLine,
     /// 検索語の行マーク切替（サクラ互換 Ctrl+F3）

@@ -1592,7 +1592,7 @@ fn test_sakura_enter_replaces_selection_with_indent() {
 }
 
 #[test]
-fn test_sakura_f2_f4_f5() {
+fn test_sakura_new_close_and_unassigned_f5() {
     let ctx = egui::Context::default();
     let mut app = make_sakura_app("abcdef\nghi");
     app.cur_buf_mut().dirty = false;
@@ -1608,8 +1608,9 @@ fn test_sakura_f2_f4_f5() {
     assert_eq!(app.buffers.len(), 2);
     assert_eq!(app.active_buf, 1);
 
-    // F4: 現在のバッファを閉じる（Ctrl+F4 と同じ）
-    run_editor(&ctx, &mut app, none, vec![key_with(Key::F4, none)]);
+    // Ctrl+F4: 現在のバッファを閉じる
+    let ctrl = mods(true, false);
+    run_editor(&ctx, &mut app, ctrl, vec![key_with(Key::F4, ctrl)]);
     assert_eq!(app.buffers.len(), 1);
     assert_eq!(app.cur_buf().text_lines(), vec!["abcdef", "ghi"]);
 }

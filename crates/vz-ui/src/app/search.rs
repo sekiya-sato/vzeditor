@@ -133,15 +133,21 @@ impl SearchState {
                 i.events.retain(|ev| !matches!(ev, Event::Text(_)));
             }
         });
-        // TextEdit に渡す前に Enter をダイアログの既定操作にする。
+        // TextEdit に渡す前に Enter と検索用の F3 を処理する。
         let mut action = if focus {
             None
         } else {
-            // consume_key は余分な Shift を無視するので、Shift+Enter を先に判定する。
-            let shift_enter = ctx.input_mut(|i| i.consume_key(egui::Modifiers::SHIFT, Key::Enter));
-            let enter =
-                !shift_enter && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, Key::Enter));
-            match (dialog, enter, shift_enter) {
+            let can_find = matches!(dialog, SearchDialog::Find | SearchDialog::Replace);
+            // consume_key は余分な Shift を無視するので、Shift 付きのキーを先に判定する。
+            let (forward, backward) = ctx.input_mut(|i| {
+                let backward = i.consume_key(egui::Modifiers::SHIFT, Key::Enter)
+                    || (can_find && i.consume_key(egui::Modifiers::SHIFT, Key::F3));
+                let forward = !backward
+                    && (i.consume_key(egui::Modifiers::NONE, Key::Enter)
+                        || (can_find && i.consume_key(egui::Modifiers::NONE, Key::F3)));
+                (forward, backward)
+            });
+            match (dialog, forward, backward) {
                 (SearchDialog::Jump, true, _) => Some(DialogAction::Jump),
                 (SearchDialog::Grep, true, _) if self.grep_job.is_none() => {
                     Some(DialogAction::Grep)
@@ -844,6 +850,63 @@ mod tests {
             vec![key_event(Key::Enter, egui::Modifiers::SHIFT)],
         );
         assert_eq!(app.cur_buf().selection_range(), Some(((1, 0), (1, 1))));
+    }
+
+    #[test]
+    fn f3_repeats_search_and_f4_leaves_selection_in_both_schemes() {
+        for scheme in [KeyScheme::Sakura, KeyScheme::Vz] {
+            let ctx = egui::Context::default();
+            let mut app = app_with_text("最 猫\n猫\n猫");
+            app.key_scheme = scheme;
+            app.search.query = "猫".into();
+            app.cur_buf_mut().set_cursor(0, 0);
+
+            let next = || key_event(Key::F3, egui::Modifiers::NONE);
+            input_frame(&ctx, &mut app, vec![next()]);
+            let first = Some(((0, 2), (0, 3)));
+            assert_eq!(app.cur_buf().selection_range(), first);
+            input_frame(&ctx, &mut app, vec![next()]);
+            assert_eq!(app.cur_buf().selection_range(), Some(((1, 0), (1, 1))));
+            input_frame(
+                &ctx,
+                &mut app,
+                vec![key_event(Key::F3, egui::Modifiers::SHIFT)],
+            );
+            assert_eq!(app.cur_buf().selection_range(), first);
+            input_frame(
+                &ctx,
+                &mut app,
+                vec![key_event(Key::F4, egui::Modifiers::NONE)],
+            );
+            assert_eq!(app.cur_buf().selection_range(), first);
+            assert!(app.filer_modal.is_none());
+            assert_eq!(app.cur_buf().text_lines(), ["最 猫", "猫", "猫"]);
+        }
+    }
+
+    #[test]
+    fn f3_searches_in_both_find_and_replace_dialogs() {
+        for dialog in [SearchDialog::Find, SearchDialog::Replace] {
+            let ctx = egui::Context::default();
+            let mut app = app_with_text("猫\n猫");
+            app.cur_buf_mut().set_cursor(0, 1);
+            app.search.query = "猫".into();
+            app.search.auto_close = false;
+            app.open_search_dialog(dialog);
+            input_frame(&ctx, &mut app, vec![]);
+            input_frame(
+                &ctx,
+                &mut app,
+                vec![key_event(Key::F3, egui::Modifiers::NONE)],
+            );
+            assert_eq!(app.cur_buf().selection_range(), Some(((1, 0), (1, 1))));
+            input_frame(
+                &ctx,
+                &mut app,
+                vec![key_event(Key::F3, egui::Modifiers::SHIFT)],
+            );
+            assert_eq!(app.cur_buf().selection_range(), Some(((0, 0), (0, 1))));
+        }
     }
 
     #[test]

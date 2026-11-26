@@ -105,7 +105,7 @@ impl VzEditorApp {
                 },
                 MenuEntry::Item {
                     label: "ファイルを開く...",
-                    shortcut: sc("Ctrl+O", "F3"),
+                    shortcut: sc("Ctrl+O", ""),
                     action: MenuAction::OpenFile,
                     enabled: true,
                 },
@@ -129,7 +129,7 @@ impl VzEditorApp {
                 },
                 MenuEntry::Item {
                     label: "現在のバッファを閉じる",
-                    shortcut: sc("Ctrl+F4 / F4", "Ctrl+F4"),
+                    shortcut: "Ctrl+F4",
                     action: MenuAction::CloseBuffer,
                     enabled: true,
                 },
@@ -213,7 +213,7 @@ impl VzEditorApp {
                     } else {
                         "行頭へ移動"
                     },
-                    shortcut: sc("Home", "^Q^S / F4"),
+                    shortcut: sc("Home", "^Q^S"),
                     action: MenuAction::MoveLineStart,
                     enabled: in_editor,
                 },
@@ -248,13 +248,13 @@ impl VzEditorApp {
                 },
                 MenuEntry::Item {
                     label: "次を検索",
-                    shortcut: "Alt+N",
+                    shortcut: "F3 / Alt+N",
                     action: MenuAction::RepeatSearch(false),
                     enabled: in_editor,
                 },
                 MenuEntry::Item {
                     label: "前を検索",
-                    shortcut: sc("Shift+F3", "Alt+Shift+N"),
+                    shortcut: "Shift+F3 / Alt+Shift+N",
                     action: MenuAction::RepeatSearch(true),
                     enabled: in_editor,
                 },

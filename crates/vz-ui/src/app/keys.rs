@@ -249,11 +249,6 @@ impl VzEditorApp {
                 return true;
             }
         }
-        if !ctrl && shift && key == Key::F3 {
-            self.repeat_search(true);
-            return true;
-        }
-
         // ファンクションキー
         match (key, ctrl, shift) {
             (Key::F1, false, false) => {
@@ -281,18 +276,13 @@ impl VzEditorApp {
                 self.sakura_paste_from_clipboard();
                 return true;
             }
-            // F4 / Ctrl+F4: 現在のバッファを閉じる（F5 は割り当てなし）
-            (Key::F4, _, false) => {
+            // Ctrl+F4: 現在のバッファを閉じる
+            (Key::F4, true, false) => {
                 self.close_current_buffer();
                 return true;
             }
-            // F2 / F3 は VZ 互換と同じ（新規 / 開く）
             (Key::F2, false, false) => {
                 self.execute_editor_action(EditorAction::NewBuffer);
-                return true;
-            }
-            (Key::F3, false, false) => {
-                self.execute_editor_action(EditorAction::OpenFile);
                 return true;
             }
             (Key::F10, false, true) => {
@@ -302,7 +292,6 @@ impl VzEditorApp {
             (
                 Key::F2
                 | Key::F3
-                | Key::F4
                 | Key::F5
                 | Key::F6
                 | Key::F7

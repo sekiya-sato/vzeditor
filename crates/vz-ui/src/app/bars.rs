@@ -611,15 +611,15 @@ impl VzEditorApp {
         use EditorAction::*;
         const NONE: (&str, EditorAction) = ("", Nop);
         if sakura {
-            // サクラ互換（F1〜F3 は VZ 互換と同じ。未対応のキーは空欄）
+            // サクラ互換の割り当て。未対応のキーは空欄。
             let mut keys = [NONE; 12];
             match layer {
                 FKeyLayer::Normal => {
                     keys[..9].copy_from_slice(&[
                         ("ヘルプ", ToggleHelp),
                         ("新規", NewBuffer),
-                        ("開く", OpenFile),
-                        ("閉じる", CloseBuffer),
+                        ("次検索", RepeatSearch(false)),
+                        NONE,
                         NONE,
                         ("選択", BeginSelect),
                         ("切取", Cut),
@@ -628,7 +628,7 @@ impl VzEditorApp {
                     ]);
                 }
                 FKeyLayer::Shift => {
-                    keys[2] = ("前検索", FindPrev);
+                    keys[2] = ("前検索", RepeatSearch(true));
                     keys[7] = ("コピー", Copy);
                     keys[9] = ("行複製", DuplicateLine);
                 }
@@ -640,17 +640,16 @@ impl VzEditorApp {
             }
             return keys;
         }
-        // VZ 互換は修飾キーを区別しない（Ctrl+F4 の「閉じる」と、OS の Alt+F4 の終了を除く）
-        let (f4, f5, f7, f8) = if in_md_view {
-            ("先頭", "末尾", "半頁上", "半頁下")
+        let (f5, f7, f8) = if in_md_view {
+            ("末尾", "半頁上", "半頁下")
         } else {
-            ("行頭", "行末", "単語左", "単語右")
+            ("行末", "単語左", "単語右")
         };
         let mut keys = [
             ("ヘルプ", ToggleHelp),
             ("新規", NewBuffer),
-            ("開く", OpenFile),
-            (f4, MoveLineStart),
+            ("次検索", RepeatSearch(false)),
+            NONE,
             (f5, MoveLineEnd),
             ("行削除", DeleteLine),
             (f7, MoveWordLeft),
@@ -661,9 +660,16 @@ impl VzEditorApp {
             NONE,
         ];
         match layer {
-            FKeyLayer::Ctrl => keys[3] = ("閉じる", CloseBuffer),
-            FKeyLayer::Alt => keys[3] = ("終了", Quit),
-            FKeyLayer::Normal | FKeyLayer::Shift => {}
+            FKeyLayer::Shift => keys[2] = ("前検索", RepeatSearch(true)),
+            FKeyLayer::Ctrl | FKeyLayer::Alt => {
+                keys[2] = NONE;
+                keys[3] = if layer == FKeyLayer::Ctrl {
+                    ("閉じる", CloseBuffer)
+                } else {
+                    ("終了", Quit)
+                };
+            }
+            FKeyLayer::Normal => {}
         }
         keys
     }
@@ -935,22 +941,27 @@ mod tests {
         let sakura = |layer| VzEditorApp::editor_fkeys(true, false, layer);
         assert_eq!(
             assigned(&sakura(FKeyLayer::Shift)),
-            vec![(2, FindPrev), (7, Copy), (9, DuplicateLine)]
+            vec![(2, RepeatSearch(true)), (7, Copy), (9, DuplicateLine)]
         );
         assert_eq!(
             assigned(&sakura(FKeyLayer::Ctrl)),
             vec![(2, ToggleSearchMarks), (3, CloseBuffer)]
         );
         assert_eq!(assigned(&sakura(FKeyLayer::Alt)), vec![(3, Quit)]);
-        // VZ 互換は Shift を区別せず、Ctrl+F4 は閉じる、Alt+F4 は終了
         for md in [false, true] {
             let vz = |layer| VzEditorApp::editor_fkeys(false, md, layer);
             let normal = vz(FKeyLayer::Normal);
-            assert_eq!(vz(FKeyLayer::Shift), normal);
+            assert_eq!(normal[2].1, RepeatSearch(false));
+            assert_eq!(normal[3].1, Nop);
+            assert_eq!(vz(FKeyLayer::Shift)[2].1, RepeatSearch(true));
+            assert_eq!(vz(FKeyLayer::Shift)[3].1, Nop);
+            assert_eq!(vz(FKeyLayer::Ctrl)[2].1, Nop);
             assert_eq!(vz(FKeyLayer::Ctrl)[3].1, CloseBuffer);
             assert_eq!(vz(FKeyLayer::Ctrl)[4], normal[4]);
             assert_eq!(vz(FKeyLayer::Alt)[3].1, Quit);
         }
+        assert_eq!(sakura(FKeyLayer::Normal)[2].1, RepeatSearch(false));
+        assert_eq!(sakura(FKeyLayer::Normal)[3].1, Nop);
         let filer_alt = VzEditorApp::filer_fkeys(FKeyLayer::Alt);
         assert_eq!(filer_alt[3].1, FilerAction::Quit);
     }

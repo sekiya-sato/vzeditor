@@ -13,9 +13,6 @@ impl VzEditorApp {
             EditorAction::NewBuffer => {
                 self.new_empty_buffer();
             }
-            EditorAction::OpenFile => {
-                self.trigger_open();
-            }
             EditorAction::MoveLineStart => {
                 if in_md_view {
                     self.scroll_markdown_to_top();
@@ -71,7 +68,7 @@ impl VzEditorApp {
             EditorAction::Paste => self.sakura_paste_from_clipboard(),
             EditorAction::BeginSelect => self.toggle_select_mode(),
             EditorAction::CloseBuffer => self.close_current_buffer(),
-            EditorAction::FindPrev => self.repeat_search(true),
+            EditorAction::RepeatSearch(up) => self.repeat_search(up),
             EditorAction::DuplicateLine => self.sakura_duplicate_line(),
             EditorAction::ToggleSearchMarks => {
                 if let Err(message) = self.toggle_search_marks() {
@@ -351,6 +348,16 @@ impl VzEditorApp {
 
                     let ctrl = modifiers.ctrl || modifiers.command;
 
+                    if key == Key::F3 && !ctrl && !modifiers.alt {
+                        suppress_text_this_frame = true;
+                        self.execute_editor_action(EditorAction::RepeatSearch(modifiers.shift));
+                        continue;
+                    }
+                    // Ctrl+F4 以外はエディターの選択・カーソルを動かさない。
+                    if key == Key::F4 && (!ctrl || modifiers.alt || modifiers.shift) {
+                        continue;
+                    }
+
                     // 0. サクラ互換のキー割り当て（VZ の処理は通らない）
                     if self.is_sakura() {
                         if self.handle_sakura_key(key, modifiers, in_md_view) {
@@ -440,7 +447,7 @@ impl VzEditorApp {
                         PrefixKey::None => {}
                     }
 
-                    // 1.5. Ctrl+F4: ファイル（現在のバッファ）を閉じる（F4 の行頭移動より先に判定）
+                    // 1.5. Ctrl+F4: ファイル（現在のバッファ）を閉じる
                     if key == Key::F4 && ctrl && !modifiers.alt && !modifiers.shift {
                         suppress_text_this_frame = true;
                         self.close_current_buffer();
@@ -451,8 +458,6 @@ impl VzEditorApp {
                     let fkey_action = match key {
                         Key::F1 => Some(EditorAction::ToggleHelp),
                         Key::F2 => Some(EditorAction::NewBuffer),
-                        Key::F3 => Some(EditorAction::OpenFile),
-                        Key::F4 => Some(EditorAction::MoveLineStart),
                         Key::F5 => Some(EditorAction::MoveLineEnd),
                         Key::F6 => Some(EditorAction::DeleteLine),
                         Key::F7 => Some(EditorAction::MoveWordLeft),

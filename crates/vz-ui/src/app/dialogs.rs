@@ -22,9 +22,9 @@ impl VzEditorApp {
             .show(ctx, |ui| {
                 let rows: &[(&str, &str)] = match self.mode {
                     AppMode::Editor if self.key_scheme == KeyScheme::Sakura => &[
-                        ("Ctrl+N / Ctrl+O", "新規作成 / 開く (F2 / F3)"),
+                        ("Ctrl+N・F2 / Ctrl+O", "新規作成 / 開く"),
                         ("Ctrl+S / Ctrl+Shift+S", "上書き保存 / 名前を付けて保存"),
-                        ("F4 / Ctrl+F4", "ファイル（現在のバッファ）を閉じる"),
+                        ("Ctrl+F4", "ファイル（現在のバッファ）を閉じる"),
                         ("Ins", "挿入 / 上書きの切替 (上書き時はカーソルが下半分)"),
                         ("Enter / Shift+Enter", "改行 (行頭の空白を引き継ぐ) / インデントなしで改行"),
                         ("Ctrl+Z / Ctrl+Y", "元に戻す / やり直し"),
@@ -36,7 +36,8 @@ impl VzEditorApp {
                         ("Ctrl+K / Ctrl+U / Ctrl+D", "行末まで / 行頭まで / 単語を切り取り (Shift で削除)"),
                         ("Ctrl+BkSp / Ctrl+Del / Ctrl+I", "単語の左・右を削除 / 行の二重化"),
                         ("Ctrl+F / R / G / J", "検索 / 置換 / Grep / 行ジャンプ"),
-                        ("Alt+N / Shift+F3 / Ctrl+F3", "次を検索 / 前を検索 / 行マーク切替"),
+                        ("F3 / Shift+F3", "次を検索 / 前を検索 (Alt+N / Alt+Shift+N も可)"),
+                        ("Ctrl+F3", "検索の行マーク切替"),
                         ("Ctrl+Tab / Ctrl+Shift+Tab", "バッファ切替"),
                         ("Ctrl+Shift+V / Ctrl+P", "Markdown 編集 / ビュー切替"),
                         ("Ctrl++ / Ctrl+- / Ctrl+0", "フォントサイズ (Ctrl+ホイールも可)"),
@@ -64,7 +65,7 @@ impl VzEditorApp {
                         ("Enter / Ctrl+M / Shift+Enter", "改行 (行頭の空白を引き継ぐ) / インデントなしで改行"),
                         ("Ins", "挿入 / 上書きの切替 (上書き時はカーソルが下半分)"),
                         ("Alt+F / R / G / J", "検索 / 置換 / Grep / 行ジャンプ"),
-                        ("Alt+N / Alt+Shift+N", "次を検索 / 前を検索"),
+                        ("F3 / Shift+F3", "次を検索 / 前を検索 (Alt+N / Alt+Shift+N も可)"),
                         ("Ctrl+W / Ctrl+Shift+W", "複数バッファ（裏画面）切替"),
                         ("Ctrl+P / Ctrl+K+V / Alt+P", "Markdown 編集 / ビュー（プレビュー）切替"),
                         ("Ctrl++ / Ctrl+- / Ctrl+0", "フォントサイズ拡大 / 縮小 / リセット"),
