@@ -2819,8 +2819,11 @@ fn test_recent_menus_open_history_entries() {
     );
     app.execute_menu_action(&ctx, MenuAction::OpenRecentFolder(0));
     assert_eq!(app.mode, AppMode::Filer);
-    let current = history::normalize(&app.filer.active_pane().current_dir).unwrap();
-    assert!(history::same_path(&current, &dir));
+    // 一時フォルダがジャンクションやシンボリックリンクを経由していても、実体のパスで比較する。
+    assert_eq!(
+        app.filer.active_pane().current_dir,
+        dir.canonicalize().unwrap()
+    );
 
     fs::remove_dir_all(&dir).unwrap();
 }
