@@ -6,11 +6,26 @@ repo=$(cd -- "$(dirname -- "$0")/.." && pwd)
 cd -- "$repo"
 target_dir="${CARGO_TARGET_DIR:-$HOME/vz-target}"
 cargo test --locked --target-dir "$target_dir"
-cargo build --locked --release --bin vz --target-dir "$target_dir"
+# 古い Ubuntu（22.04 以降）でも動くよう、glibc 2.35 向けにリンクする。
+glibc_target=x86_64-unknown-linux-gnu.2.35
+if ! command -v cargo-zigbuild >/dev/null; then
+    printf 'cargo-zigbuild がありません。uv tool install cargo-zigbuild で入れてください\n' >&2
+    exit 1
+fi
+if ! command -v zig >/dev/null && [[ -z ${CARGO_ZIGBUILD_ZIG_PATH:-} ]]; then
+    # uv tool install cargo-zigbuild が入れた ziglang の zig を使う。
+    zig_bin=$(find "$HOME/.local/share/uv/tools/cargo-zigbuild" -path '*/ziglang/zig' -type f -print -quit 2>/dev/null || true)
+    if [[ -z $zig_bin ]]; then
+        printf 'zig がありません\n' >&2
+        exit 1
+    fi
+    export CARGO_ZIGBUILD_ZIG_PATH=$zig_bin
+fi
+cargo zigbuild --locked --release --bin vz --target "$glibc_target" --target-dir "$target_dir"
 
 install_dir="$HOME/bin"
 dest="$install_dir/vz"
-source="$target_dir/release/vz"
+source="$target_dir/x86_64-unknown-linux-gnu/release/vz"
 mkdir -p -- "$install_dir"
 exec 9>"$install_dir/.vz-release.lock"
 flock -n 9

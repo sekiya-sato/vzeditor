@@ -10,6 +10,8 @@ PowerShell で実行します。既定の配置先は `C:\gitroot\ut\vzeditor\vz
 
 Ubuntu WSL2 で、リポジトリのルートから実行します。配置先は `~/bin/vz` です。ビルド出力は `CARGO_TARGET_DIR`、未設定なら `~/vz-target` に置きます。
 
+glibc 2.35（Ubuntu 22.04）以降で動くよう `cargo zigbuild` でビルドします。初回は `uv tool install cargo-zigbuild`（zig も入ります）を実行してください。
+
 ```bash
 bash scripts/release-wsl.sh
 ```

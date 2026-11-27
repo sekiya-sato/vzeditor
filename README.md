@@ -204,6 +204,14 @@ Windows・macOS・Linux X11 では、ファイルタブを別の VZ ウィンド
 | `vz-linux-x86_64` / `vz-linux-aarch64` | Linux |
 | `*.deb` / `*.rpm` | Ubuntu・Debian / Fedora など（`/usr/bin/vz` とデスクトップ登録） |
 
+### SSH 先の Linux で使う（WSL2 から）
+
+WSL2 から `ssh -X` / `-Y` で起動すると、WSLg の XWayland ではマウスカーソルが表示されません（vz 以外の X11 アプリも同じ）。[waypipe](https://gitlab.freedesktop.org/mstoeckl/waypipe) で Wayland のまま転送してください。WSL2 と接続先の両方に `sudo apt install waypipe` で入れ、次のように起動します（版が違っても動作を確認済み）。
+
+```bash
+waypipe ssh ホスト名 vz
+```
+
 ## ビルド
 
 ```powershell
