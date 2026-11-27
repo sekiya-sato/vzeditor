@@ -83,7 +83,7 @@ impl VzEditorApp {
         }
     }
 
-    /// 復元したターミナルを起動する（`--restore` の後の最初のフレーム）。
+    /// 復元したターミナルを起動する（状態を復元した後の最初のフレーム）。
     pub(super) fn start_pending_terminal(&mut self, ctx: &egui::Context) {
         let Some(cwd) = self.pending_terminal_cwd.take() else {
             return;

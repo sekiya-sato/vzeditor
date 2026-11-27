@@ -1,6 +1,15 @@
 use super::wrap::wrap_breaks;
 use super::*;
 
+impl VzEditorApp {
+    fn restore_test_session(&mut self, dir: &Path) {
+        let (entries, window) = session::read_session(dir).unwrap();
+        self.restore_entries(&entries);
+        self.apply_session_window(window);
+        fs::remove_file(dir.join("session.ini")).unwrap();
+    }
+}
+
 pub(super) fn make_test_app() -> VzEditorApp {
     let mut buf = TextBuffer::new();
     buf.file_path = Some(PathBuf::from("notes.md"));
@@ -44,7 +53,8 @@ pub(super) fn make_test_app() -> VzEditorApp {
         select_mode: false,
         overwrite_mode: false,
         clipboard_out: None,
-        quit_request: None,
+        release_watcher: None,
+        release_startup: None,
         last_disk_check: std::time::Instant::now(),
         conflict_queue: Vec::new(),
         word_wrap: false,
@@ -222,15 +232,15 @@ fn test_save_session_and_restore() {
     app.buffers.push(BufferSlot::new(TextBuffer::new())); // 未編集の無題は残さない
     app.active_buf = 2;
 
-    app.save_session_to(&session_dir).unwrap();
-    // パスのある未保存バッファは保存される
-    assert_eq!(fs::read_to_string(&dirty_path).unwrap(), "# old new");
-    assert!(!app.buffers[1].buffer.dirty);
+    app.save_session(&session_dir).unwrap();
+    // パスのある未保存バッファも元ファイルには書き込まない。
+    assert_eq!(fs::read_to_string(&dirty_path).unwrap(), "# old");
+    assert!(app.buffers[1].buffer.dirty);
 
     let mut app2 = make_test_app();
     app2.buffers = vec![BufferSlot::new(TextBuffer::new())];
     app2.active_buf = 0;
-    app2.restore_session_from(&session_dir);
+    app2.restore_test_session(&session_dir);
     assert_eq!(app2.buffers.len(), 3);
     assert_eq!(
         app2.buffers[0].buffer.file_path.as_deref(),
@@ -239,6 +249,7 @@ fn test_save_session_and_restore() {
     assert_eq!(app2.buffers[0].buffer.cursor_pos(), (2, 3));
     assert!(app2.buffers[1].markdown.visible);
     assert_eq!(app2.buffers[1].buffer.text_lines(), vec!["# old new"]);
+    assert!(app2.buffers[1].buffer.dirty);
     let u2 = &app2.buffers[2].buffer;
     assert!(u2.file_path.is_none() && u2.dirty);
     assert_eq!(u2.text_lines(), vec!["無題の内容", "2行目"]);
@@ -250,7 +261,7 @@ fn test_save_session_and_restore() {
 }
 
 #[test]
-fn test_save_session_keeps_huge_edits_when_save_fails() {
+fn test_save_session_keeps_huge_edits_without_writing_original() {
     let dir = std::env::temp_dir().join(format!("vz_session_huge_{}", std::process::id()));
     let _ = fs::remove_dir_all(&dir);
     fs::create_dir_all(&dir).unwrap();
@@ -265,16 +276,14 @@ fn test_save_session_keeps_huge_edits_when_save_fails() {
     b.insert_text("-vz");
     app.buffers = vec![BufferSlot::new(b)];
     app.active_buf = 0;
-    // 一時ファイルと同名のディレクトリで、原子的保存を失敗させる。
-    fs::create_dir(dir.join(".big.log.vzsave.tmp")).unwrap();
-    app.save_session_to(&session_dir).unwrap();
+    app.save_session(&session_dir).unwrap();
     assert_eq!(fs::read_to_string(&path).unwrap(), "line0\nline1\nline2\n");
     drop(app);
 
     let mut app2 = make_test_app();
     app2.buffers = vec![BufferSlot::new(TextBuffer::new())];
     app2.active_buf = 0;
-    app2.restore_session_from(&session_dir);
+    app2.restore_test_session(&session_dir);
     let buf = &mut app2.cur_slot_mut().buffer;
     assert!(buf.is_huge(), "{}", app2.status_message);
     let buf = &mut app2.cur_slot_mut().buffer;
@@ -296,7 +305,6 @@ fn test_save_session_reports_failure_when_huge_edits_cannot_be_kept() {
     let dir = std::env::temp_dir().join(format!("vz_session_huge_failed_{}", std::process::id()));
     let session_dir = dir.join("session");
     fs::create_dir_all(session::huge_edits_path(&session_dir, 0)).unwrap();
-    fs::create_dir(dir.join(".big.log.vzsave.tmp")).unwrap();
     let path = dir.join("big.log");
     fs::write(&path, "original\n").unwrap();
 
@@ -306,7 +314,7 @@ fn test_save_session_reports_failure_when_huge_edits_cannot_be_kept() {
     buf.insert_text("edit ");
     app.buffers = vec![BufferSlot::new(buf)];
 
-    let err = app.save_session_to(&session_dir).unwrap_err();
+    let err = app.save_session(&session_dir).unwrap_err();
     assert!(err.to_string().contains("編集内容の一時保存"));
     assert!(!session_dir.join("session.ini").exists());
     assert_eq!(fs::read_to_string(&path).unwrap(), "original\n");
@@ -333,13 +341,13 @@ fn test_huge_hard_links_in_both_quit_paths() {
     app.buffers = vec![BufferSlot::new(buf)];
 
     // 外部コマンドの経路では、リンクを保ったまま編集内容を復元する。
-    app.save_session_to(&session_dir).unwrap();
+    app.save_session(&session_dir).unwrap();
     assert_eq!(vz_platform::file_info::hard_link_count(&path), Some(2));
     assert_eq!(fs::read_to_string(&link).unwrap(), "original\n");
     drop(app);
 
     let mut app = make_test_app();
-    app.restore_session_from(&session_dir);
+    app.restore_test_session(&session_dir);
     app.cur_buf_mut().huge_mut().unwrap().wait_index();
     assert_eq!(app.cur_buf().line(0), "edit original");
     assert!(app.cur_buf().dirty);
@@ -387,7 +395,7 @@ fn test_huge_hard_links_in_both_quit_paths() {
 }
 
 #[test]
-fn test_save_session_conflict_keeps_external_change() {
+fn test_save_session_preserves_a_pending_conflict() {
     let dir = std::env::temp_dir().join(format!("vz_session_conflict_{}", std::process::id()));
     let _ = fs::remove_dir_all(&dir);
     fs::create_dir_all(&dir).unwrap();
@@ -396,22 +404,22 @@ fn test_save_session_conflict_keeps_external_change() {
     fs::write(&path, "a\nb\nc").unwrap();
 
     let mut app = make_test_app();
-    let mut b = TextBuffer::from_file(&path).unwrap();
-    b.set_cursor(0, 1);
-    b.insert_text("-vz");
-    app.buffers = vec![BufferSlot::new(b)];
-    app.active_buf = 0;
-    // vz で編集中に外部でファイルが変更された（サイズを変えて確実に検知させる）
     fs::write(&path, "a\nb\nc\nexternal line").unwrap();
+    let original = TextBuffer::from_file(&path).unwrap();
+    let mut conflict = BufferSlot::new(TextBuffer::new());
+    conflict.buffer.insert_text("a-vz\nb\nc");
+    conflict.conflict_of = Some(path.clone());
+    app.buffers = vec![BufferSlot::new(original), conflict];
+    app.active_buf = 0;
 
-    app.save_session_to(&session_dir).unwrap();
+    app.save_session(&session_dir).unwrap();
     // 外部の変更は上書きしない
     assert_eq!(fs::read_to_string(&path).unwrap(), "a\nb\nc\nexternal line");
 
     let mut app2 = make_test_app();
     app2.buffers = vec![BufferSlot::new(TextBuffer::new())];
     app2.active_buf = 0;
-    app2.restore_session_from(&session_dir);
+    app2.restore_test_session(&session_dir);
     // ファイルは外部の内容で開き、vz の編集内容は無題バッファに残る
     assert_eq!(app2.buffers.len(), 2);
     assert_eq!(
@@ -444,10 +452,10 @@ fn test_save_session_conflict_keeps_external_change() {
     // あとで決める: 次の保存して終了でも確認を引き継ぐ
     app2.resolve_conflict(&path, None);
     assert_eq!(app2.buffers.len(), 2);
-    app2.save_session_to(&session_dir).unwrap();
+    app2.save_session(&session_dir).unwrap();
     let mut app3 = make_test_app();
     app3.buffers = vec![BufferSlot::new(TextBuffer::new())];
-    app3.restore_session_from(&session_dir);
+    app3.restore_test_session(&session_dir);
     assert_eq!(app3.conflict_queue, vec![path.clone()]);
     assert_eq!(app3.buffers.len(), 2);
 
@@ -1912,10 +1920,10 @@ fn test_session_restores_browser_tabs() {
     app.switch_browser_tab(-1);
     // ブラウザを表示していなくても選択中のタブを残す
     app.toggle_browser();
-    app.save_session_to(&session_dir).unwrap();
+    app.save_session(&session_dir).unwrap();
 
     let mut app2 = make_test_app();
-    app2.restore_session_from(&session_dir);
+    app2.restore_test_session(&session_dir);
     assert_eq!(app2.mode, AppMode::Editor);
     let urls: Vec<_> = app2
         .browsers
@@ -1934,9 +1942,9 @@ fn test_session_restores_browser_tabs() {
 
     // 表示していたタブは画面ごと戻る
     app2.show_browser_tab(2);
-    app2.save_session_to(&session_dir).unwrap();
+    app2.save_session(&session_dir).unwrap();
     let mut app3 = make_test_app();
-    app3.restore_session_from(&session_dir);
+    app3.restore_test_session(&session_dir);
     assert_eq!(app3.mode, AppMode::Browser);
     assert_eq!((app3.browsers.len(), app3.active_browser), (3, 2));
 
@@ -2036,10 +2044,10 @@ fn test_drag_file_tabs_in_the_buffer_strip() {
     assert_eq!(app.active_buf, 0);
 
     let session_dir = dir.join("session");
-    app.save_session_to(&session_dir).unwrap();
+    app.save_session(&session_dir).unwrap();
     let mut restored = make_test_app();
     restored.buffers = vec![BufferSlot::new(TextBuffer::new())];
-    restored.restore_session_from(&session_dir);
+    restored.restore_test_session(&session_dir);
     assert_eq!(order(&restored), ["third.txt", "first.txt", "second.txt"]);
     assert_eq!(restored.active_buf, 0);
     fs::remove_dir_all(&dir).unwrap();
@@ -2140,11 +2148,11 @@ fn test_session_restores_filer_directories_and_view() {
     app.filer.left.enter_dir(left.clone()).unwrap();
     app.filer.right.enter_dir(right.clone()).unwrap();
     app.enter_filer();
-    app.save_session_to(&session_dir).unwrap();
+    app.save_session(&session_dir).unwrap();
 
     let mut restored = make_test_app();
     let initial_right = restored.filer.right.current_dir.clone();
-    restored.restore_session_from(&session_dir);
+    restored.restore_test_session(&session_dir);
     assert_eq!(restored.mode, AppMode::Filer);
     assert_eq!(
         restored.filer.left.current_dir,
@@ -2156,11 +2164,11 @@ fn test_session_restores_filer_directories_and_view() {
     );
 
     app.enter_editor();
-    app.save_session_to(&session_dir).unwrap();
+    app.save_session(&session_dir).unwrap();
     std::fs::remove_dir(&right).unwrap();
 
     let mut restored = make_test_app();
-    restored.restore_session_from(&session_dir);
+    restored.restore_test_session(&session_dir);
     assert_eq!(restored.mode, AppMode::Editor);
     restored.enter_filer();
     assert_eq!(
@@ -2183,10 +2191,10 @@ fn test_session_restores_browser_and_terminal() {
     app.toggle_browser();
     app.browsers[0].url_input = "localhost:5173/app".to_string();
     app.navigate_browser_input();
-    app.save_session_to(&session_dir).unwrap();
+    app.save_session(&session_dir).unwrap();
 
     let mut app2 = make_test_app();
-    app2.restore_session_from(&session_dir);
+    app2.restore_test_session(&session_dir);
     assert_eq!(app2.mode, AppMode::Browser);
     assert_eq!(app2.browsers.len(), 1);
     assert_eq!(
@@ -2202,23 +2210,23 @@ fn test_session_restores_browser_and_terminal() {
         tool_session_entry(EntryKind::Terminal, true, Some(work.clone())),
         tool_session_entry(EntryKind::Browser, false, None),
     ];
-    session::append_session(&session_dir, &entries, &SessionWindow::default()).unwrap();
+    session::write_session(&session_dir, &entries, &SessionWindow::default()).unwrap();
     let mut app3 = make_test_app();
-    app3.restore_session_from(&session_dir);
+    app3.restore_test_session(&session_dir);
     assert_eq!(app3.mode, AppMode::Terminal);
     assert_eq!(app3.pending_terminal_cwd.as_deref(), Some(work.as_path()));
     assert_eq!(app3.browsers.len(), 1);
     assert_eq!(app3.browsers[0].pending_url, None);
 
     let gone = dir.join("gone");
-    session::append_session(
+    session::write_session(
         &session_dir,
         &[tool_session_entry(EntryKind::Terminal, true, Some(gone))],
         &SessionWindow::default(),
     )
     .unwrap();
     let mut app4 = make_test_app();
-    app4.restore_session_from(&session_dir);
+    app4.restore_test_session(&session_dir);
     assert_eq!(app4.mode, AppMode::Editor);
     assert_eq!(app4.pending_terminal_cwd, None);
 

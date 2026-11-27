@@ -489,6 +489,4 @@ impl VzEditorApp {
             self.cur_buf_mut().move_down();
         }
     }
-
-    // --- 更新時の保存して終了 / 状態の復元（vz --save-and-quit / --restore） ---
 }

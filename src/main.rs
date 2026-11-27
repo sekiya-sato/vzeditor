@@ -2,42 +2,36 @@
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
 mod icon;
+mod release;
 
 use eframe::egui;
 use std::path::PathBuf;
 use std::sync::Arc;
-use vz_config::session;
 use vz_config::settings::Settings;
 use vz_ui::{StartupRestore, VzEditorApp};
 
 fn main() -> eframe::Result<()> {
-    // 複数ファイル・フォルダを引数で受け取る（エクスプローラーで exe へ複数ドロップした場合も同じ）
-    let mut restore = false;
-    let mut initial_paths: Vec<PathBuf> = Vec::new();
-    for arg in std::env::args_os().skip(1) {
-        match arg.to_str() {
-            // 起動中の vz に「保存して終了」を要求する（更新用。ウィンドウは開かない）
-            Some("--save-and-quit") => {
-                let handled = session::session_dir()
-                    .map(|d| session::request_save_and_quit(&d).unwrap_or(0))
-                    .unwrap_or(0);
-                // 終了コード: 受け取った vz の数（0 なら起動中の vz なし）
-                std::process::exit(handled.min(100) as i32);
-            }
-            // --save-and-quit で保存した状態を復元して起動する
-            Some("--restore") => restore = true,
-            _ => initial_paths.push(PathBuf::from(arg)),
+    let args = std::env::args_os().skip(1).collect::<Vec<_>>();
+    let release_state = match release::run(&args) {
+        Ok(release::Startup::Normal) => None,
+        Ok(release::Startup::Handled) => return Ok(()),
+        Ok(release::Startup::Restore(state)) => Some(state),
+        Err(e) => {
+            eprintln!("リリース処理: {e}");
+            std::process::exit(1);
         }
-    }
-    // Shift を押して起動したら、Alt+Shift+F4 で記録した状態を戻す（`--restore` が優先）
-    let restore = if restore {
-        StartupRestore::Update
+    };
+    // 複数ファイル・フォルダを引数で受け取る（エクスプローラーで exe へ複数ドロップした場合も同じ）
+    let (restore, initial_paths) = if let Some(state) = release_state {
+        (StartupRestore::Release(state), Vec::new())
     } else {
-        match vz_platform::keyboard::shift_held() {
+        // Shift を押して起動したら、Alt+Shift+F4 で記録した状態を戻す。
+        let restore = match vz_platform::keyboard::shift_held() {
             Some(true) => StartupRestore::Saved,
             Some(false) => StartupRestore::None,
             None => StartupRestore::SavedIfShift,
-        }
+        };
+        (restore, args.into_iter().map(PathBuf::from).collect())
     };
     let settings = Settings::load();
 

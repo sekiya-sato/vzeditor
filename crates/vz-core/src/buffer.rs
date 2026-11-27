@@ -265,7 +265,7 @@ impl TextBuffer {
         Ok(Self::from_huge_doc(HugeDoc::open(path)?, path))
     }
 
-    /// 巨大ファイルを開き、一時保存した未保存の編集内容を当て直す（`--restore`）。
+    /// 巨大ファイルを開き、一時保存した未保存の編集内容を当て直す（状態の復元）。
     pub fn open_huge_with_edits(path: &Path, edits: &Path) -> io::Result<Self> {
         let mut buf = Self::from_huge_doc(HugeDoc::open_with_edits(path, edits)?, path);
         buf.dirty = true;

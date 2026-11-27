@@ -1,16 +1,7 @@
-//! 保存して終了・状態の復元（`--save-and-quit` / `--restore`）と、外部でのファイル変更の検知。
+//! 利用者向けの状態の記録・復元と、リリースでも使うセッション処理。
 
 use super::*;
 use std::time::{Duration, UNIX_EPOCH};
-
-/// 状態を記録するときの未保存ファイルの扱い。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum SaveMode {
-    /// 更新用（`--save-and-quit`）: パスのある未保存ファイルは保存する
-    SaveFiles,
-    /// Alt+Shift+F4: ファイルは上書きせず、編集内容を一時保存する
-    KeepUnsaved,
-}
 
 fn stamp_to_record(stamp: Option<FileStamp>) -> Option<(u64, u64)> {
     let (time, len) = stamp?;
@@ -99,7 +90,7 @@ impl VzEditorApp {
     pub(super) fn save_state_to(&mut self, saved: &Path) -> std::io::Result<PathBuf> {
         let writing = session::begin_saved_state(saved)?;
         let published = self
-            .save_session_with(&writing, SaveMode::KeepUnsaved)
+            .save_session(&writing)
             .and_then(|()| session::publish_saved_state(saved, &writing, std::process::id()));
         if published.is_err() {
             let _ = fs::remove_dir_all(&writing);
@@ -119,38 +110,8 @@ impl VzEditorApp {
         }
     }
 
-    /// 外部からの終了要求を受け取っていれば、状態を保存して終了する。
-    pub(super) fn poll_quit_request(&mut self, ctx: &egui::Context) {
-        let requested = self
-            .quit_request
-            .as_ref()
-            .is_some_and(|f| f.swap(false, Ordering::SeqCst));
-        if !requested {
-            return;
-        }
-        let Some(dir) = session::session_dir() else {
-            return;
-        };
-        if let Err(e) = self.save_session_with(&dir, SaveMode::SaveFiles) {
-            // 保存できなければ終了しない（要求側には完了として返す）
-            session::finish_request(&dir);
-            self.status_message =
-                format!("終了要求: 状態を保存できないため終了を中止しました: {e}");
-            return;
-        }
-        session::finish_request(&dir);
-        self.close_now(ctx);
-    }
-
-    /// 未保存のファイルを保存し、無題・保存できなかったバッファは `dir` に一時保存して、
-    /// 開いているバッファとツールの状態を `dir/session.ini` に追記する。
-    #[cfg(test)]
-    pub(super) fn save_session_to(&mut self, dir: &Path) -> std::io::Result<()> {
-        self.save_session_with(dir, SaveMode::SaveFiles)
-    }
-
-    /// `mode` が `KeepUnsaved` なら、パスのある未保存ファイルも保存せずに一時保存する。
-    pub(super) fn save_session_with(&mut self, dir: &Path, mode: SaveMode) -> std::io::Result<()> {
+    /// 編集内容を一時保存し、バッファ・画面・ウィンドウの状態を記録する。
+    pub(super) fn save_session(&self, dir: &Path) -> std::io::Result<()> {
         if self.buffers.iter().any(|slot| slot.huge.is_saving()) {
             return Err(std::io::Error::other("巨大ファイルを保存中です"));
         }
@@ -159,7 +120,6 @@ impl VzEditorApp {
                 "巨大ファイルのすべて置換を実行中です",
             ));
         }
-        let keep_unsaved = mode == SaveMode::KeepUnsaved;
         fs::create_dir_all(dir)?;
         let mut entries = Vec::new();
         for idx in 0..self.buffers.len() {
@@ -167,9 +127,9 @@ impl VzEditorApp {
                 continue;
             }
             let active = idx == self.active_buf;
-            let slot = &mut self.buffers[idx];
+            let slot = &self.buffers[idx];
             // 衝突の確認待ちの無題バッファは、次の復元でも確認する
-            if let Some(origin) = slot.conflict_of.clone() {
+            if let Some(origin) = &slot.conflict_of {
                 let temp = session::temp_path(dir, idx);
                 fs::write(&temp, slot.buffer.text_lines().join("\n"))?;
                 entries.push(SessionEntry {
@@ -182,67 +142,11 @@ impl VzEditorApp {
                     encoding: None,
                     disk_stamp: None,
                     temp: Some(temp),
-                    path: Some(origin),
+                    path: Some(std::path::absolute(origin)?),
                 });
                 continue;
             }
-            let buf = &mut slot.buffer;
-            // 読み込み後に外部でファイルが変更されていたら上書きしない。
-            // ファイルは外部の内容のまま開き直し、vz の編集内容は無題バッファに残して復元後に確認する
-            // 巨大ファイルは読み比べず、そのまま保存する
-            // 上書きしない記録（KeepUnsaved）では衝突しないので確かめない
-            if !keep_unsaved
-                && !buf.is_huge()
-                && buf.dirty
-                && buf.changed_on_disk().is_some()
-                && !buf.same_as_disk()
-            {
-                let temp = session::temp_path(dir, idx);
-                fs::write(&temp, buf.text_lines().join("\n"))?;
-                entries.push(SessionEntry {
-                    kind: EntryKind::File,
-                    line: buf.cursor_line,
-                    col: buf.cursor_col,
-                    markdown_view: slot.markdown.visible,
-                    active,
-                    crlf: buf.line_ending == "\r\n",
-                    encoding: None,
-                    disk_stamp: None,
-                    temp: None,
-                    path: buf.file_path.clone(),
-                });
-                entries.push(SessionEntry {
-                    kind: EntryKind::Conflict,
-                    line: buf.cursor_line,
-                    col: buf.cursor_col,
-                    markdown_view: false,
-                    active: false,
-                    crlf: buf.line_ending == "\r\n",
-                    encoding: None,
-                    disk_stamp: None,
-                    temp: Some(temp),
-                    path: buf.file_path.clone(),
-                });
-                continue;
-            }
-            let mut save_result = Ok(());
-            if buf.dirty && keep_unsaved {
-                save_result = Err(std::io::Error::other("状態の記録では上書きしません"));
-            } else if buf.dirty {
-                save_result = match buf.file_path.clone() {
-                    Some(path)
-                        if buf.is_huge()
-                            && vz_platform::file_info::hard_link_count(&path)
-                                .is_some_and(|n| n > 1) =>
-                    {
-                        Err(std::io::Error::other(
-                            "ハードリンクがあるため上書きしません",
-                        ))
-                    }
-                    Some(path) => buf.save_to_path(&path),
-                    None => Err(std::io::Error::other("保存先がありません")),
-                };
-            }
+            let buf = &slot.buffer;
             let mut entry = SessionEntry {
                 kind: EntryKind::File,
                 line: buf.cursor_line,
@@ -253,26 +157,23 @@ impl VzEditorApp {
                 encoding: None,
                 disk_stamp: None,
                 temp: None,
-                path: buf.file_path.clone(),
+                path: buf
+                    .file_path
+                    .as_deref()
+                    .map(std::path::absolute)
+                    .transpose()?,
             };
-            if buf.is_huge() {
-                if let Err(save_error) = save_result {
-                    // 本体を保存できないときも、編集を残せる場合だけ終了する。
-                    let temp = session::huge_edits_path(dir, idx);
-                    if let Err(edits_error) = buf.write_huge_edits(&temp) {
-                        let _ = fs::remove_file(&temp);
-                        for temp in entries.iter().filter_map(|entry| entry.temp.as_ref()) {
-                            let _ = fs::remove_file(temp);
-                        }
-                        return Err(std::io::Error::other(format!(
-                            "{}: 保存: {save_error} / 編集内容の一時保存: {edits_error}",
-                            buf.display_name()
-                        )));
-                    }
-                    entry.kind = EntryKind::HugeEdits;
-                    entry.temp = Some(temp);
-                }
-            } else if save_result.is_err() || buf.file_path.is_none() {
+            if buf.is_huge() && buf.dirty {
+                let temp = session::huge_edits_path(dir, idx);
+                buf.write_huge_edits(&temp).map_err(|e| {
+                    std::io::Error::other(format!(
+                        "{}: 編集内容の一時保存: {e}",
+                        buf.display_name()
+                    ))
+                })?;
+                entry.kind = EntryKind::HugeEdits;
+                entry.temp = Some(temp);
+            } else if buf.dirty || buf.file_path.is_none() {
                 let temp = session::temp_path(dir, idx);
                 fs::write(&temp, buf.text_lines().join("\n"))?;
                 entry.kind = EntryKind::Unsaved;
@@ -312,20 +213,19 @@ impl VzEditorApp {
             false,
             Some(self.filer.right.current_dir.clone()),
         ));
-        session::append_session(dir, &entries, &self.capture_session_window())
-    }
-
-    /// `dir/session.ini` のバッファを開き直す。読み終えた一時保存ファイルは削除する。
-    pub(super) fn restore_session_from(&mut self, dir: &Path) {
-        let (entries, window) = session::take_session(dir);
-        // 戻せなかった巨大ファイルの編集は、一時保存をセッションのフォルダに残す
-        self.restore_entries(&entries);
-        // 複数の vz の記録は 1 つのウィンドウにまとめるので、先頭の vz の位置とデスクトップを使う
-        self.apply_session_window(window);
+        session::write_session(dir, &entries, &self.capture_session_window())
     }
 
     /// 記録した項目を開き直す。戻せなかった項目（巨大ファイルの未保存の編集）を返す。
     pub(super) fn restore_entries(&mut self, entries: &[SessionEntry]) -> Vec<SessionEntry> {
+        self.restore_entries_with(entries, false)
+    }
+
+    pub(super) fn restore_entries_with(
+        &mut self,
+        entries: &[SessionEntry],
+        defer_cleanup: bool,
+    ) -> Vec<SessionEntry> {
         let mut failed = Vec::new();
         if entries.is_empty() {
             return failed;
@@ -347,6 +247,8 @@ impl VzEditorApp {
                         if e.active {
                             tool_mode = Some(AppMode::Terminal);
                         }
+                    } else if defer_cleanup {
+                        failed.push(e.clone());
                     }
                     continue;
                 }
@@ -362,14 +264,14 @@ impl VzEditorApp {
                     continue;
                 }
                 EntryKind::FilerLeft => {
-                    left_dir = e.path.as_ref();
+                    left_dir = Some(e);
                     if e.active {
                         tool_mode = Some(AppMode::Filer);
                     }
                     continue;
                 }
                 EntryKind::FilerRight => {
-                    right_dir = e.path.as_ref();
+                    right_dir = Some(e);
                     continue;
                 }
                 EntryKind::File => {
@@ -398,7 +300,9 @@ impl VzEditorApp {
                             buf.dirty = true;
                             buf.revision = 1;
                             self.add_buffer(buf);
-                            let _ = fs::remove_file(&temp);
+                            if !defer_cleanup {
+                                let _ = fs::remove_file(&temp);
+                            }
                             true
                         }
                         Err(_) => false,
@@ -410,7 +314,9 @@ impl VzEditorApp {
                     match TextBuffer::open_huge_with_edits(&path, &temp) {
                         Ok(buf) => {
                             self.add_buffer(buf);
-                            let _ = fs::remove_file(&temp);
+                            if !defer_cleanup {
+                                let _ = fs::remove_file(&temp);
+                            }
                             true
                         }
                         Err(err) => {
@@ -437,7 +343,9 @@ impl VzEditorApp {
                             self.add_buffer(buf);
                             self.cur_slot_mut().conflict_of = Some(origin.clone());
                             self.conflict_queue.push(origin);
-                            let _ = fs::remove_file(&temp);
+                            if !defer_cleanup {
+                                let _ = fs::remove_file(&temp);
+                            }
                             true
                         }
                         Err(_) => false,
@@ -445,6 +353,9 @@ impl VzEditorApp {
                 }
             };
             if !ok {
+                if defer_cleanup && e.kind != EntryKind::HugeEdits {
+                    failed.push(e.clone());
+                }
                 continue;
             }
             restored += 1;
@@ -459,11 +370,19 @@ impl VzEditorApp {
         if let Some(idx) = active {
             self.switch_buffer_to(idx);
         }
-        if let Some(path) = left_dir {
-            let _ = self.filer.left.enter_dir(path.clone());
-        }
-        if let Some(path) = right_dir {
-            let _ = self.filer.right.enter_dir(path.clone());
+        for (pane, entry) in [
+            (&mut self.filer.left, left_dir),
+            (&mut self.filer.right, right_dir),
+        ] {
+            if let Some(entry) = entry {
+                let opened = entry
+                    .path
+                    .as_ref()
+                    .is_some_and(|path| pane.enter_dir(path.clone()).is_ok());
+                if !opened && defer_cleanup {
+                    failed.push(entry.clone());
+                }
+            }
         }
         self.mode = tool_mode.unwrap_or(AppMode::Editor);
         self.return_mode = AppMode::Editor;

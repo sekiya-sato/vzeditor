@@ -13,6 +13,7 @@ mod huge;
 mod input;
 mod keys;
 mod menu;
+mod release;
 mod restore;
 mod search;
 mod send;
@@ -432,8 +433,8 @@ pub struct VzEditorApp {
     /// フレームの最後にクリップボードへ書き出す文字列（ctx を持たない処理から使う）
     clipboard_out: Option<String>,
 
-    /// `vz --save-and-quit` からの終了要求（監視スレッドが true にする）。テストでは None
-    quit_request: Option<Arc<AtomicBool>>,
+    release_watcher: Option<session::release::Watcher>,
+    release_startup: Option<release::Startup>,
     /// 外部での変更を最後に調べた時刻
     last_disk_check: std::time::Instant,
     /// 復元後に確認する、外部の変更と衝突したファイル
@@ -472,12 +473,12 @@ pub struct VzEditorApp {
 }
 
 /// 起動時に戻す状態。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug)]
 pub enum StartupRestore {
     /// 戻さない
     None,
-    /// 更新用（`--restore`）: `session/session.ini` をまとめて戻す
-    Update,
+    /// リリースの指定 PID の記録。
+    Release(Box<session::release::State>),
     /// Shift を押して起動した: Alt+Shift+F4 の記録を 1 つ戻す
     Saved,
     /// Shift を OS から読めない環境: 起動直後のフレームで Shift を見て決める
@@ -558,7 +559,7 @@ impl VzEditorApp {
             persist_settings: true,
             quit_after_save: false,
             allow_close: false,
-            shift_restore_until: (restore == StartupRestore::SavedIfShift)
+            shift_restore_until: matches!(&restore, StartupRestore::SavedIfShift)
                 .then(|| std::time::Instant::now() + std::time::Duration::from_secs(1)),
             send_prefix: false,
             pending_send: None,
@@ -566,7 +567,8 @@ impl VzEditorApp {
             select_mode: false,
             overwrite_mode: false,
             clipboard_out: None,
-            quit_request: None,
+            release_watcher: None,
+            release_startup: None,
             last_disk_check: std::time::Instant::now(),
             conflict_queue: Vec::new(),
             word_wrap: settings.word_wrap,
@@ -585,12 +587,14 @@ impl VzEditorApp {
             browser_url_editing: false,
         };
         let session_dir = session::session_dir();
-        if let Some(dir) = &session_dir {
-            match restore {
-                StartupRestore::Update => app.restore_session_from(dir),
-                StartupRestore::Saved => app.restore_saved_state_from(&session::saved_dir(dir)),
-                StartupRestore::None | StartupRestore::SavedIfShift => {}
+        match restore {
+            StartupRestore::Release(state) => app.restore_release_state(state),
+            StartupRestore::Saved => {
+                if let Some(dir) = &session_dir {
+                    app.restore_saved_state_from(&session::saved_dir(dir));
+                }
             }
+            StartupRestore::None | StartupRestore::SavedIfShift => {}
         }
         if !initial_paths.is_empty() {
             // 存在しないパスは新規ファイルとして開く（従来の `vz 新規.txt` と同じ）
@@ -598,7 +602,11 @@ impl VzEditorApp {
         }
         if let Some(dir) = session_dir {
             let ctx = cc.egui_ctx.clone();
-            app.quit_request = Some(session::start_watcher(dir, move || ctx.request_repaint()));
+            app.release_watcher = session::release::Watcher::start(&dir, {
+                let ctx = ctx.clone();
+                move || ctx.request_repaint()
+            })
+            .ok();
         }
         app.sync_window_title(&cc.egui_ctx);
         app
@@ -826,7 +834,8 @@ impl eframe::App for VzEditorApp {
         self.poll_shift_restore(ctx);
         self.handle_close_request(ctx);
         self.handle_save_state_key(ctx);
-        self.poll_quit_request(ctx);
+        self.poll_release_request(ctx);
+
         self.check_external_changes(ctx);
         self.handle_dropped_files(ctx);
         self.poll_dialog();
@@ -871,6 +880,7 @@ impl eframe::App for VzEditorApp {
 
         // Keep OS window title bar synchronized with current file, dirty state, or filer directory
         self.sync_window_title(ctx);
+        self.finish_release_startup(ctx);
 
         if self.pending_dialog.is_some() {
             ctx.request_repaint_after(std::time::Duration::from_millis(100));

@@ -24,6 +24,10 @@ fn is_blank_url(url: &str) -> bool {
 }
 
 impl BrowserTab {
+    pub(super) fn failed_to_open(&self) -> bool {
+        self.error.is_some()
+    }
+
     pub(super) fn new(url: Option<String>) -> Self {
         Self {
             url_input: url.clone().unwrap_or_default(),

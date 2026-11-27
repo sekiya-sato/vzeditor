@@ -1,20 +1,4 @@
-//! 更新時の「保存して終了 → 再起動で元の状態に戻す」。
-//!
-//! - `vz --save-and-quit`: 起動中の vz に終了を要求する。要求を受けた vz は、パスのある未保存バッファを
-//!   保存し、無題（または保存できなかった）バッファの内容は設定フォルダの `session/` に一時保存して、
-//!   開いていたバッファの一覧を `session/session.ini` に書いてから終了する。
-//!   vz で読み込んだ後に外部でファイルが変更されていた未保存バッファは上書きせず、vz の編集内容を
-//!   一時保存して（`conflict`）、復元後にどちらを採用するか確認する。
-//! - `vz --restore`: `session.ini` のバッファを開き直し（カーソル位置・Markdown ビュー・表示中のバッファも戻す）、
-//!   読み終えた `session.ini` と一時保存ファイルを削除する。
-//!   ターミナル（起動したフォルダ）とブラウザ（タブごとの表示中の URL と選択中のタブ）も、開いていれば記録して開き直す。
-//!   シェルは新しく起動する（実行中のコマンドや画面の内容は戻らない）。
-//!   2画面ファイラーは左右のフォルダを記録し、表示中だった場合はその画面も戻す。
-//!
-//! 要求は設定フォルダの `session/quit-request` ファイルで伝える。起動中の vz は監視スレッドで
-//! このファイルを見つけると `quit-request.<pid>` へ改名して受け取り（同時に1つの vz だけが受け取る）、
-//! 状態を書き終えたら削除する。複数の vz が起動中なら、要求側は同じ要求 ID で繰り返す。
-//! 終了を中止した vz は、次の要求 ID を受け付ける。
+//! 利用者が記録する状態と、リリース時に引き継ぐ状態の記録形式。
 
 use std::fs;
 use std::io;
@@ -313,33 +297,22 @@ pub fn huge_edits_path(dir: &Path, index: usize) -> PathBuf {
     dir.join(format!("huge-{}-{index}.vzedit", std::process::id()))
 }
 
-/// 状態を追記する（複数の vz が順に終了した場合も、すべてのバッファを残す）。
-/// ウィンドウの行は項目の前に書く（1 回の書き込みで、ほかの vz の行と混ざらない）。
-pub fn append_session(
+/// 1 ウィンドウ分の状態を書き込む。
+pub fn write_session(
     dir: &Path,
     entries: &[SessionEntry],
     window: &SessionWindow,
 ) -> io::Result<()> {
-    use std::io::Write;
     fs::create_dir_all(dir)?;
-    let mut f = fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(dir.join(SESSION_FILE))?;
     let mut text = serialize_window(window);
     text.push_str(&serialize(entries));
-    f.write_all(text.as_bytes())
+    fs::write(dir.join(SESSION_FILE), text)
 }
 
-/// 保存された状態を読み、`session.ini` を削除する（一時保存ファイルは呼び出し側が読んでから消す）。
-/// ウィンドウは先頭の vz のもの。
-pub fn take_session(dir: &Path) -> (Vec<SessionEntry>, SessionWindow) {
-    let path = dir.join(SESSION_FILE);
-    let Ok(text) = fs::read_to_string(&path) else {
-        return (Vec::new(), SessionWindow::default());
-    };
-    let _ = fs::remove_file(&path);
-    (parse_in(dir, &text), parse_window(&text))
+/// 状態を読み込む。呼び出し側が復元後に記録を処理する。
+pub fn read_session(dir: &Path) -> io::Result<(Vec<SessionEntry>, SessionWindow)> {
+    let text = fs::read_to_string(dir.join(SESSION_FILE))?;
+    Ok((parse_in(dir, &text), parse_window(&text)))
 }
 
 /// `dir/session.ini` の内容を読む。一時保存のファイル名は `dir` からのパスにする（絶対パスはそのまま）。
@@ -353,10 +326,9 @@ fn parse_in(dir: &Path, text: &str) -> Vec<SessionEntry> {
     entries
 }
 
-mod quit_request;
+pub mod release;
 mod saved_state;
 
-pub use quit_request::{finish_request, request_save_and_quit, start_watcher};
 pub use saved_state::{
     begin_saved_state, finish_saved_state, publish_saved_state, saved_dir, take_saved_state,
     SavedState,
@@ -554,7 +526,7 @@ mod tests {
             path: Some(PathBuf::from(path)),
             ..Default::default()
         };
-        append_session(&writing, &[entry], &sample_window()).unwrap();
+        write_session(&writing, &[entry], &sample_window()).unwrap();
         publish_saved_state(saved, &writing, pid).unwrap()
     }
 
