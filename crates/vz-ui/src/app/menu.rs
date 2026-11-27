@@ -309,9 +309,9 @@ impl VzEditorApp {
             TopMenu::Tools => vec![
                 MenuEntry::Item {
                     label: if in_md_view {
-                        "テキスト編集モードへ戻す"
+                        "テキスト編集モードへ"
                     } else {
-                        "Markdown ビューモードへ切替"
+                        "Markdown Viewモードへ"
                     },
                     shortcut: sc("Ctrl+Shift+V / Alt+P", "Alt+P / ^K^V"),
                     action: MenuAction::ToggleMarkdownView,
@@ -327,46 +327,56 @@ impl VzEditorApp {
                     action: MenuAction::ToggleTerminal,
                     enabled: true,
                 },
-                MenuEntry::Item {
-                    label: if self.mode == AppMode::Browser {
-                        "ブラウザから戻る"
-                    } else {
-                        "ブラウザ（編集中の HTML を表示）"
-                    },
-                    shortcut: "Alt+B",
-                    action: MenuAction::ToggleBrowser,
-                    enabled: true,
-                },
-                MenuEntry::Item {
-                    label: "ブラウザ: 新しいタブ",
-                    shortcut: "Ctrl+T",
-                    action: MenuAction::NewBrowserTab,
-                    enabled: true,
-                },
-                MenuEntry::Item {
-                    label: "ブラウザ: このタブを閉じる",
-                    shortcut: "Ctrl+W",
-                    action: MenuAction::CloseBrowserTab,
-                    enabled: self.mode == AppMode::Browser,
+                MenuEntry::Submenu {
+                    label: "ブラウザ",
+                    items: vec![
+                        MenuEntry::Item {
+                            label: if self.mode == AppMode::Browser {
+                                "ブラウザから戻る"
+                            } else {
+                                "編集中の HTML を表示"
+                            },
+                            shortcut: "Alt+B",
+                            action: MenuAction::ToggleBrowser,
+                            enabled: true,
+                        },
+                        MenuEntry::Item {
+                            label: "新しいタブ",
+                            shortcut: "Ctrl+T",
+                            action: MenuAction::NewBrowserTab,
+                            enabled: true,
+                        },
+                        MenuEntry::Item {
+                            label: "このタブを閉じる",
+                            shortcut: "Ctrl+W",
+                            action: MenuAction::CloseBrowserTab,
+                            enabled: self.mode == AppMode::Browser,
+                        },
+                    ],
                 },
                 MenuEntry::Separator,
-                MenuEntry::Item {
-                    label: "フォントサイズ拡大",
-                    shortcut: "Ctrl++",
-                    action: MenuAction::FontZoomIn,
-                    enabled: self.font_size < MAX_FONT_SIZE,
-                },
-                MenuEntry::Item {
-                    label: "フォントサイズ縮小",
-                    shortcut: "Ctrl+-",
-                    action: MenuAction::FontZoomOut,
-                    enabled: self.font_size > MIN_FONT_SIZE,
-                },
-                MenuEntry::Item {
-                    label: "フォントサイズリセット (16pt)",
-                    shortcut: "Ctrl+0",
-                    action: MenuAction::FontReset,
-                    enabled: true,
+                MenuEntry::Submenu {
+                    label: "フォント",
+                    items: vec![
+                        MenuEntry::Item {
+                            label: "サイズ拡大",
+                            shortcut: "Ctrl++",
+                            action: MenuAction::FontZoomIn,
+                            enabled: self.font_size < MAX_FONT_SIZE,
+                        },
+                        MenuEntry::Item {
+                            label: "サイズ縮小",
+                            shortcut: "Ctrl+-",
+                            action: MenuAction::FontZoomOut,
+                            enabled: self.font_size > MIN_FONT_SIZE,
+                        },
+                        MenuEntry::Item {
+                            label: "サイズリセット (16pt)",
+                            shortcut: "Ctrl+0",
+                            action: MenuAction::FontReset,
+                            enabled: true,
+                        },
+                    ],
                 },
                 MenuEntry::Item {
                     label: if self.word_wrap {
@@ -396,42 +406,51 @@ impl VzEditorApp {
                     action: MenuAction::ToggleAlwaysOnTop,
                     enabled: true,
                 },
-                MenuEntry::Item {
-                    label: "背景を濃くする (+10%)",
-                    shortcut: "Alt+↑",
-                    action: MenuAction::OpacityUp,
-                    enabled: self.bg_opacity < window_style::MAX_OPACITY,
+                MenuEntry::Submenu {
+                    label: "背景透過",
+                    items: vec![
+                        MenuEntry::Item {
+                            label: "濃くする (+10%)",
+                            shortcut: "Alt+↑",
+                            action: MenuAction::OpacityUp,
+                            enabled: self.bg_opacity < window_style::MAX_OPACITY,
+                        },
+                        MenuEntry::Item {
+                            label: "透過する (-10%)",
+                            shortcut: "Alt+↓",
+                            action: MenuAction::OpacityDown,
+                            enabled: self.bg_opacity > window_style::MIN_OPACITY,
+                        },
+                        MenuEntry::Item {
+                            label: "解除 (100%)",
+                            shortcut: "Alt+0",
+                            action: MenuAction::OpacityReset,
+                            enabled: self.bg_opacity < window_style::MAX_OPACITY,
+                        },
+                    ],
                 },
-                MenuEntry::Item {
-                    label: "背景を透過する (-10%)",
-                    shortcut: "Alt+↓",
-                    action: MenuAction::OpacityDown,
-                    enabled: self.bg_opacity > window_style::MIN_OPACITY,
-                },
-                MenuEntry::Item {
-                    label: "背景透過を解除 (100%)",
-                    shortcut: "Alt+0",
-                    action: MenuAction::OpacityReset,
-                    enabled: self.bg_opacity < window_style::MAX_OPACITY,
-                },
-                MenuEntry::Separator,
-                MenuEntry::Item {
-                    label: "文字を濃くする (+10%)",
-                    shortcut: "Alt+Shift++",
-                    action: MenuAction::TextOpacityUp,
-                    enabled: self.text_opacity < window_style::MAX_OPACITY,
-                },
-                MenuEntry::Item {
-                    label: "文字を透過する (-10%)",
-                    shortcut: "Alt+Shift+-",
-                    action: MenuAction::TextOpacityDown,
-                    enabled: self.text_opacity > window_style::MIN_OPACITY,
-                },
-                MenuEntry::Item {
-                    label: "文字透過を解除 (100%)",
-                    shortcut: "Alt+Shift+0",
-                    action: MenuAction::TextOpacityReset,
-                    enabled: self.text_opacity < window_style::MAX_OPACITY,
+                MenuEntry::Submenu {
+                    label: "文字透過",
+                    items: vec![
+                        MenuEntry::Item {
+                            label: "濃くする (+10%)",
+                            shortcut: "Alt+Shift++",
+                            action: MenuAction::TextOpacityUp,
+                            enabled: self.text_opacity < window_style::MAX_OPACITY,
+                        },
+                        MenuEntry::Item {
+                            label: "透過する (-10%)",
+                            shortcut: "Alt+Shift+-",
+                            action: MenuAction::TextOpacityDown,
+                            enabled: self.text_opacity > window_style::MIN_OPACITY,
+                        },
+                        MenuEntry::Item {
+                            label: "解除 (100%)",
+                            shortcut: "Alt+Shift+0",
+                            action: MenuAction::TextOpacityReset,
+                            enabled: self.text_opacity < window_style::MAX_OPACITY,
+                        },
+                    ],
                 },
                 MenuEntry::Separator,
                 MenuEntry::Item {
@@ -445,35 +464,40 @@ impl VzEditorApp {
                     enabled: true,
                 },
                 MenuEntry::Separator,
-                MenuEntry::Item {
-                    label: "Claude Code へ送信",
-                    shortcut: "Alt+C → C",
-                    action: MenuAction::SendToClaudeCode,
-                    enabled: self.pending_send.is_none(),
-                },
-                MenuEntry::Item {
-                    label: "Codex へ送信",
-                    shortcut: "Alt+C → X",
-                    action: MenuAction::SendToCodex,
-                    enabled: self.pending_send.is_none(),
-                },
-                MenuEntry::Item {
-                    label: "Claude Code で新規セッション",
-                    shortcut: "Alt+C → N",
-                    action: MenuAction::NewSessionClaudeCode,
-                    enabled: self.pending_send.is_none(),
-                },
-                MenuEntry::Item {
-                    label: "Codex で新規セッション",
-                    shortcut: "Alt+C → M",
-                    action: MenuAction::NewSessionCodex,
-                    enabled: self.pending_send.is_none(),
-                },
-                MenuEntry::Item {
-                    label: "GitHub Desktop で Push",
-                    shortcut: "Alt+C → P",
-                    action: MenuAction::PushGitHubDesktop,
-                    enabled: self.pending_send.is_none(),
+                MenuEntry::Submenu {
+                    label: "他アプリ連携",
+                    items: vec![
+                        MenuEntry::Item {
+                            label: "Claude Code へ送信",
+                            shortcut: "Alt+C → C",
+                            action: MenuAction::SendToClaudeCode,
+                            enabled: self.pending_send.is_none(),
+                        },
+                        MenuEntry::Item {
+                            label: "Codex へ送信",
+                            shortcut: "Alt+C → X",
+                            action: MenuAction::SendToCodex,
+                            enabled: self.pending_send.is_none(),
+                        },
+                        MenuEntry::Item {
+                            label: "Claude Code で新規セッション",
+                            shortcut: "Alt+C → N",
+                            action: MenuAction::NewSessionClaudeCode,
+                            enabled: self.pending_send.is_none(),
+                        },
+                        MenuEntry::Item {
+                            label: "Codex で新規セッション",
+                            shortcut: "Alt+C → M",
+                            action: MenuAction::NewSessionCodex,
+                            enabled: self.pending_send.is_none(),
+                        },
+                        MenuEntry::Item {
+                            label: "GitHub Desktop で Push",
+                            shortcut: "Alt+C → P",
+                            action: MenuAction::PushGitHubDesktop,
+                            enabled: self.pending_send.is_none(),
+                        },
+                    ],
                 },
             ],
             TopMenu::About => vec![
@@ -497,27 +521,49 @@ impl VzEditorApp {
     pub(super) fn first_selectable_menu_idx(entries: &[MenuEntry]) -> usize {
         entries
             .iter()
-            .position(|e| matches!(e, MenuEntry::Item { enabled: true, .. }))
+            .position(|e| {
+                matches!(
+                    e,
+                    MenuEntry::Item { enabled: true, .. } | MenuEntry::Submenu { .. }
+                )
+            })
             .or_else(|| {
                 entries
                     .iter()
-                    .position(|e| matches!(e, MenuEntry::Item { .. }))
+                    .position(|e| !matches!(e, MenuEntry::Separator))
             })
             .unwrap_or(0)
     }
 
-    pub(super) fn step_menu_selection(&mut self, entries: &[MenuEntry], delta: isize) {
+    /// 区切り線を飛ばして `delta` 方向の次の項目の位置を返す（端で反対へ回る）。
+    fn step_menu_idx(entries: &[MenuEntry], current: usize, delta: isize) -> usize {
         let len = entries.len();
         if len == 0 {
-            return;
+            return current;
         }
-        let mut idx = self.menu_selected_idx.min(len - 1);
+        let mut idx = current.min(len - 1);
         for _ in 0..len {
             idx = ((idx as isize + delta).rem_euclid(len as isize)) as usize;
-            if matches!(entries[idx], MenuEntry::Item { .. }) {
-                self.menu_selected_idx = idx;
-                return;
+            if !matches!(entries[idx], MenuEntry::Separator) {
+                return idx;
             }
+        }
+        current
+    }
+
+    /// 開いているサブメニューの項目。親が範囲外やサブメニューでなければ None。
+    fn open_submenu_items(&self, entries: &[MenuEntry]) -> Option<Vec<MenuEntry>> {
+        match entries.get(self.open_submenu?) {
+            Some(MenuEntry::Submenu { items, .. }) => Some(items.clone()),
+            _ => None,
+        }
+    }
+
+    fn open_submenu_at(&mut self, entries: &[MenuEntry], idx: usize) {
+        if let Some(MenuEntry::Submenu { items, .. }) = entries.get(idx) {
+            self.menu_selected_idx = idx;
+            self.open_submenu = Some(idx);
+            self.submenu_selected_idx = Self::first_selectable_menu_idx(items);
         }
     }
 
@@ -525,11 +571,13 @@ impl VzEditorApp {
         self.prefix = PrefixKey::None;
         let entries = self.build_menu_entries(menu);
         self.menu_selected_idx = Self::first_selectable_menu_idx(&entries);
+        self.open_submenu = None;
         self.open_menu = Some(menu);
     }
 
     pub(super) fn execute_menu_action(&mut self, ctx: &egui::Context, action: MenuAction) {
         self.open_menu = None;
+        self.open_submenu = None;
         self.prefix = PrefixKey::None;
         match action {
             MenuAction::NewBuffer => self.new_empty_buffer(),
@@ -639,39 +687,74 @@ impl VzEditorApp {
                 if ctrl || modifiers.alt {
                     continue;
                 }
+                let entries = self.build_menu_entries(active_menu);
+                if let Some(items) = self.open_submenu_items(&entries) {
+                    // サブメニューを開いている間: 上下で移動、← / Esc で閉じる、→ で次のメニュー
+                    match key {
+                        Key::Escape | Key::ArrowLeft => self.open_submenu = None,
+                        Key::ArrowDown | Key::ArrowUp => {
+                            let delta = if key == Key::ArrowDown { 1 } else { -1 };
+                            self.submenu_selected_idx =
+                                Self::step_menu_idx(&items, self.submenu_selected_idx, delta);
+                        }
+                        Key::ArrowRight => {
+                            active_menu = active_menu.next();
+                            self.open_top_menu(active_menu);
+                        }
+                        Key::Enter => {
+                            if let Some(MenuEntry::Item {
+                                action,
+                                enabled: true,
+                                ..
+                            }) = items.get(self.submenu_selected_idx)
+                            {
+                                self.execute_menu_action(ctx, *action);
+                                return;
+                            }
+                        }
+                        _ => {}
+                    }
+                    continue;
+                }
                 match key {
                     Key::Escape => {
                         self.open_menu = None;
                         return;
                     }
-                    Key::ArrowDown => {
-                        let entries = self.build_menu_entries(active_menu);
-                        self.step_menu_selection(&entries, 1);
-                    }
-                    Key::ArrowUp => {
-                        let entries = self.build_menu_entries(active_menu);
-                        self.step_menu_selection(&entries, -1);
+                    Key::ArrowDown | Key::ArrowUp => {
+                        let delta = if key == Key::ArrowDown { 1 } else { -1 };
+                        self.menu_selected_idx =
+                            Self::step_menu_idx(&entries, self.menu_selected_idx, delta);
                     }
                     Key::ArrowRight => {
-                        active_menu = active_menu.next();
-                        self.open_top_menu(active_menu);
+                        if matches!(
+                            entries.get(self.menu_selected_idx),
+                            Some(MenuEntry::Submenu { .. })
+                        ) {
+                            self.open_submenu_at(&entries, self.menu_selected_idx);
+                        } else {
+                            active_menu = active_menu.next();
+                            self.open_top_menu(active_menu);
+                        }
                     }
                     Key::ArrowLeft => {
                         active_menu = active_menu.prev();
                         self.open_top_menu(active_menu);
                     }
-                    Key::Enter => {
-                        let entries = self.build_menu_entries(active_menu);
-                        if let Some(MenuEntry::Item {
+                    Key::Enter => match entries.get(self.menu_selected_idx) {
+                        Some(MenuEntry::Item {
                             action,
                             enabled: true,
                             ..
-                        }) = entries.get(self.menu_selected_idx)
-                        {
+                        }) => {
                             self.execute_menu_action(ctx, *action);
                             return;
                         }
-                    }
+                        Some(MenuEntry::Submenu { .. }) => {
+                            self.open_submenu_at(&entries, self.menu_selected_idx);
+                        }
+                        _ => {}
+                    },
                     _ => {}
                 }
             }
@@ -774,6 +857,8 @@ impl VzEditorApp {
         // Dropdown popup rendered on Foreground layer
         let mut triggered_action: Option<MenuAction> = None;
         let mut popup_rect = Rect::NOTHING;
+        let mut submenu_rect = Rect::NOTHING;
+        let mut submenu_anchor: Option<(usize, Rect)> = None;
 
         if let Some(active_menu) = self.open_menu {
             let anchor_rect = header_rects
@@ -791,110 +876,205 @@ impl VzEditorApp {
                 .order(egui::Order::Foreground)
                 .fixed_pos(Pos2::new(anchor_rect.min.x, bar_rect.max.y))
                 .show(ctx, |ui| {
-                    let frame_resp = egui::Frame::NONE
-                        .fill(MENU_POPUP_BG)
-                        .stroke(Stroke::new(1.5_f32, TEXT_CYAN))
-                        .corner_radius(CornerRadius::same(2))
-                        .inner_margin(egui::Margin::symmetric(4, 4))
-                        .show(ui, |ui| {
-                            ui.set_width(popup_w);
-                            ui.spacing_mut().item_spacing.y = 1.0;
+                    let frame_resp = Self::menu_popup_frame().show(ui, |ui| {
+                        ui.set_width(popup_w);
+                        ui.spacing_mut().item_spacing.y = 1.0;
 
-                            for (idx, entry) in entries.iter().enumerate() {
-                                match entry {
-                                    MenuEntry::Separator => {
-                                        let (rect, _) = ui.allocate_exact_size(
-                                            Vec2::new(popup_w, sep_h),
-                                            Sense::hover(),
-                                        );
-                                        let y = rect.center().y;
-                                        ui.painter().line_segment(
-                                            [
-                                                Pos2::new(rect.min.x + 6.0, y),
-                                                Pos2::new(rect.max.x - 6.0, y),
-                                            ],
-                                            Stroke::new(1.0_f32, GUTTER_SEP),
-                                        );
+                        for (idx, entry) in entries.iter().enumerate() {
+                            match entry {
+                                MenuEntry::Separator => {
+                                    Self::paint_menu_separator(ui, popup_w, sep_h);
+                                }
+                                MenuEntry::Item {
+                                    label,
+                                    shortcut,
+                                    action,
+                                    enabled,
+                                } => {
+                                    let (rect, resp) = ui.allocate_exact_size(
+                                        Vec2::new(popup_w, row_h),
+                                        Sense::click(),
+                                    );
+                                    if resp.hovered() {
+                                        self.menu_selected_idx = idx;
+                                        self.open_submenu = None;
                                     }
-                                    MenuEntry::Item {
+                                    let is_selected = idx == selected_idx || resp.hovered();
+                                    Self::paint_menu_row(
+                                        ui,
+                                        rect,
                                         label,
                                         shortcut,
-                                        action,
-                                        enabled,
-                                    } => {
-                                        let (rect, resp) = ui.allocate_exact_size(
-                                            Vec2::new(popup_w, row_h),
-                                            Sense::click(),
-                                        );
-                                        if resp.hovered() {
-                                            self.menu_selected_idx = idx;
-                                        }
-                                        let is_selected = idx == selected_idx || resp.hovered();
-                                        if ui.is_rect_visible(rect) {
-                                            let p = ui.painter();
-                                            if is_selected && *enabled {
-                                                p.rect_filled(
-                                                    rect,
-                                                    CornerRadius::same(2),
-                                                    MENU_ITEM_HOVER,
-                                                );
-                                            }
-                                            let label_color = if !*enabled {
-                                                MENU_TEXT_DISABLED
-                                            } else {
-                                                TEXT_WHITE
-                                            };
-                                            p.text(
-                                                Pos2::new(rect.min.x + 10.0, rect.center().y),
-                                                Align2::LEFT_CENTER,
-                                                *label,
-                                                FontId::monospace(12.5),
-                                                label_color,
-                                            );
-                                            if !shortcut.is_empty() {
-                                                let sc_color = if !*enabled {
-                                                    MENU_TEXT_DISABLED
-                                                } else if is_selected {
-                                                    TEXT_CYAN
-                                                } else {
-                                                    TEXT_DIM_CYAN
-                                                };
-                                                p.text(
-                                                    Pos2::new(rect.max.x - 10.0, rect.center().y),
-                                                    Align2::RIGHT_CENTER,
-                                                    *shortcut,
-                                                    FontId::monospace(11.5),
-                                                    sc_color,
-                                                );
-                                            }
-                                        }
-                                        if *enabled && resp.clicked() {
-                                            triggered_action = Some(*action);
-                                        }
+                                        *enabled,
+                                        is_selected,
+                                    );
+                                    if *enabled && resp.clicked() {
+                                        triggered_action = Some(*action);
                                     }
                                 }
+                                MenuEntry::Submenu { label, .. } => {
+                                    let (rect, resp) = ui.allocate_exact_size(
+                                        Vec2::new(popup_w, row_h),
+                                        Sense::click(),
+                                    );
+                                    if (resp.hovered() || resp.clicked())
+                                        && self.open_submenu != Some(idx)
+                                    {
+                                        self.open_submenu_at(&entries, idx);
+                                    }
+                                    let is_open = self.open_submenu == Some(idx);
+                                    if is_open {
+                                        submenu_anchor = Some((idx, rect));
+                                    }
+                                    let is_selected =
+                                        idx == selected_idx || resp.hovered() || is_open;
+                                    Self::paint_menu_row(ui, rect, label, "▶", true, is_selected);
+                                }
                             }
-                        });
+                        }
+                    });
                     popup_rect = frame_resp.response.rect;
                 });
             if popup_rect == Rect::NOTHING {
                 popup_rect = area_resp.response.rect;
+            }
+
+            // サブメニュー: 親項目の右に開く（画面の右端を越えるなら左に開く）
+            if let Some((parent_idx, anchor)) = submenu_anchor {
+                if let Some(MenuEntry::Submenu { items, .. }) = entries.get(parent_idx) {
+                    let sub_w = 300.0_f32;
+                    let frame_pad = 4.0_f32;
+                    let screen = ctx.screen_rect();
+                    let mut x = popup_rect.max.x - 2.0;
+                    if x + sub_w + frame_pad * 2.0 > screen.max.x {
+                        x = (popup_rect.min.x - sub_w - frame_pad * 2.0 + 2.0).max(screen.min.x);
+                    }
+                    let sub_selected = self.submenu_selected_idx;
+                    let sub_resp = egui::Area::new(egui::Id::new("lz_menu_submenu"))
+                        .order(egui::Order::Foreground)
+                        .fixed_pos(Pos2::new(x, anchor.min.y - frame_pad))
+                        .show(ctx, |ui| {
+                            Self::menu_popup_frame().show(ui, |ui| {
+                                ui.set_width(sub_w);
+                                ui.spacing_mut().item_spacing.y = 1.0;
+                                for (idx, entry) in items.iter().enumerate() {
+                                    match entry {
+                                        MenuEntry::Item {
+                                            label,
+                                            shortcut,
+                                            action,
+                                            enabled,
+                                        } => {
+                                            let (rect, resp) = ui.allocate_exact_size(
+                                                Vec2::new(sub_w, row_h),
+                                                Sense::click(),
+                                            );
+                                            if resp.hovered() {
+                                                self.submenu_selected_idx = idx;
+                                            }
+                                            let is_selected = idx == sub_selected || resp.hovered();
+                                            Self::paint_menu_row(
+                                                ui,
+                                                rect,
+                                                label,
+                                                shortcut,
+                                                *enabled,
+                                                is_selected,
+                                            );
+                                            if *enabled && resp.clicked() {
+                                                triggered_action = Some(*action);
+                                            }
+                                        }
+                                        _ => Self::paint_menu_separator(ui, sub_w, sep_h),
+                                    }
+                                }
+                            });
+                        });
+                    submenu_rect = sub_resp.response.rect;
+                }
             }
         }
 
         if let Some(action) = triggered_action {
             self.execute_menu_action(ctx, action);
         } else if self.open_menu.is_some() && clicked_header.is_none() {
-            // Close menu if the user clicked anywhere outside both the menu bar and the popup
+            // Close menu if the user clicked anywhere outside the menu bar and the popups
             let clicked_outside = ctx.input(|i| {
                 i.pointer.any_pressed()
-                    && i.pointer
-                        .interact_pos()
-                        .is_some_and(|pos| !bar_rect.contains(pos) && !popup_rect.contains(pos))
+                    && i.pointer.interact_pos().is_some_and(|pos| {
+                        !bar_rect.contains(pos)
+                            && !popup_rect.contains(pos)
+                            && !submenu_rect.contains(pos)
+                    })
             });
             if clicked_outside {
                 self.open_menu = None;
             }
+        }
+    }
+
+    fn menu_popup_frame() -> egui::Frame {
+        egui::Frame::NONE
+            .fill(MENU_POPUP_BG)
+            .stroke(Stroke::new(1.5_f32, TEXT_CYAN))
+            .corner_radius(CornerRadius::same(2))
+            .inner_margin(egui::Margin::symmetric(4, 4))
+    }
+
+    fn paint_menu_separator(ui: &mut egui::Ui, width: f32, height: f32) {
+        let (rect, _) = ui.allocate_exact_size(Vec2::new(width, height), Sense::hover());
+        let y = rect.center().y;
+        ui.painter().line_segment(
+            [
+                Pos2::new(rect.min.x + 6.0, y),
+                Pos2::new(rect.max.x - 6.0, y),
+            ],
+            Stroke::new(1.0_f32, GUTTER_SEP),
+        );
+    }
+
+    /// メニューの 1 行（左に項目名、右にショートカットかサブメニューの ▶）。
+    fn paint_menu_row(
+        ui: &egui::Ui,
+        rect: Rect,
+        label: &str,
+        shortcut: &str,
+        enabled: bool,
+        selected: bool,
+    ) {
+        if !ui.is_rect_visible(rect) {
+            return;
+        }
+        let p = ui.painter();
+        if selected && enabled {
+            p.rect_filled(rect, CornerRadius::same(2), MENU_ITEM_HOVER);
+        }
+        p.text(
+            Pos2::new(rect.min.x + 10.0, rect.center().y),
+            Align2::LEFT_CENTER,
+            label,
+            FontId::monospace(12.5),
+            if enabled {
+                TEXT_WHITE
+            } else {
+                MENU_TEXT_DISABLED
+            },
+        );
+        if !shortcut.is_empty() {
+            let sc_color = if !enabled {
+                MENU_TEXT_DISABLED
+            } else if selected {
+                TEXT_CYAN
+            } else {
+                TEXT_DIM_CYAN
+            };
+            p.text(
+                Pos2::new(rect.max.x - 10.0, rect.center().y),
+                Align2::RIGHT_CENTER,
+                shortcut,
+                FontId::monospace(11.5),
+                sc_color,
+            );
         }
     }
 

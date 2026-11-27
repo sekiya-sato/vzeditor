@@ -33,6 +33,8 @@ pub(super) fn make_test_app() -> VzEditorApp {
         last_filer_visible_rows: 20,
         open_menu: None,
         menu_selected_idx: 0,
+        open_submenu: None,
+        submenu_selected_idx: 0,
         show_help: false,
         show_about: false,
         help_click_armed: false,
@@ -966,6 +968,96 @@ fn test_window_style_opacity_and_menu() {
     assert!(has(&app, "最前面に固定"));
     app.always_on_top = true;
     assert!(has(&app, "最前面固定を解除"));
+}
+
+#[test]
+fn test_tools_submenu_keyboard() {
+    let mut app = make_test_app();
+    let ctx = egui::Context::default();
+    let press = |app: &mut VzEditorApp, key: Key| {
+        let raw = egui::RawInput {
+            events: vec![Event::Key {
+                key,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            }],
+            ..Default::default()
+        };
+        let _ = ctx.run(raw, |ctx| app.handle_events(ctx));
+    };
+
+    let entries = app.build_menu_entries(TopMenu::Tools);
+    let labels: Vec<&str> = entries
+        .iter()
+        .filter_map(|e| match e {
+            MenuEntry::Submenu { label, .. } => Some(*label),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        labels,
+        [
+            "ブラウザ",
+            "フォント",
+            "背景透過",
+            "文字透過",
+            "他アプリ連携"
+        ]
+    );
+    let font_idx = entries
+        .iter()
+        .position(|e| {
+            matches!(
+                e,
+                MenuEntry::Submenu {
+                    label: "フォント",
+                    ..
+                }
+            )
+        })
+        .unwrap();
+
+    // フォントへ移動し → で開く。← で閉じ、Enter で開き直す
+    app.open_top_menu(TopMenu::Tools);
+    while app.menu_selected_idx != font_idx {
+        press(&mut app, Key::ArrowDown);
+    }
+    press(&mut app, Key::ArrowRight);
+    assert_eq!(app.open_submenu, Some(font_idx));
+    assert_eq!(app.open_menu, Some(TopMenu::Tools));
+    press(&mut app, Key::ArrowLeft);
+    assert_eq!(app.open_submenu, None);
+    assert_eq!(app.open_menu, Some(TopMenu::Tools));
+    press(&mut app, Key::Enter);
+    assert_eq!(app.open_submenu, Some(font_idx));
+
+    // 縮小を選んで実行するとメニューが閉じる
+    press(&mut app, Key::ArrowDown);
+    press(&mut app, Key::Enter);
+    assert!(app.font_size < DEFAULT_FONT_SIZE);
+    assert_eq!(app.open_menu, None);
+    assert_eq!(app.open_submenu, None);
+
+    // Esc はサブメニューだけを閉じる
+    app.open_top_menu(TopMenu::Tools);
+    while app.menu_selected_idx != font_idx {
+        press(&mut app, Key::ArrowDown);
+    }
+    press(&mut app, Key::Enter);
+    press(&mut app, Key::Escape);
+    assert_eq!(app.open_submenu, None);
+    assert_eq!(app.open_menu, Some(TopMenu::Tools));
+
+    // 描画（サブメニューを開いた状態）
+    press(&mut app, Key::Enter);
+    let raw_input = egui::RawInput {
+        screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(1024.0, 680.0))),
+        ..Default::default()
+    };
+    let _ = ctx.run(raw_input, |ctx| app.render_menu_bar(ctx));
+    assert_eq!(app.open_submenu, Some(font_idx));
 }
 
 #[test]

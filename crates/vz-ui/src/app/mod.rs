@@ -269,6 +269,11 @@ enum MenuEntry {
         action: MenuAction,
         enabled: bool,
     },
+    /// 右へ開くサブメニュー（入れ子にはしない）
+    Submenu {
+        label: &'static str,
+        items: Vec<MenuEntry>,
+    },
     Separator,
 }
 
@@ -407,6 +412,9 @@ pub struct VzEditorApp {
     // Menu bar & UI overlays / async native dialogs
     open_menu: Option<TopMenu>,
     menu_selected_idx: usize,
+    /// 開いているサブメニューの親項目の位置。開いている間はキー操作がサブメニューに行く
+    open_submenu: Option<usize>,
+    submenu_selected_idx: usize,
     show_help: bool,
     show_about: bool,
     /// ヘルプ / About が前のフレームから表示中か。開いたフレームのクリック（メニュー操作）で閉じないための判定。
@@ -568,6 +576,8 @@ impl VzEditorApp {
             last_filer_visible_rows: 20,
             open_menu: None,
             menu_selected_idx: 0,
+            open_submenu: None,
+            submenu_selected_idx: 0,
             show_help: false,
             show_about: false,
             help_click_armed: false,
