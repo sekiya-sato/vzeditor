@@ -62,6 +62,16 @@ impl VzEditorApp {
         let mut prefix = self.send_prefix;
         ctx.input_mut(|i| {
             i.events.retain(|ev| {
+                // 2打目待ちの間の IME 入力（IME が先にキーを取った場合）は編集に渡さない
+                if prefix
+                    && matches!(
+                        ev,
+                        Event::Ime(egui::ImeEvent::Preedit(_) | egui::ImeEvent::Commit(_))
+                    )
+                {
+                    consumed = true;
+                    return false;
+                }
                 let Event::Key {
                     key,
                     pressed,
@@ -99,7 +109,13 @@ impl VzEditorApp {
                 true
             });
             if consumed {
-                i.events.retain(|ev| !matches!(ev, Event::Text(_)));
+                i.events.retain(|ev| {
+                    !matches!(
+                        ev,
+                        Event::Text(_)
+                            | Event::Ime(egui::ImeEvent::Preedit(_) | egui::ImeEvent::Commit(_))
+                    )
+                });
             }
         });
         let started_prefix = prefix && !self.send_prefix;

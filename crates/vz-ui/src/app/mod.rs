@@ -926,6 +926,10 @@ impl eframe::App for VzEditorApp {
         self.render_drop_overlay(ctx);
         // WebView は egui の上に重なるので、描画の後で位置と表示を合わせる
         self.sync_browser(ctx, frame);
+        // Alt+C の2打目は送信先の選択なので、IME を切って文字として入力させない
+        if self.send_prefix {
+            ctx.output_mut(|o| o.ime = None);
+        }
 
         // ctx を持たない処理（F キー・メニュー）からのコピーを書き出す
         if let Some(text) = self.clipboard_out.take() {

@@ -1392,6 +1392,27 @@ fn test_send_prefix_keys() {
     assert_eq!(app.status_message, "送信を取り消しました");
     assert!(app.pending_send.is_none());
 
+    // 2打目待ちの間の IME 入力はエディターに入らない
+    let before = app.cur_buf().text_lines().join("\n");
+    let input = egui::RawInput {
+        events: vec![key_event(Key::C, true)],
+        ..Default::default()
+    };
+    let _ = ctx.run(input, |ctx| app.handle_events(ctx));
+    assert!(app.send_prefix);
+    let input = egui::RawInput {
+        events: vec![
+            Event::Ime(egui::ImeEvent::Preedit("ｃ".into())),
+            Event::Ime(egui::ImeEvent::Commit("ｃ".into())),
+            Event::Text("c".into()),
+        ],
+        ..Default::default()
+    };
+    let _ = ctx.run(input, |ctx| app.handle_events(ctx));
+    assert_eq!(app.cur_buf().text_lines().join("\n"), before);
+    assert!(app.ime_preedit.is_empty());
+    app.send_prefix = false;
+
     // 空のバッファでは送らない（2打目は Alt を押したままでもよい）
     app.buffers = vec![BufferSlot::new(TextBuffer::new())];
     run(&mut app, vec![key_event(Key::C, true)]);
