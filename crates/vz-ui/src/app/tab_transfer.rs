@@ -8,6 +8,8 @@ use vz_platform::tab_drop::DropTarget;
 
 const POLL_INTERVAL: Duration = Duration::from_millis(250);
 const TRANSFER_TIMEOUT: Duration = Duration::from_secs(30);
+const TAB_BODY_FILE: &str = "body.txt";
+const HUGE_EDITS_FILE: &str = "huge.vzedit";
 const HUGE_WORK_FILE: &str = "huge-work";
 
 #[derive(Default)]
@@ -261,7 +263,7 @@ impl BufferSlot {
         let path = self.conflict_of.as_ref().or(buf.file_path.as_ref());
         let temp = match kind {
             EntryKind::HugeEdits => {
-                let temp = session::huge_edits_path(dir, 0);
+                let temp = dir.join(HUGE_EDITS_FILE);
                 match buf.write_huge_edits(&temp) {
                     Ok(()) => Some(temp),
                     Err(error) => {
@@ -287,7 +289,7 @@ impl BufferSlot {
                 }
             }
             EntryKind::Unsaved | EntryKind::Conflict => {
-                let temp = session::temp_path(dir, 0);
+                let temp = dir.join(TAB_BODY_FILE);
                 let mut writer = BufWriter::new(fs::File::create(&temp)?);
                 for (i, line) in buf.text_lines().iter().enumerate() {
                     if i > 0 {
@@ -335,6 +337,14 @@ impl BufferSlot {
         let [entry] = entries.as_slice() else {
             return Err(invalid());
         };
+        // v0.3.2 の送信元が付ける PID 付きの名前も、記録どおりに解決する。
+        let payload_path = || {
+            let name = entry.temp.as_deref().ok_or_else(invalid)?;
+            if name.file_name() != Some(name.as_os_str()) {
+                return Err(invalid());
+            }
+            Ok(dir.join(name))
+        };
         let stamp = super::restore::stamp_from_record(entry.disk_stamp);
         let mut buffer = match entry.kind {
             EntryKind::File | EntryKind::HugeEdits
@@ -347,7 +357,7 @@ impl BufferSlot {
                     return Err(io::Error::other("移動中に元ファイルが変更されました"));
                 }
                 if entry.kind == EntryKind::HugeEdits {
-                    let work = vz_config::tab_transfer::take_work_file(&dir.join(HUGE_WORK_FILE))?;
+                    let work = vz_config::tab_transfer::take_work_file(&payload_path()?)?;
                     let path = work.keep().map_err(|error| error.error)?;
                     if let Err(error) = buf.adopt_huge_work_file(&path) {
                         let _ = fs::remove_file(path);
@@ -358,10 +368,10 @@ impl BufferSlot {
             }
             EntryKind::HugeEdits => {
                 let path = entry.path.as_deref().ok_or_else(invalid)?;
-                TextBuffer::open_huge_with_edits(path, &session::huge_edits_path(dir, 0))?
+                TextBuffer::open_huge_with_edits(path, &payload_path()?)?
             }
             EntryKind::Unsaved | EntryKind::Conflict => {
-                let text = fs::read_to_string(session::temp_path(dir, 0))?;
+                let text = fs::read_to_string(payload_path()?)?;
                 let mut buf = TextBuffer::from_lines(text.split('\n').map(String::from).collect());
                 if entry.kind == EntryKind::Unsaved {
                     buf.file_path = entry.path.clone();
@@ -467,6 +477,59 @@ mod tests {
             .iter()
             .any(|line| line.contains("New edit")));
         drop(offer);
+        fs::remove_dir(root).unwrap();
+    }
+
+    #[test]
+    fn transfer_reads_payload_names_from_a_different_process() {
+        let root = std::env::temp_dir().join(format!("vz-tab-other-pid-{}", std::process::id()));
+        fs::create_dir_all(&root).unwrap();
+        let original = root.join("original.txt");
+        fs::write(&original, "original\n").unwrap();
+        let sender_pid = std::process::id().wrapping_add(1);
+        for huge in [false, true] {
+            let offer = Offer::new(&root).unwrap();
+            let mut buffer = if huge {
+                TextBuffer::open_huge(&original).unwrap()
+            } else {
+                TextBuffer::from_file(&original).unwrap()
+            };
+            buffer.insert_text("edited ");
+            assert!(buffer.dirty);
+            let tab = BufferSlot::new(buffer);
+            tab.write_transfer(offer.path()).unwrap();
+            let (local_payload, sender_name) = if huge {
+                (
+                    offer.path().join(HUGE_EDITS_FILE),
+                    format!("huge-{sender_pid}-0.vzedit"),
+                )
+            } else {
+                (
+                    offer.path().join(TAB_BODY_FILE),
+                    format!("unsaved-{sender_pid}-0.txt"),
+                )
+            };
+            fs::rename(&local_payload, offer.path().join(&sender_name)).unwrap();
+            let manifest = offer.path().join("tab.ini");
+            let metadata = fs::read_to_string(&manifest).unwrap();
+            let local_name = local_payload.file_name().unwrap().to_str().unwrap();
+            assert!(metadata.contains(local_name));
+            fs::write(&manifest, metadata.replacen(local_name, &sender_name, 1)).unwrap();
+
+            let restored = BufferSlot::read_transfer(offer.path()).unwrap();
+            assert!(restored.buffer.dirty);
+            assert_eq!(restored.buffer.is_huge(), huge);
+            if let Some(huge) = restored.buffer.huge() {
+                let snapshot = huge.doc_snapshot();
+                assert_eq!(
+                    snapshot.read(0, snapshot.len()).as_ref(),
+                    b"edited original\n"
+                );
+            } else {
+                assert_eq!(restored.buffer.line(0), "edited original");
+            }
+        }
+        fs::remove_file(original).unwrap();
         fs::remove_dir(root).unwrap();
     }
 
