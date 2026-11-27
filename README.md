@@ -20,10 +20,11 @@ We thank the original author and contributors for their work.
 - ウィンドウの最前面固定・背景透過など、作業の横に置いて使うための機能
 - 前回のモニター・位置・サイズで起動（モニターを外した場合は主モニターに表示）
 - 大規模ファイルへの対応
+- 印刷機能
 
 ## 開発状況
 
-開発中です。独自機能の追加とクロスプラットフォーム対応を進めています。
+正式リリース中。追加仕様の検討と不具合対応を進めています。
 
 | OS | 状況 | 確認方法 |
 | :--- | :--- | :--- |
@@ -38,13 +39,7 @@ We thank the original author and contributors for their work.
 - 実行ファイル名は `lz` から `vz` に、パッケージ名は `vzeditor` に変えています。原作と同時にインストールしても衝突しません。
 - デザインはvzeditorを踏襲します。ただしうろ覚えなので違うところもあるかもしれません。
 - 不具合報告や要望は、原作由来の部分も含めてこのリポジトリの Issue へお願いします。
-- フォーク元の更新を取り込む場合:
 
-```powershell
-git remote add upstream https://github.com/TouryuTamane/lz-editor.git
-git fetch upstream
-git merge upstream/main
-```
 
 ## 追加機能
 
@@ -259,6 +254,6 @@ Copyright (c) 2026 Sekiya Sato
 
 ## 謝辞
 
-原作 LZ Editor を開発した Touryu Tamane 氏とコントリビューターの皆さんに感謝します。
+原作 LZ Editor を開発した Touryu Tamane 氏に感謝します。
 
 Special thanks to Touryu Tamane and the contributors of LZ Editor.
