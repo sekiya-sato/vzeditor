@@ -71,6 +71,7 @@ pub(super) struct SearchState {
     display_row: bool,
     /// 最後に実行した検索の条件。一致箇所を画面でハイライトする。
     highlight: Option<SearchPattern>,
+    highlight_enabled: bool,
 }
 
 impl Default for SearchState {
@@ -99,6 +100,7 @@ impl Default for SearchState {
             line: String::new(),
             display_row: false,
             highlight: None,
+            highlight_enabled: true,
         }
     }
 }
@@ -117,9 +119,13 @@ impl SearchState {
         SearchPattern::new(&self.query, &self.options)
     }
 
-    /// 画面でハイライトする検索条件（検索を実行するまでは無し）。
+    pub(super) fn highlight_enabled(&self) -> bool {
+        self.highlight_enabled
+    }
+
+    /// 表示がオンで、検索を実行済みの場合だけ描画に使う条件を返す。
     pub(super) fn highlight(&self) -> Option<&SearchPattern> {
-        self.highlight.as_ref()
+        self.highlight.as_ref().filter(|_| self.highlight_enabled)
     }
 
     fn render(
@@ -545,6 +551,16 @@ impl VzEditorApp {
         }
     }
 
+    pub(super) fn toggle_search_highlight(&mut self) {
+        self.search.highlight_enabled = !self.search.highlight_enabled;
+        self.status_message = if self.search.highlight_enabled {
+            "検索ハイライト: オン"
+        } else {
+            "検索ハイライト: オフ"
+        }
+        .into();
+    }
+
     pub(super) fn toggle_search_marks(&mut self) -> Result<(), String> {
         if self
             .cur_slot_mut()
@@ -762,6 +778,7 @@ impl VzEditorApp {
         match action {
             DialogAction::Find(up) => {
                 let pattern = self.search.pattern()?;
+                self.search.highlight_enabled = true;
                 if self.find_match(&pattern, up) && self.search.auto_close {
                     self.search.close();
                 }
@@ -993,6 +1010,77 @@ mod tests {
         app.cur_buf_mut().select_range((0, 4), (0, 5));
         app.open_search_dialog(SearchDialog::Find);
         assert_eq!(app.search.query, "b");
+    }
+
+    #[test]
+    fn ctrl_f3_preserves_highlight_setting_until_a_new_search_in_both_schemes() {
+        for scheme in [KeyScheme::Sakura, KeyScheme::Vz] {
+            let ctx = egui::Context::default();
+            let mut app = app_with_text("猫 犬\n猫");
+            app.key_scheme = scheme;
+            app.open_search_dialog(SearchDialog::Find);
+            app.search.query = "猫".into();
+            input_frame(&ctx, &mut app, vec![]);
+            input_frame(
+                &ctx,
+                &mut app,
+                vec![key_event(Key::Enter, egui::Modifiers::NONE)],
+            );
+            assert!(app.search.highlight().is_some());
+            let selection = app.cur_buf().selection_range();
+
+            let toggle = || {
+                let modifiers = egui::Modifiers::CTRL;
+                vec![
+                    key_event(Key::F3, modifiers),
+                    Event::Key {
+                        key: Key::F3,
+                        physical_key: Some(Key::F3),
+                        pressed: false,
+                        repeat: false,
+                        modifiers,
+                    },
+                ]
+            };
+            input_frame(&ctx, &mut app, toggle());
+            assert!(app.search.highlight().is_none());
+            assert_eq!(app.cur_buf().selection_range(), selection);
+            assert!(app.cur_slot().search_marks.is_none());
+
+            input_frame(&ctx, &mut app, toggle());
+            assert!(app.search.highlight().is_some());
+            assert_eq!(app.cur_buf().selection_range(), selection);
+
+            input_frame(&ctx, &mut app, toggle());
+            assert!(app.search.highlight().is_none());
+            input_frame(
+                &ctx,
+                &mut app,
+                vec![key_event(Key::F3, egui::Modifiers::NONE)],
+            );
+            assert_eq!(app.cur_buf().selection_range(), Some(((1, 0), (1, 1))));
+            assert!(app.search.highlight().is_none());
+
+            input_frame(
+                &ctx,
+                &mut app,
+                vec![key_event(Key::F3, egui::Modifiers::SHIFT)],
+            );
+            assert_eq!(app.cur_buf().selection_range(), selection);
+            assert!(app.search.highlight().is_none());
+
+            app.open_search_dialog(SearchDialog::Find);
+            app.search.query = "犬".into();
+            input_frame(&ctx, &mut app, vec![]);
+            input_frame(
+                &ctx,
+                &mut app,
+                vec![key_event(Key::Enter, egui::Modifiers::NONE)],
+            );
+            assert_eq!(app.cur_buf().selection_range(), Some(((0, 2), (0, 3))));
+            let pattern = app.search.highlight().expect("新規検索でハイライトがオン");
+            assert_eq!(highlight_ranges(pattern, "猫 犬", 0, 3), [(2, 3)]);
+        }
     }
 
     #[test]

@@ -73,11 +73,7 @@ impl VzEditorApp {
             EditorAction::CloseBuffer => self.close_current_buffer(),
             EditorAction::RepeatSearch(up) => self.repeat_search(up),
             EditorAction::DuplicateLine => self.sakura_duplicate_line(),
-            EditorAction::ToggleSearchMarks => {
-                if let Err(message) = self.toggle_search_marks() {
-                    self.status_message = message;
-                }
-            }
+            EditorAction::ToggleSearchHighlight => self.toggle_search_highlight(),
             EditorAction::Quit | EditorAction::Nop => {}
         }
     }
@@ -343,6 +339,7 @@ impl VzEditorApp {
                     key,
                     pressed: true,
                     modifiers,
+                    repeat,
                     ..
                 } => {
                     if !self.ime_preedit.is_empty() {
@@ -351,8 +348,11 @@ impl VzEditorApp {
 
                     let ctrl = modifiers.ctrl || modifiers.command;
 
-                    if key == Key::F3 && !ctrl && !modifiers.alt {
+                    if key == Key::F3 && !modifiers.alt && !(ctrl && modifiers.shift) {
                         suppress_text_this_frame = true;
+                        if ctrl && repeat {
+                            continue;
+                        }
                         let layer = FKeyLayer::from_modifiers(modifiers);
                         if let Some(action) =
                             Self::editor_fkey_action(key, self.is_sakura(), in_md_view, layer)

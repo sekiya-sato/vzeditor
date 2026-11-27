@@ -832,7 +832,7 @@ mod tests {
         );
         assert_eq!(
             assigned(&sakura(FKeyLayer::Ctrl)),
-            vec![(2, ToggleSearchMarks), (3, CloseBuffer)]
+            vec![(2, ToggleSearchHighlight), (3, CloseBuffer)]
         );
         assert_eq!(assigned(&sakura(FKeyLayer::Alt)), vec![(3, Quit)]);
         for md in [false, true] {
@@ -842,7 +842,7 @@ mod tests {
             assert_eq!(normal[3].1, Nop);
             assert_eq!(vz(FKeyLayer::Shift)[2].1, RepeatSearch(true));
             assert_eq!(vz(FKeyLayer::Shift)[3].1, Nop);
-            assert_eq!(vz(FKeyLayer::Ctrl)[2].1, Nop);
+            assert_eq!(vz(FKeyLayer::Ctrl)[2].1, ToggleSearchHighlight);
             assert_eq!(vz(FKeyLayer::Ctrl)[3].1, CloseBuffer);
             assert_eq!(vz(FKeyLayer::Ctrl)[4], normal[4]);
             assert_eq!(vz(FKeyLayer::Alt)[3].1, Quit);

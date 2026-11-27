@@ -55,7 +55,7 @@ impl VzEditorApp {
                     keys[9] = ("行複製", DuplicateLine);
                 }
                 FKeyLayer::Ctrl => {
-                    keys[2] = ("行マーク", ToggleSearchMarks);
+                    keys[2] = ("強調切替", ToggleSearchHighlight);
                     keys[3] = ("閉じる", CloseBuffer);
                 }
                 FKeyLayer::Alt => keys[3] = ("終了", Quit),
@@ -83,13 +83,13 @@ impl VzEditorApp {
         ];
         match layer {
             FKeyLayer::Shift => keys[2] = ("前検索", RepeatSearch(true)),
-            FKeyLayer::Ctrl | FKeyLayer::Alt => {
+            FKeyLayer::Ctrl => {
+                keys[2] = ("強調切替", ToggleSearchHighlight);
+                keys[3] = ("閉じる", CloseBuffer);
+            }
+            FKeyLayer::Alt => {
                 keys[2] = NONE;
-                keys[3] = if layer == FKeyLayer::Ctrl {
-                    ("閉じる", CloseBuffer)
-                } else {
-                    ("終了", Quit)
-                };
+                keys[3] = ("終了", Quit);
             }
             FKeyLayer::Normal => {}
         }

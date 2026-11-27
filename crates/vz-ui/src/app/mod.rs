@@ -102,8 +102,8 @@ enum EditorAction {
     RepeatSearch(bool),
     /// 行の複製（Shift+F10）
     DuplicateLine,
-    /// 検索語の行マーク切替（サクラ互換 Ctrl+F3）
-    ToggleSearchMarks,
+    /// 検索ハイライトの切替（Ctrl+F3）
+    ToggleSearchHighlight,
     /// 終了（Alt+F4。ctx が要るので F キー欄の側で request_quit を呼ぶ）
     Quit,
     /// 割り当てなし（F キー欄の空欄）
@@ -223,6 +223,7 @@ enum MenuAction {
     // Search
     OpenSearch(SearchDialog),
     RepeatSearch(bool),
+    ToggleSearchHighlight,
     ToggleSearchMarks,
     // Tools
     ToggleMarkdownView,

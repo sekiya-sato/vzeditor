@@ -265,8 +265,18 @@ impl VzEditorApp {
                     enabled: in_editor,
                 },
                 MenuEntry::Item {
+                    label: if self.search.highlight_enabled() {
+                        "検索ハイライトをオフ"
+                    } else {
+                        "検索ハイライトをオン"
+                    },
+                    shortcut: "Ctrl+F3",
+                    action: MenuAction::ToggleSearchHighlight,
+                    enabled: in_editor,
+                },
+                MenuEntry::Item {
                     label: "行マークの切替",
-                    shortcut: sc("Ctrl+F3", ""),
+                    shortcut: "",
                     action: MenuAction::ToggleSearchMarks,
                     enabled: in_editor,
                 },
@@ -539,6 +549,9 @@ impl VzEditorApp {
             MenuAction::ToggleOverwrite => self.toggle_overwrite_mode(),
             MenuAction::OpenSearch(dialog) => self.open_search_dialog(dialog),
             MenuAction::RepeatSearch(up) => self.repeat_search(up),
+            MenuAction::ToggleSearchHighlight => {
+                self.execute_editor_action(EditorAction::ToggleSearchHighlight);
+            }
             MenuAction::ToggleSearchMarks => {
                 if let Err(message) = self.toggle_search_marks() {
                     self.status_message = message;
