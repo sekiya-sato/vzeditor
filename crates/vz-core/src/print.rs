@@ -232,6 +232,8 @@ pub struct PrintDoc {
     /// 行番号の桁数
     pub number_digits: usize,
     pub pages: Vec<PrintPage>,
+    /// 印刷するページ（0 始まり、末尾を含まない）。ページ番号は全体の番号のまま
+    pub range: std::ops::Range<usize>,
 }
 
 impl PrintDoc {
@@ -253,8 +255,27 @@ impl PrintDoc {
             title: title.to_string(),
             printed_at: printed_at.to_string(),
             number_digits: 0,
+            range: 0..pages.len(),
             pages: pages.into_iter().map(PrintPage::Items).collect(),
         })
+    }
+
+    /// 印刷するページを from〜to（1 始まり、両端を含む）に絞る。範囲は 1〜総ページ数に収める。
+    pub fn with_page_range(mut self, from: usize, to: usize) -> Self {
+        let total = self.pages.len();
+        let to = to.clamp(1, total);
+        let from = from.clamp(1, to);
+        self.range = from - 1..to;
+        self
+    }
+
+    /// 印刷するページ（全体でのページ位置と中身）。
+    pub fn printed_pages(&self) -> impl Iterator<Item = (usize, &PrintPage)> {
+        self.pages
+            .iter()
+            .enumerate()
+            .skip(self.range.start)
+            .take(self.range.len())
     }
 
     /// 本文の欄の開始桁（行番号の桁数 + 区切り 2 桁）。
@@ -382,6 +403,7 @@ pub fn layout(
         title: title.to_string(),
         printed_at: printed_at.to_string(),
         number_digits,
+        range: 0..pages.len(),
         pages,
     })
 }
@@ -520,6 +542,24 @@ mod tests {
         assert_eq!(fit_cells_tail("abcdefgh", 6), "...fgh");
         // 全角は 2 桁で数える
         assert_eq!(fit_cells_tail("あいうえお", 7), "...えお");
+    }
+
+    #[test]
+    fn test_page_range() {
+        let s = PageSetup::default();
+        let v: Vec<String> = vec![String::new(); s.body_rows() * 4];
+        let doc = layout(&v, s, "t", "d").unwrap();
+        assert_eq!(doc.printed_pages().count(), 4);
+        let doc = doc.with_page_range(2, 3);
+        let idx: Vec<usize> = doc.printed_pages().map(|(i, _)| i).collect();
+        assert_eq!(idx, [1, 2]);
+        // ページ番号は全体の番号のまま
+        assert_eq!(doc.page_label(1).as_deref(), Some("2 / 4"));
+        // 範囲外は 1〜総ページ数に収める
+        let doc = doc.with_page_range(0, 99);
+        assert_eq!(doc.range, 0..4);
+        let doc = doc.with_page_range(5, 2);
+        assert_eq!(doc.range, 1..2);
     }
 
     #[test]

@@ -84,7 +84,7 @@ pub fn render(doc: &PrintDoc, font: PdfFont) -> Result<Vec<u8>, String> {
     let size = doc.setup.font_size_pt();
     let (num_x, text_x) = doc.body_x();
     let mut document = Document::new();
-    for (idx, page) in doc.pages.iter().enumerate() {
+    for (idx, page) in doc.printed_pages() {
         let settings = PageSettings::from_wh(w, h).ok_or("用紙の大きさが不正です")?;
         let mut pdf_page = document.start_page_with(settings);
         let mut surface = pdf_page.surface();

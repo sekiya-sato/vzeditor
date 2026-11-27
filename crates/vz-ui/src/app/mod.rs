@@ -348,6 +348,8 @@ enum FilerModal {
         printers: Vec<String>,
         printer: usize,
         pages: Option<usize>,
+        /// 印刷するページ（1 始まり、両端を含む）。None は全ページ
+        range: Option<(usize, usize)>,
         shown: std::time::Instant,
     },
     /// 前回の保存して終了で外部の変更と衝突した。差分を見せて、どちらを採用するか確認する

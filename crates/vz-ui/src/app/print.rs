@@ -38,6 +38,7 @@ impl VzEditorApp {
             printers,
             printer,
             pages: Some(doc.pages.len()),
+            range: None,
             shown: std::time::Instant::now(),
         });
     }
@@ -76,12 +77,13 @@ impl VzEditorApp {
         printers: &[String],
         printer: &mut usize,
         pages: &mut Option<usize>,
+        range: &mut Option<(usize, usize)>,
         shown: std::time::Instant,
     ) -> bool {
         // 表示直後の打鍵（Ctrl+P の押し続けなど）では答えない
         let keys_ok = shown.elapsed() >= std::time::Duration::from_millis(300);
-        // プリンターの一覧を開いている間のキーは一覧の操作（Esc で一覧だけ閉じる）
-        let list_open = ctx.memory(|m| m.any_popup_open());
+        // プリンターの一覧を開いている間・ページ番号の入力中のキーはそちらの操作
+        let list_open = ctx.memory(|m| m.any_popup_open()) || ctx.wants_keyboard_input();
         let mut setup = self.print_setup;
         let mut answer: Option<bool> = None;
         modal_window(ctx, "印刷", TEXT_CYAN).show(ctx, |ui| {
@@ -129,6 +131,39 @@ impl VzEditorApp {
                 ui.checkbox(&mut setup.page_numbers, mono("ページ番号を印字する"));
                 ui.label(mono("(Space)").color(TEXT_DIM_CYAN));
             });
+            let total = pages.unwrap_or(1).max(1);
+            ui.horizontal(|ui| {
+                ui.label(mono("ページ　　"));
+                if ui.radio(range.is_none(), mono("全ページ")).clicked() {
+                    *range = None;
+                }
+                if ui.radio(range.is_some(), mono("")).clicked() && range.is_none() {
+                    *range = Some((1, total));
+                }
+                let (mut from, mut to) = range.unwrap_or((1, total));
+                let from_edit = ui.add_enabled(
+                    range.is_some(),
+                    egui::DragValue::new(&mut from).range(1..=total),
+                );
+                ui.label(mono("-"));
+                let to_edit = ui.add_enabled(
+                    range.is_some(),
+                    egui::DragValue::new(&mut to).range(1..=total),
+                );
+                ui.label(mono("ページ"));
+                if range.is_some() {
+                    // 開始が終了を越えたら、動かした側に合わせる
+                    if from > to {
+                        if from_edit.changed() {
+                            to = from;
+                        } else if to_edit.changed() {
+                            from = to;
+                        }
+                    }
+                    *range = Some((from, to));
+                }
+                ui.label(mono("(A)").color(TEXT_DIM_CYAN));
+            });
             ui.add_space(6.0);
             match pages {
                 Some(n) => ui.label(mono(&format!("{n} ページ")).color(TEXT_WHITE)),
@@ -170,6 +205,12 @@ impl VzEditorApp {
                 if i.key_pressed(Key::Space) {
                     setup.page_numbers = !setup.page_numbers;
                 }
+                if i.key_pressed(Key::A) {
+                    *range = match range {
+                        Some(_) => None,
+                        None => Some((1, total)),
+                    };
+                }
                 if i.key_pressed(Key::PageUp) {
                     *printer = (*printer + printers.len() - 1) % printers.len();
                 }
@@ -183,12 +224,17 @@ impl VzEditorApp {
             self.print_setup = setup;
             self.save_settings();
             *pages = self.layout_for_print().ok().map(|doc| doc.pages.len());
+            // ページ数が変わったら指定の範囲を収め直す
+            if let (Some((from, to)), Some(n)) = (*range, *pages) {
+                let to = to.min(n);
+                *range = Some((from.min(to), to));
+            }
         }
         match answer {
             Some(true) => {
                 let name = printers[*printer].clone();
                 self.print_printer = Some(name.clone());
-                self.start_print(name);
+                self.start_print(name, *range);
                 false
             }
             Some(false) => {
@@ -199,11 +245,14 @@ impl VzEditorApp {
         }
     }
 
-    /// 割り付けて、裏のスレッドで printer へ印刷する。
-    fn start_print(&mut self, printer: String) {
+    /// 割り付けて、裏のスレッドで printer へ印刷する。range は 1 始まりの両端を含むページ（None は全ページ）。
+    fn start_print(&mut self, printer: String, range: Option<(usize, usize)>) {
         match self.layout_for_print() {
-            Ok(doc) => {
-                self.status_message = format!("印刷中... ({} ページ)", doc.pages.len());
+            Ok(mut doc) => {
+                if let Some((from, to)) = range {
+                    doc = doc.with_page_range(from, to);
+                }
+                self.status_message = format!("印刷中... ({} ページ)", doc.range.len());
                 self.pending_print = Some(vz_platform::print::spawn_print(doc, printer));
             }
             Err(TooLarge) => self.status_message = TOO_LARGE_MESSAGE.to_string(),

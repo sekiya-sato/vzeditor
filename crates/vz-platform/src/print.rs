@@ -26,7 +26,7 @@ pub fn printers() -> Vec<String> {
 pub fn spawn_print(doc: PrintDoc, printer: String) -> Receiver<PrintResult> {
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
-        let pages = doc.pages.len();
+        let pages = doc.range.len();
         let result = imp::print(&doc, &printer)
             .map(|()| format!("{printer} へ {pages} ページを印刷しました"));
         let _ = tx.send(result);
@@ -364,7 +364,7 @@ mod imp {
             let body_cell = doc.setup.cell_pt() * dpi_x / 72.0;
             let header_cell = HEADER_FONT_PT * 0.5 * dpi_x / 72.0;
             let (num_x, text_x) = doc.body_x();
-            for (idx, page) in doc.pages.iter().enumerate() {
+            for (idx, page) in doc.printed_pages() {
                 // SAFETY: StartDocW 済みの DC
                 if unsafe { StartPage(self.0) } <= 0 {
                     return Err("ページを開始できませんでした".into());
