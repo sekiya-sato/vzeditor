@@ -377,6 +377,20 @@ impl VzEditorApp {
                         continue;
                     }
 
+                    // 選択中の Tab / Shift+Tab は選択行のインデント・逆インデント
+                    if key == Key::Tab
+                        && !ctrl
+                        && !modifiers.alt
+                        && !in_md_view
+                        && self.prefix == PrefixKey::None
+                        && self.cur_buf().has_selection()
+                    {
+                        suppress_text_this_frame = true;
+                        self.cur_buf_mut().indent_selection(modifiers.shift);
+                        self.need_scroll_to_cursor = true;
+                        continue;
+                    }
+
                     // VZ の通常キー操作を再開するときは検索結果の選択を解除する。
                     self.cur_buf_mut().clear_selection();
 

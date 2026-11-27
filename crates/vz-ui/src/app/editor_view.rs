@@ -570,14 +570,22 @@ impl VzEditorApp {
                         .interact_pointer_pos()
                         .filter(|p| editor_rect.contains(*p))
                     {
-                        if sakura && response.triple_clicked() {
+                        // ダブルクリックで単語、トリプルクリックで1行を選択（両方式）。
+                        // カーソルは選択の先頭に置き、選択の終端（次の行など）へ動かさない
+                        if response.triple_clicked() {
                             let pos = hit(self, pointer);
-                            self.cur_buf_mut().select_line(pos.0);
-                        } else if sakura && response.double_clicked() {
-                            let pos = hit(self, pointer);
+                            self.prefix = PrefixKey::None;
+                            self.select_mode = false;
                             let buf = self.cur_buf_mut();
-                            buf.set_cursor(pos.0, pos.1);
-                            buf.select_word_at_cursor();
+                            let (start, end) = buf.line_range(pos.0);
+                            buf.select_range(end, start);
+                        } else if response.double_clicked() {
+                            let pos = hit(self, pointer);
+                            self.prefix = PrefixKey::None;
+                            self.select_mode = false;
+                            let buf = self.cur_buf_mut();
+                            let (start, end) = buf.word_range_at(pos);
+                            buf.select_range((pos.0, end), (pos.0, start));
                         } else if response.clicked() {
                             let pos = hit(self, pointer);
                             self.prefix = PrefixKey::None;

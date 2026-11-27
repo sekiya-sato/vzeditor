@@ -395,6 +395,65 @@ impl TextBuffer {
         self.select_range((line, start), (line, end));
     }
 
+    /// 選択範囲にかかる各行の先頭に TAB を足す（outdent なら先頭の TAB 1つ、
+    /// または空白4つまでを除く）。終点が行頭なら、その行は含めない。
+    /// 選択が無ければ何もせず false。処理後は対象行全体を選択する。
+    pub fn indent_selection(&mut self, outdent: bool) -> bool {
+        let Some((start, end)) = self.selection_range() else {
+            return false;
+        };
+        let first = start.0;
+        let last = if end.1 == 0 && end.0 > start.0 {
+            end.0 - 1
+        } else {
+            end.0
+        };
+        let shift = |line: &str| -> Option<String> {
+            if !outdent {
+                return Some(format!("\t{line}"));
+            }
+            let rest = line.strip_prefix('\t').unwrap_or_else(|| {
+                let n = line.bytes().take(4).take_while(|&b| b == b' ').count();
+                &line[n..]
+            });
+            (rest.len() != line.len()).then(|| rest.to_string())
+        };
+        let range_end = (last, self.line_char_len(last));
+        // 終点が次の行頭なら、その位置のまま選択を残す
+        let keep_end = (end.0 > last).then_some(end);
+        if self.huge.is_some() {
+            let text = self.text_in_range((first, 0), range_end);
+            if (last > first || range_end.1 > 0) && text.is_empty() {
+                self.error = Some("選択範囲が大きすぎます".to_string());
+                return true;
+            }
+            let lines: Vec<String> = text
+                .split('\n')
+                .map(|l| shift(l).unwrap_or_else(|| l.to_string()))
+                .collect();
+            let new_text = lines.join("\n");
+            if new_text != text && self.huge_replace((first, 0), range_end, &new_text, false) {
+                let len = lines.last().map_or(0, |l| l.chars().count());
+                self.select_range((first, 0), keep_end.unwrap_or((last, len)));
+            }
+            return true;
+        }
+        let changed: Vec<(usize, String)> = (first..=last)
+            .filter_map(|i| shift(&self.lines[i]).map(|s| (i, s)))
+            .collect();
+        if !changed.is_empty() {
+            self.push_undo_snapshot();
+            for (i, s) in changed {
+                self.lines[i] = s;
+            }
+            self.dirty = true;
+            self.revision = self.revision.wrapping_add(1);
+        }
+        let new_end = keep_end.unwrap_or((last, self.line_char_len(last)));
+        self.select_range((first, 0), new_end);
+        true
+    }
+
     /// 指定範囲の文字列（行の区切りは \n）。
     pub fn text_in_range(&self, start: TextPos, end: TextPos) -> String {
         let (start, end) = (self.clamp_pos(start), self.clamp_pos(end));

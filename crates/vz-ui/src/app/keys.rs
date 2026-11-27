@@ -446,6 +446,11 @@ impl VzEditorApp {
             Key::Delete => {
                 self.cur_buf_mut().delete_char_at_cursor();
             }
+            // 選択中の Tab / Shift+Tab は選択行のインデント・逆インデント
+            Key::Tab if self.cur_buf().has_selection() => {
+                self.cur_buf_mut().indent_selection(shift);
+                return true;
+            }
             Key::Tab if !shift => {
                 self.cur_buf_mut().insert_text("\t");
             }

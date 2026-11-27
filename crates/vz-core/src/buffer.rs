@@ -848,4 +848,28 @@ mod tests {
         assert_eq!(cut.as_deref(), Some("second\n"));
         assert_eq!(buf.lines, vec!["hello 日本語テスト", "second"]);
     }
+
+    #[test]
+    fn test_indent_selection() {
+        let mut buf = TextBuffer::new();
+        buf.insert_text("one\ntwo\nthree");
+        // 終点が行頭の行は対象外（トリプルクリックの1行選択）
+        buf.select_line(0);
+        assert!(buf.indent_selection(false));
+        assert_eq!(buf.lines, vec!["\tone", "two", "three"]);
+        assert_eq!(buf.selection_range(), Some(((0, 0), (1, 0))));
+        buf.undo();
+        assert_eq!(buf.lines, vec!["one", "two", "three"]);
+
+        buf.select_range((2, 2), (0, 1));
+        assert!(buf.indent_selection(false));
+        assert_eq!(buf.lines, vec!["\tone", "\ttwo", "\tthree"]);
+        assert_eq!(buf.selection_range(), Some(((0, 0), (2, 6))));
+        assert!(buf.indent_selection(true));
+        assert!(buf.indent_selection(true));
+        assert_eq!(buf.lines, vec!["one", "two", "three"]);
+
+        buf.clear_selection();
+        assert!(!buf.indent_selection(false));
+    }
 }

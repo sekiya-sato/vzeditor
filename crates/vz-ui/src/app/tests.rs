@@ -2408,3 +2408,32 @@ fn test_save_state_keeps_files_and_restores_one_by_one() {
 
     let _ = fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn test_tab_indents_selected_lines_both_schemes() {
+    let ctx = egui::Context::default();
+    let (none, shift) = (mods(false, false), mods(false, true));
+    for sakura in [true, false] {
+        let mut app = make_sakura_app("a\n    b\nc");
+        if !sakura {
+            app.key_scheme = KeyScheme::Vz;
+        }
+        // 1行目途中〜2行目途中を選択して Tab
+        app.cur_buf_mut().select_range((0, 1), (1, 2));
+        run_editor(&ctx, &mut app, none, vec![key_with(Key::Tab, none)]);
+        assert_eq!(app.cur_buf().line(0), "\ta");
+        assert_eq!(app.cur_buf().line(1), "\t    b");
+        assert_eq!(app.cur_buf().line(2), "c");
+        assert!(app.cur_buf().has_selection());
+        // Shift+Tab を2回で元の TAB と空白4つを除く
+        run_editor(&ctx, &mut app, shift, vec![key_with(Key::Tab, shift)]);
+        run_editor(&ctx, &mut app, shift, vec![key_with(Key::Tab, shift)]);
+        assert_eq!(app.cur_buf().line(0), "a");
+        assert_eq!(app.cur_buf().line(1), "b");
+        // 選択なしの Tab は TAB 文字の挿入
+        app.cur_buf_mut().clear_selection();
+        app.cur_buf_mut().set_cursor(2, 1);
+        run_editor(&ctx, &mut app, none, vec![key_with(Key::Tab, none)]);
+        assert_eq!(app.cur_buf().line(2), "c\t");
+    }
+}

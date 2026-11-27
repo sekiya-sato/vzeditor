@@ -148,7 +148,8 @@ Windows・macOS・Linux X11 では、ファイルタブを別の VZ ウィンド
 | 挿入 / 上書きの切替 | `Ins`（上書き時はカーソルが文字の下半分） | 同左 |
 | 元に戻す / やり直し | `Ctrl+Z` / `Ctrl+Y` | メニュー |
 | 切り取り / コピー / 貼り付け | `Ctrl+X`・`F7` / `Ctrl+C`・`F8` / `Ctrl+V`・`F9`（選択なしは現在行） | なし / なし / `Ctrl+V` |
-| 範囲選択 | `Shift`+移動キー、`F6`、`Ctrl+A`、`Ctrl+W`、マウス | なし |
+| 範囲選択 | `Shift`+移動キー、`F6`、`Ctrl+A`、`Ctrl+W`、マウス | ダブルクリック（単語）・トリプルクリック（1行） |
+| 選択行のインデント / 逆インデント | 選択中の `Tab` / `Shift+Tab` | 同左 |
 | 行の切り取り / 削除 | `Ctrl+E` / `Ctrl+Shift+E` | なし / `Ctrl+Y`・`F6` |
 | カーソル移動 | 矢印、`Ctrl+←→` 単語、`Home` / `End`、`Ctrl+Home` / `End` | ダイヤモンドカーソル `Ctrl+E/S/D/X`、`Ctrl+A` / `Ctrl+F`・`F7` / `F8` 単語、`Ctrl+R` 前ページ、`F5` 行末、`Ctrl+Q` → `S/D/R/C` |
 | バッファ切替 | `Ctrl+Tab` / `Ctrl+Shift+Tab` | `Ctrl+W` / `Ctrl+Shift+W` |
