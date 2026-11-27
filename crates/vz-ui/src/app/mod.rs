@@ -342,9 +342,11 @@ enum FilerModal {
         /// 表示した時刻（直後の打鍵で答えてしまわないようにする）
         shown: std::time::Instant,
     },
-    /// 印刷の確認（向き・文字サイズ・ページ番号を変えられる）。pages は今の設定でのページ数（None = 大きすぎる）
+    /// 印刷の確認（プリンター・向き・文字サイズ・ページ番号を変えられる）。pages は今の設定でのページ数（None = 大きすぎる）
     ConfirmPrint {
-        printer: String,
+        /// 使えるプリンター（1 つ以上）と、選んでいる番号
+        printers: Vec<String>,
+        printer: usize,
         pages: Option<usize>,
         shown: std::time::Instant,
     },
@@ -482,6 +484,8 @@ pub struct VzEditorApp {
     word_wrap: bool,
     /// 印刷の設定（向き・文字サイズ・ページ番号。確認ダイアログで変え、settings.ini に保存する）
     print_setup: PageSetup,
+    /// このプロセスで最後に印刷したプリンター（次の印刷ダイアログで最初に選ぶ）
+    print_printer: Option<String>,
     /// 印刷中の処理（別スレッド）
     pending_print: Option<Receiver<PrintResult>>,
     /// Markdown ビューの印刷で文字を割り付けるための egui のコンテキスト（フォント）
@@ -638,6 +642,7 @@ impl VzEditorApp {
                 page_numbers: settings.print_page_numbers,
             }
             .clamped(),
+            print_printer: None,
             pending_print: None,
             egui_ctx: cc.egui_ctx.clone(),
             wrap_cols: 80,

@@ -20,15 +20,22 @@ impl VzEditorApp {
             self.status_message = TOO_LARGE_MESSAGE.to_string();
             return;
         }
-        let Some(printer) = vz_platform::print::default_printer() else {
-            self.status_message = "既定のプリンターがありません".to_string();
+        let printers = vz_platform::print::printers();
+        if printers.is_empty() {
+            self.status_message = "プリンターがありません".to_string();
             return;
-        };
+        }
+        let printer = initial_printer(
+            &printers,
+            self.print_printer.as_deref(),
+            vz_platform::print::default_printer().as_deref(),
+        );
         let Ok(doc) = self.layout_for_print() else {
             self.status_message = TOO_LARGE_MESSAGE.to_string();
             return;
         };
         self.filer_modal = Some(FilerModal::ConfirmPrint {
+            printers,
             printer,
             pages: Some(doc.pages.len()),
             shown: std::time::Instant::now(),
@@ -66,12 +73,15 @@ impl VzEditorApp {
     pub(super) fn render_print_dialog(
         &mut self,
         ctx: &egui::Context,
-        printer: &str,
+        printers: &[String],
+        printer: &mut usize,
         pages: &mut Option<usize>,
         shown: std::time::Instant,
     ) -> bool {
         // 表示直後の打鍵（Ctrl+P の押し続けなど）では答えない
         let keys_ok = shown.elapsed() >= std::time::Duration::from_millis(300);
+        // プリンターの一覧を開いている間のキーは一覧の操作（Esc で一覧だけ閉じる）
+        let list_open = ctx.memory(|m| m.any_popup_open());
         let mut setup = self.print_setup;
         let mut answer: Option<bool> = None;
         modal_window(ctx, "印刷", TEXT_CYAN).show(ctx, |ui| {
@@ -81,14 +91,16 @@ impl VzEditorApp {
                     .font(FontId::monospace(14.0))
                     .color(TEXT_WHITE),
             );
-            ui.add_space(4.0);
-            ui.label(
-                egui::RichText::new(format!("プリンター: {printer}"))
-                    .font(FontId::monospace(12.5))
-                    .color(TEXT_DIM_CYAN),
-            );
             ui.add_space(6.0);
             let mono = |s: &str| egui::RichText::new(s).font(FontId::monospace(13.5));
+            ui.horizontal(|ui| {
+                ui.label(mono("プリンター"));
+                egui::ComboBox::from_id_salt("print_printer")
+                    .width(260.0)
+                    .selected_text(mono(&printers[*printer]))
+                    .show_index(ui, printer, printers.len(), |i| mono(&printers[i]));
+                ui.label(mono("(PgUp PgDn)").color(TEXT_DIM_CYAN));
+            });
             ui.horizontal(|ui| {
                 ui.label(mono("用紙　　　"));
                 for o in [Orientation::Portrait, Orientation::Landscape] {
@@ -129,17 +141,22 @@ impl VzEditorApp {
                     .add_enabled(can_print, egui::Button::new("印刷 (Enter / Y)"))
                     .clicked()
                     || (keys_ok
+                        && !list_open
                         && can_print
                         && ui.input(|i| i.key_pressed(Key::Enter) || i.key_pressed(Key::Y)))
                 {
                     answer = Some(true);
                 }
                 if ui.button("キャンセル (ESC / N)").clicked()
-                    || ui.input(|i| i.key_pressed(Key::Escape) || i.key_pressed(Key::N))
+                    || (!list_open
+                        && ui.input(|i| i.key_pressed(Key::Escape) || i.key_pressed(Key::N)))
                 {
                     answer = Some(false);
                 }
             });
+            if list_open {
+                return;
+            }
             ui.input(|i| {
                 if i.key_pressed(Key::ArrowLeft) || i.key_pressed(Key::ArrowRight) {
                     setup.orientation = setup.orientation.toggled();
@@ -153,6 +170,12 @@ impl VzEditorApp {
                 if i.key_pressed(Key::Space) {
                     setup.page_numbers = !setup.page_numbers;
                 }
+                if i.key_pressed(Key::PageUp) {
+                    *printer = (*printer + printers.len() - 1) % printers.len();
+                }
+                if i.key_pressed(Key::PageDown) {
+                    *printer = (*printer + 1) % printers.len();
+                }
             });
         });
 
@@ -163,7 +186,9 @@ impl VzEditorApp {
         }
         match answer {
             Some(true) => {
-                self.start_print();
+                let name = printers[*printer].clone();
+                self.print_printer = Some(name.clone());
+                self.start_print(name);
                 false
             }
             Some(false) => {
@@ -174,12 +199,12 @@ impl VzEditorApp {
         }
     }
 
-    /// 割り付けて、裏のスレッドで印刷する。
-    fn start_print(&mut self) {
+    /// 割り付けて、裏のスレッドで printer へ印刷する。
+    fn start_print(&mut self, printer: String) {
         match self.layout_for_print() {
             Ok(doc) => {
                 self.status_message = format!("印刷中... ({} ページ)", doc.pages.len());
-                self.pending_print = Some(vz_platform::print::spawn_print(doc));
+                self.pending_print = Some(vz_platform::print::spawn_print(doc, printer));
             }
             Err(TooLarge) => self.status_message = TOO_LARGE_MESSAGE.to_string(),
         }
@@ -206,4 +231,17 @@ impl VzEditorApp {
             }
         }
     }
+}
+
+/// 印刷ダイアログで最初に選ぶプリンター: 前回印刷したもの → 既定 → 先頭。
+pub(super) fn initial_printer(
+    printers: &[String],
+    last: Option<&str>,
+    default: Option<&str>,
+) -> usize {
+    [last, default]
+        .into_iter()
+        .flatten()
+        .find_map(|name| printers.iter().position(|p| p == name))
+        .unwrap_or(0)
 }

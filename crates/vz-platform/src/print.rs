@@ -1,4 +1,4 @@
-//! 印刷: 割付済みの文書（`vz_core::print::PrintDoc`）を OS の既定プリンターへ送る。
+//! 印刷: 割付済みの文書（`vz_core::print::PrintDoc`）を選んだプリンターへ送る。
 //!
 //! - Windows: GDI（DEVMODE で A4・向きを指定し、ExtTextOutW で升目に置く）
 //! - macOS / Linux: PDF を作り（日本語フォントは使った文字だけ埋め込む）、`lp`（CUPS）へ渡す
@@ -17,16 +17,48 @@ pub fn default_printer() -> Option<String> {
     imp::default_printer()
 }
 
-/// 裏のスレッドで印刷する。
-pub fn spawn_print(doc: PrintDoc) -> Receiver<PrintResult> {
+/// 使えるプリンターの名前（OS の列挙順）。
+pub fn printers() -> Vec<String> {
+    imp::printers()
+}
+
+/// 裏のスレッドで printer へ印刷する。
+pub fn spawn_print(doc: PrintDoc, printer: String) -> Receiver<PrintResult> {
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
         let pages = doc.pages.len();
-        let result =
-            imp::print(&doc).map(|printer| format!("{printer} へ {pages} ページを印刷しました"));
+        let result = imp::print(&doc, &printer)
+            .map(|()| format!("{printer} へ {pages} ページを印刷しました"));
         let _ = tx.send(result);
     });
     rx
+}
+
+/// `lpstat -e` の出力（1 行 1 送信先）を名前の一覧にする。
+#[cfg(any(not(windows), test))]
+fn parse_destinations(text: &str) -> Vec<String> {
+    text.lines()
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn test_parse_destinations() {
+        let text = "Office_PDF
+HL-L2375DW
+
+  Kitchen  
+";
+        assert_eq!(
+            super::parse_destinations(text),
+            ["Office_PDF", "HL-L2375DW", "Kitchen"]
+        );
+        assert!(super::parse_destinations("").is_empty());
+    }
 }
 
 #[cfg(windows)]
@@ -44,7 +76,8 @@ mod imp {
         LOGPIXELSX, LOGPIXELSY, PHYSICALOFFSETX, PHYSICALOFFSETY, PS_SOLID, TA_BASELINE,
     };
     use windows_sys::Win32::Graphics::Printing::{
-        ClosePrinter, DocumentPropertiesW, GetDefaultPrinterW, OpenPrinterW,
+        ClosePrinter, DocumentPropertiesW, EnumPrintersW, GetDefaultPrinterW, OpenPrinterW,
+        PRINTER_ENUM_CONNECTIONS, PRINTER_ENUM_LOCAL, PRINTER_INFO_4W,
     };
     use windows_sys::Win32::Storage::Xps::{
         AbortDoc, EndDoc, EndPage, StartDocW, StartPage, DOCINFOW,
@@ -70,10 +103,54 @@ mod imp {
         Some(String::from_utf16_lossy(&buf[..end]))
     }
 
-    pub fn print(doc: &PrintDoc) -> Result<String, String> {
-        let printer = default_printer().ok_or("既定のプリンターがありません")?;
-        print_to(&printer, doc, None)?;
-        Ok(printer)
+    /// ローカルと接続済み（ネットワーク）のプリンター。
+    pub fn printers() -> Vec<String> {
+        let flags = PRINTER_ENUM_LOCAL | PRINTER_ENUM_CONNECTIONS;
+        let (mut needed, mut count) = (0u32, 0u32);
+        // SAFETY: 必要なバイト数の問い合わせ（バッファ無し）
+        unsafe { EnumPrintersW(flags, null(), 4, null_mut(), 0, &mut needed, &mut count) };
+        if needed == 0 {
+            return Vec::new();
+        }
+        // PRINTER_INFO_4W の境界に合わせて u64 で持つ
+        let mut buf = vec![0u64; (needed as usize).div_ceil(8)];
+        // SAFETY: buf は needed バイト以上ある
+        let ok = unsafe {
+            EnumPrintersW(
+                flags,
+                null(),
+                4,
+                buf.as_mut_ptr() as *mut u8,
+                needed,
+                &mut needed,
+                &mut count,
+            )
+        };
+        if ok == 0 {
+            return Vec::new();
+        }
+        // SAFETY: 先頭に count 個の PRINTER_INFO_4W が並び、名前は buf 内の NUL 終端文字列
+        let infos = unsafe {
+            std::slice::from_raw_parts(buf.as_ptr() as *const PRINTER_INFO_4W, count as usize)
+        };
+        infos
+            .iter()
+            .filter(|info| !info.pPrinterName.is_null())
+            .map(|info| {
+                // SAFETY: NUL 終端の UTF-16
+                let name = unsafe {
+                    let len = (0..)
+                        .take_while(|&i| *info.pPrinterName.add(i) != 0)
+                        .count();
+                    std::slice::from_raw_parts(info.pPrinterName, len)
+                };
+                String::from_utf16_lossy(name)
+            })
+            .collect()
+    }
+
+    pub fn print(doc: &PrintDoc, printer: &str) -> Result<(), String> {
+        print_to(printer, doc, None)
     }
 
     /// プリンターへ印刷する。output を渡すとファイルへ書き出す（Microsoft Print to PDF の確認用）。
@@ -539,8 +616,15 @@ mod imp {
             .filter(|name| !name.is_empty())
     }
 
-    pub fn print(doc: &PrintDoc) -> Result<String, String> {
-        let printer = default_printer().ok_or("既定のプリンターがありません")?;
+    /// CUPS の送信先（`lpstat -e`）。
+    pub fn printers() -> Vec<String> {
+        let Ok(out) = Command::new("lpstat").arg("-e").env("LC_ALL", "C").output() else {
+            return Vec::new();
+        };
+        super::parse_destinations(&String::from_utf8_lossy(&out.stdout))
+    }
+
+    pub fn print(doc: &PrintDoc, printer: &str) -> Result<(), String> {
         let font = super::pdf::load_font().ok_or("印刷用の日本語フォントが見つかりません")?;
         let bytes = super::pdf::render(doc, font)?;
         static SEQ: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
@@ -550,13 +634,13 @@ mod imp {
         std::fs::write(&path, bytes).map_err(|e| format!("一時ファイルを書けません: {e}"))?;
         // 横向きは PDF のページ自体を横にしている。回転は CUPS に任せる
         let result = Command::new("lp")
-            .args(["-d", &printer, "-o", "media=A4", "-t", &doc.title])
+            .args(["-d", printer, "-o", "media=A4", "-t", &doc.title])
             .arg(&path)
             .output();
         // lp はファイルをスプールへ渡し終えてから戻る
         let _ = std::fs::remove_file(&path);
         match result {
-            Ok(out) if out.status.success() => Ok(printer),
+            Ok(out) if out.status.success() => Ok(()),
             Ok(out) => Err(format!(
                 "lp が失敗しました: {}",
                 String::from_utf8_lossy(&out.stderr).trim()

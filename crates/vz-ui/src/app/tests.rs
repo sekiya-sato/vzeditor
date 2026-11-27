@@ -65,6 +65,7 @@ pub(super) fn make_test_app() -> VzEditorApp {
         conflict_queue: Vec::new(),
         word_wrap: false,
         print_setup: PageSetup::default(),
+        print_printer: None,
         pending_print: None,
         egui_ctx: {
             let ctx = egui::Context::default();
@@ -2588,7 +2589,7 @@ fn test_ctrl_p_prints_instead_of_markdown_toggle() {
         let mut app = make_sakura_app("abc\n");
         app.key_scheme = scheme;
         run_editor(&ctx, &mut app, ctrl, vec![ctrl_p.clone()]);
-        // Markdown 切替ではなく印刷の確認（既定のプリンターが無ければその旨を表示）
+        // Markdown 切替ではなく印刷の確認（プリンターが無ければその旨を表示）
         assert!(!app.is_markdown_view(), "{scheme:?}");
         let opened = matches!(app.filer_modal, Some(FilerModal::ConfirmPrint { .. }));
         assert!(
@@ -2602,6 +2603,19 @@ fn test_ctrl_p_prints_instead_of_markdown_toggle() {
         run_editor(&ctx, &mut app, ctrl, vec![ctrl_p.clone()]);
         assert!(app.is_markdown_view(), "{scheme:?}");
     }
+}
+
+#[test]
+fn test_initial_printer_prefers_last_then_default() {
+    use super::print::initial_printer;
+    let printers = ["A".to_string(), "B".to_string(), "C".to_string()];
+    assert_eq!(initial_printer(&printers, Some("C"), Some("B")), 2);
+    // 前回のプリンターが無くなっていれば既定
+    assert_eq!(initial_printer(&printers, Some("X"), Some("B")), 1);
+    assert_eq!(initial_printer(&printers, None, Some("B")), 1);
+    // どちらも無ければ先頭
+    assert_eq!(initial_printer(&printers, None, Some("X")), 0);
+    assert_eq!(initial_printer(&printers, None, None), 0);
 }
 
 #[test]

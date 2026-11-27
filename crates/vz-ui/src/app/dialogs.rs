@@ -41,7 +41,7 @@ impl VzEditorApp {
                         ("Ctrl+F3", "検索ハイライトのオン / オフ"),
                         ("Ctrl+Tab / Ctrl+Shift+Tab", "バッファ切替"),
                         ("Ctrl+Shift+V / Alt+P", "Markdown 編集 / ビュー切替"),
-                        ("Ctrl+P", "印刷（A4 縦 / 横。確認してから既定のプリンターへ）"),
+                        ("Ctrl+P", "印刷（A4 縦 / 横。確認ダイアログでプリンターを選ぶ）"),
                         ("Ctrl++ / Ctrl+- / Ctrl+0", "フォントサイズ (Ctrl+ホイールも可)"),
                         ("Esc", "選択解除 / 2画面ファイラーへ切替"),
                         ("Alt+T / Alt+↑↓0", "最前面固定 / 背景の濃さ"),
@@ -74,7 +74,7 @@ impl VzEditorApp {
                         ("Ctrl+F3", "検索ハイライトのオン / オフ"),
                         ("Ctrl+W / Ctrl+Shift+W", "複数バッファ（裏画面）切替"),
                         ("Alt+P / Ctrl+K+V", "Markdown 編集 / ビュー（プレビュー）切替"),
-                        ("Ctrl+P", "印刷（A4 縦 / 横。確認してから既定のプリンターへ）"),
+                        ("Ctrl+P", "印刷（A4 縦 / 横。確認ダイアログでプリンターを選ぶ）"),
                         ("Ctrl++ / Ctrl+- / Ctrl+0", "フォントサイズ拡大 / 縮小 / リセット"),
                         ("Ctrl+K+D / F10", "上書き保存 / 保存ダイアログ"),
                         ("Ctrl+F4", "ファイル（現在のバッファ）を閉じる"),
@@ -818,12 +818,13 @@ impl VzEditorApp {
             }
 
             FilerModal::ConfirmPrint {
+                printers,
                 printer,
                 pages,
                 shown,
             } => {
                 let shown = *shown;
-                keep_modal = self.render_print_dialog(ctx, printer, pages, shown);
+                keep_modal = self.render_print_dialog(ctx, printers, printer, pages, shown);
             }
             FilerModal::ConfirmReload {
                 buf_idx,
