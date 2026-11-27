@@ -61,6 +61,11 @@ pub(super) fn make_test_app() -> VzEditorApp {
         word_wrap: false,
         print_setup: PageSetup::default(),
         pending_print: None,
+        egui_ctx: {
+            let ctx = egui::Context::default();
+            let _ = ctx.run(egui::RawInput::default(), |_| {});
+            ctx
+        },
         wrap_cols: 80,
         window_geometry: None,
         pending_window_restore: None,
@@ -2488,11 +2493,37 @@ fn test_print_layout_uses_current_buffer_and_setup() {
     let mut app = make_sakura_app("1\n2\n3\n");
     let doc = app.layout_for_print().unwrap();
     assert_eq!(doc.pages.len(), 1);
-    assert_eq!(doc.pages[0].len(), 4);
+    assert_eq!(doc.pages[0].lines().len(), 4);
     assert!(doc.setup.page_numbers);
     app.print_setup.page_numbers = false;
     app.print_setup.orientation = Orientation::Landscape;
     let doc = app.layout_for_print().unwrap();
     assert_eq!(doc.page_label(0), None);
     assert_eq!(doc.setup.orientation, Orientation::Landscape);
+}
+
+#[test]
+fn test_print_layout_in_markdown_view_uses_view_image() {
+    use vz_core::print::{PrintItem, PrintPage};
+    let mut app = make_test_app();
+    // 編集モードは行番号付きの行
+    let doc = app.layout_for_print().unwrap();
+    assert!(matches!(doc.pages[0], PrintPage::Lines(_)));
+    // ビューモードはビューの見た目（記号は描画に変わり、行番号は無い）
+    app.toggle_markdown_view();
+    let doc = app.layout_for_print().unwrap();
+    assert_eq!(doc.pages.len(), 1);
+    let PrintPage::Items(items) = &doc.pages[0] else {
+        panic!("図のページではない");
+    };
+    let texts: String = items
+        .iter()
+        .filter_map(|i| match i {
+            PrintItem::Text { text, .. } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert!(texts.contains("Title") && texts.contains("Bold"), "{texts}");
+    assert!(!texts.contains('#') && !texts.contains('*') && !texts.contains('`'));
+    assert!(doc.pages[0].lines().is_empty());
 }

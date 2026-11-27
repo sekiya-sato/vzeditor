@@ -6,42 +6,42 @@ use eframe::egui::{
 use std::ops::Range;
 
 // --- VZ-Harmonized Markdown View Palette ---
-const MD_BG_NAVY: Color32 = Color32::from_rgb(8, 24, 56); // #081838
-const MD_TEXT_BODY: Color32 = Color32::from_rgb(230, 242, 255);
-const MD_TEXT_STRONG: Color32 = Color32::from_rgb(255, 255, 255);
-const MD_TEXT_ITALIC: Color32 = Color32::from_rgb(194, 232, 255);
-const MD_TEXT_MUTED: Color32 = Color32::from_rgb(122, 168, 214);
+pub(super) const MD_BG_NAVY: Color32 = Color32::from_rgb(8, 24, 56); // #081838
+pub(super) const MD_TEXT_BODY: Color32 = Color32::from_rgb(230, 242, 255);
+pub(super) const MD_TEXT_STRONG: Color32 = Color32::from_rgb(255, 255, 255);
+pub(super) const MD_TEXT_ITALIC: Color32 = Color32::from_rgb(194, 232, 255);
+pub(super) const MD_TEXT_MUTED: Color32 = Color32::from_rgb(122, 168, 214);
 
-const MD_H1_COLOR: Color32 = Color32::from_rgb(128, 240, 255);
-const MD_H2_COLOR: Color32 = Color32::from_rgb(96, 224, 255);
-const MD_H3_COLOR: Color32 = Color32::from_rgb(255, 220, 96);
-const MD_H4_COLOR: Color32 = Color32::from_rgb(168, 220, 255);
+pub(super) const MD_H1_COLOR: Color32 = Color32::from_rgb(128, 240, 255);
+pub(super) const MD_H2_COLOR: Color32 = Color32::from_rgb(96, 224, 255);
+pub(super) const MD_H3_COLOR: Color32 = Color32::from_rgb(255, 220, 96);
+pub(super) const MD_H4_COLOR: Color32 = Color32::from_rgb(168, 220, 255);
 
-const MD_INLINE_CODE_BG: Color32 = Color32::from_rgb(20, 54, 110);
-const MD_INLINE_CODE_FG: Color32 = Color32::from_rgb(255, 228, 132);
+pub(super) const MD_INLINE_CODE_BG: Color32 = Color32::from_rgb(20, 54, 110);
+pub(super) const MD_INLINE_CODE_FG: Color32 = Color32::from_rgb(255, 228, 132);
 
-const MD_CODE_BLOCK_BG: Color32 = Color32::from_rgb(5, 16, 38);
-const MD_CODE_BLOCK_BORDER: Color32 = Color32::from_rgb(42, 98, 168);
-const MD_CODE_LANG_BG: Color32 = Color32::from_rgb(14, 38, 82);
-const MD_CODE_LANG_FG: Color32 = Color32::from_rgb(112, 212, 255);
+pub(super) const MD_CODE_BLOCK_BG: Color32 = Color32::from_rgb(5, 16, 38);
+pub(super) const MD_CODE_BLOCK_BORDER: Color32 = Color32::from_rgb(42, 98, 168);
+pub(super) const MD_CODE_LANG_BG: Color32 = Color32::from_rgb(14, 38, 82);
+pub(super) const MD_CODE_LANG_FG: Color32 = Color32::from_rgb(112, 212, 255);
 
-const MD_QUOTE_BG: Color32 = Color32::from_rgb(12, 34, 74);
-const MD_QUOTE_BAR: Color32 = Color32::from_rgb(90, 212, 255);
-const MD_QUOTE_TEXT: Color32 = Color32::from_rgb(196, 226, 250);
+pub(super) const MD_QUOTE_BG: Color32 = Color32::from_rgb(12, 34, 74);
+pub(super) const MD_QUOTE_BAR: Color32 = Color32::from_rgb(90, 212, 255);
+pub(super) const MD_QUOTE_TEXT: Color32 = Color32::from_rgb(196, 226, 250);
 
-const MD_LINK_COLOR: Color32 = Color32::from_rgb(96, 228, 255);
-const MD_BULLET_COLOR: Color32 = Color32::from_rgb(96, 224, 255);
-const MD_ORDERED_COLOR: Color32 = Color32::from_rgb(255, 220, 96);
-const MD_CHECK_DONE: Color32 = Color32::from_rgb(116, 240, 168);
-const MD_CHECK_TODO: Color32 = Color32::from_rgb(104, 158, 212);
+pub(super) const MD_LINK_COLOR: Color32 = Color32::from_rgb(96, 228, 255);
+pub(super) const MD_BULLET_COLOR: Color32 = Color32::from_rgb(96, 224, 255);
+pub(super) const MD_ORDERED_COLOR: Color32 = Color32::from_rgb(255, 220, 96);
+pub(super) const MD_CHECK_DONE: Color32 = Color32::from_rgb(116, 240, 168);
+pub(super) const MD_CHECK_TODO: Color32 = Color32::from_rgb(104, 158, 212);
 
-const MD_RULE_COLOR: Color32 = Color32::from_rgb(42, 98, 168);
-const MD_H1_RULE_COLOR: Color32 = Color32::from_rgb(76, 186, 232);
-const MD_H2_RULE_COLOR: Color32 = Color32::from_rgb(32, 76, 138);
+pub(super) const MD_RULE_COLOR: Color32 = Color32::from_rgb(42, 98, 168);
+pub(super) const MD_H1_RULE_COLOR: Color32 = Color32::from_rgb(76, 186, 232);
+pub(super) const MD_H2_RULE_COLOR: Color32 = Color32::from_rgb(32, 76, 138);
 
-const MD_TABLE_HDR_BG: Color32 = Color32::from_rgb(16, 46, 98);
-const MD_TABLE_ROW_ALT_BG: Color32 = Color32::from_rgb(11, 31, 70);
-const MD_TABLE_BORDER: Color32 = Color32::from_rgb(36, 82, 144);
+pub(super) const MD_TABLE_HDR_BG: Color32 = Color32::from_rgb(16, 46, 98);
+pub(super) const MD_TABLE_ROW_ALT_BG: Color32 = Color32::from_rgb(11, 31, 70);
+pub(super) const MD_TABLE_BORDER: Color32 = Color32::from_rgb(36, 82, 144);
 
 // --- egui Markdown Renderer ---
 
@@ -54,16 +54,16 @@ pub struct MdRenderOutput {
 }
 
 #[derive(Clone, Copy)]
-struct InlineStyle {
-    size: f32,
-    color: Color32,
-    bold: bool,
-    italic: bool,
-    strike: bool,
+pub(super) struct InlineStyle {
+    pub(super) size: f32,
+    pub(super) color: Color32,
+    pub(super) bold: bool,
+    pub(super) italic: bool,
+    pub(super) strike: bool,
 }
 
 /// Build an egui `LayoutJob` from inline spans along with clickable link char ranges.
-fn build_inline_job(
+pub(super) fn build_inline_job(
     inlines: &[MdInline],
     style: InlineStyle,
     max_width: f32,

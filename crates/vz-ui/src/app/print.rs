@@ -36,7 +36,8 @@ impl VzEditorApp {
     }
 
     /// 現在のバッファを今の印刷設定で割り付ける。
-    pub(super) fn layout_for_print(&self) -> Result<PrintDoc, TooLarge> {
+    /// Markdown ビュー表示中はビューの見た目のまま割り付ける（行番号は印字しない）。
+    pub(super) fn layout_for_print(&mut self) -> Result<PrintDoc, TooLarge> {
         let buf = self.cur_buf();
         if buf.is_huge() {
             return Err(TooLarge);
@@ -47,6 +48,16 @@ impl VzEditorApp {
             .map(|p| p.display().to_string())
             .unwrap_or_else(|| buf.display_name());
         let printed_at = vz_core::print::printed_at_now();
+        if self.is_markdown_view() {
+            self.cur_slot_mut().ensure_md_cache();
+            let setup = self.print_setup.clamped();
+            let pages = crate::markdown::layout_markdown_print(
+                &self.egui_ctx,
+                &self.cur_slot().markdown.blocks,
+                &setup,
+            );
+            return PrintDoc::from_items(setup, &title, &printed_at, pages);
+        }
         vz_core::print::layout(buf.text_lines(), self.print_setup, &title, &printed_at)
     }
 

@@ -18,7 +18,8 @@ const PAGE_HARD_LIMIT: usize = PAGE_LIMIT * 2;
 const PT_PER_MM: f32 = 72.0 / 25.4;
 const A4_SHORT_MM: f32 = 210.0;
 const A4_LONG_MM: f32 = 297.0;
-const MARGIN_MM: f32 = 15.0;
+/// 上下左右の余白（プリンターの印字できない縁より広く取る）
+const MARGIN_MM: f32 = 7.5;
 /// ヘッダー欄の高さ（ヘッダーの文字と本文との間を含む）
 const HEADER_BLOCK_MM: f32 = 8.0;
 /// ヘッダーの文字サイズ（ポイント）
@@ -119,6 +120,16 @@ impl PageSetup {
         self.body_top_pt() + row as f32 * self.line_pitch_pt() + self.font_size_pt()
     }
 
+    /// 本文の欄の幅（ポイント）。
+    pub fn body_width_pt(&self) -> f32 {
+        self.paper_pt().0 - 2.0 * self.margin_pt()
+    }
+
+    /// 本文の下端（用紙の上端から、ポイント）。
+    pub fn body_bottom_pt(&self) -> f32 {
+        self.paper_pt().1 - self.margin_pt()
+    }
+
     /// 1 行に入る半角の桁数（行番号の欄を含む）。
     pub fn body_cols(&self) -> usize {
         let (w, _) = self.paper_pt();
@@ -157,6 +168,59 @@ pub struct PrintLine {
     pub text: String,
 }
 
+/// 色（RGB）。
+pub type Rgb = [u8; 3];
+
+/// 図として置く印刷項目（Markdown ビューの印刷）。座標は用紙の左上からのポイント。
+#[derive(Debug, Clone, PartialEq)]
+pub enum PrintItem {
+    /// 文字列。y は基準線、advances は各文字の送り幅（文字と同じ数）
+    Text {
+        x: f32,
+        y: f32,
+        size: f32,
+        color: Rgb,
+        italic: bool,
+        text: String,
+        advances: Vec<f32>,
+    },
+    /// 矩形（塗り・枠線は任意）
+    Rect {
+        x: f32,
+        y: f32,
+        w: f32,
+        h: f32,
+        fill: Option<Rgb>,
+        stroke: Option<(f32, Rgb)>,
+    },
+    /// 線分
+    Line {
+        from: (f32, f32),
+        to: (f32, f32),
+        width: f32,
+        color: Rgb,
+    },
+}
+
+/// 1 ページの中身。
+#[derive(Debug, Clone)]
+pub enum PrintPage {
+    /// 行番号付きの行（テキストの印刷）
+    Lines(Vec<PrintLine>),
+    /// 図として置く項目（Markdown ビューの印刷。行番号は無い）
+    Items(Vec<PrintItem>),
+}
+
+impl PrintPage {
+    /// 行の印刷なら行の一覧、図なら空。
+    pub fn lines(&self) -> &[PrintLine] {
+        match self {
+            PrintPage::Lines(lines) => lines,
+            PrintPage::Items(_) => &[],
+        }
+    }
+}
+
 /// 割付の結果。
 #[derive(Debug, Clone)]
 pub struct PrintDoc {
@@ -167,10 +231,32 @@ pub struct PrintDoc {
     pub printed_at: String,
     /// 行番号の桁数
     pub number_digits: usize,
-    pub pages: Vec<Vec<PrintLine>>,
+    pub pages: Vec<PrintPage>,
 }
 
 impl PrintDoc {
+    /// 図のページ（Markdown ビューの印刷）から文書を作る。目安のページ数を超えたら `TooLarge`。
+    pub fn from_items(
+        setup: PageSetup,
+        title: &str,
+        printed_at: &str,
+        mut pages: Vec<Vec<PrintItem>>,
+    ) -> Result<Self, TooLarge> {
+        if pages.len() > PAGE_LIMIT {
+            return Err(TooLarge);
+        }
+        if pages.is_empty() {
+            pages.push(Vec::new());
+        }
+        Ok(Self {
+            setup: setup.clamped(),
+            title: title.to_string(),
+            printed_at: printed_at.to_string(),
+            number_digits: 0,
+            pages: pages.into_iter().map(PrintPage::Items).collect(),
+        })
+    }
+
     /// 本文の欄の開始桁（行番号の桁数 + 区切り 2 桁）。
     pub fn text_col(&self) -> usize {
         self.number_digits + 2
@@ -283,13 +369,13 @@ pub fn layout(
         }
     }
 
-    let mut pages: Vec<Vec<PrintLine>> = Vec::with_capacity(printed.len().div_ceil(rows));
+    let mut pages: Vec<PrintPage> = Vec::with_capacity(printed.len().div_ceil(rows));
     let mut iter = printed.into_iter().peekable();
     while iter.peek().is_some() {
-        pages.push(iter.by_ref().take(rows).collect());
+        pages.push(PrintPage::Lines(iter.by_ref().take(rows).collect()));
     }
     if pages.is_empty() {
-        pages.push(Vec::new());
+        pages.push(PrintPage::Lines(Vec::new()));
     }
     Ok(PrintDoc {
         setup,
@@ -319,9 +405,9 @@ mod tests {
     #[test]
     fn test_page_geometry_10pt() {
         let p = setup(Orientation::Portrait, 10);
-        assert_eq!((p.body_cols(), p.body_rows()), (102, 52));
+        assert_eq!((p.body_cols(), p.body_rows()), (110, 55));
         let l = setup(Orientation::Landscape, 10);
-        assert_eq!((l.body_cols(), l.body_rows()), (151, 34));
+        assert_eq!((l.body_cols(), l.body_rows()), (159, 37));
         // 文字を小さくすると桁も行も増える
         let small = setup(Orientation::Portrait, 8);
         assert!(small.body_cols() > p.body_cols() && small.body_rows() > p.body_rows());
@@ -341,7 +427,7 @@ mod tests {
         let text_cols = s.body_cols() - (MIN_NUMBER_DIGITS + 2);
         let long = "a".repeat(text_cols + 3);
         let doc = layout(&lines(&["x", &long, ""]), s, "t", "d").unwrap();
-        let page = &doc.pages[0];
+        let page = doc.pages[0].lines();
         assert_eq!(page.len(), 4);
         assert_eq!(page[1].number, Some(2));
         assert_eq!(page[1].text.len(), text_cols);
@@ -359,7 +445,7 @@ mod tests {
         // 1 桁残った所に全角を置くと次の行へ送る
         let line = format!("{}あ", "a".repeat(text_cols - 1));
         let doc = layout(&lines(&[&line]), s, "t", "d").unwrap();
-        let page = &doc.pages[0];
+        let page = doc.pages[0].lines();
         assert_eq!(page.len(), 2);
         assert_eq!(str_cells(&page[0].text), text_cols - 1);
         assert_eq!(page[1].text, "あ");
@@ -368,7 +454,7 @@ mod tests {
     #[test]
     fn test_tabs_are_expanded() {
         let doc = layout(&lines(&["\tx"]), PageSetup::default(), "t", "d").unwrap();
-        assert_eq!(doc.pages[0][0].text, "    x");
+        assert_eq!(doc.pages[0].lines()[0].text, "    x");
     }
 
     #[test]
@@ -378,7 +464,7 @@ mod tests {
         let v: Vec<String> = (0..rows * 2 + 1).map(|i| i.to_string()).collect();
         let doc = layout(&v, s, "t", "d").unwrap();
         assert_eq!(doc.pages.len(), 3);
-        assert_eq!(doc.pages[2].len(), 1);
+        assert_eq!(doc.pages[2].lines().len(), 1);
         assert_eq!(doc.page_label(1).as_deref(), Some("2 / 3"));
         let no_numbers = PageSetup {
             page_numbers: false,
@@ -410,6 +496,22 @@ mod tests {
         )
         .unwrap();
         assert_eq!(doc.header_items(0).len(), 2);
+    }
+
+    #[test]
+    fn test_from_items() {
+        let s = PageSetup::default();
+        let doc = PrintDoc::from_items(s, "t", "d", Vec::new()).unwrap();
+        assert_eq!(doc.pages.len(), 1);
+        assert!(doc.pages[0].lines().is_empty());
+        let over = vec![Vec::new(); PAGE_LIMIT + 1];
+        assert_eq!(
+            PrintDoc::from_items(s, "t", "d", over).unwrap_err(),
+            TooLarge
+        );
+        // 本文の欄は余白の内側
+        assert!(s.body_bottom_pt() > s.body_top_pt());
+        assert!(s.body_width_pt() < s.paper_pt().0);
     }
 
     #[test]

@@ -460,6 +460,8 @@ pub struct VzEditorApp {
     print_setup: PageSetup,
     /// 印刷中の処理（別スレッド）
     pending_print: Option<Receiver<PrintResult>>,
+    /// Markdown ビューの印刷で文字を割り付けるための egui のコンテキスト（フォント）
+    egui_ctx: egui::Context,
     /// 直前の描画で求めた折り返し幅（セル数）。キー操作の表示行移動に使う
     wrap_cols: usize,
 
@@ -604,6 +606,7 @@ impl VzEditorApp {
             }
             .clamped(),
             pending_print: None,
+            egui_ctx: cc.egui_ctx.clone(),
             wrap_cols: 80,
             window_geometry: settings.window,
             pending_window_restore: settings.window,

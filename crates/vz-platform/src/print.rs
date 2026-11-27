@@ -31,15 +31,17 @@ pub fn spawn_print(doc: PrintDoc) -> Receiver<PrintResult> {
 
 #[cfg(windows)]
 mod imp {
+    use std::collections::HashMap;
     use std::path::Path;
     use std::ptr::{null, null_mut};
-    use vz_core::print::{char_cells, PrintDoc, HEADER_FONT_PT};
-    use windows_sys::Win32::Foundation::HANDLE;
+    use vz_core::print::{char_cells, PrintDoc, PrintItem, PrintPage, Rgb, HEADER_FONT_PT};
+    use windows_sys::Win32::Foundation::{HANDLE, RECT};
     use windows_sys::Win32::Graphics::Gdi::{
-        CreateDCW, CreateFontW, DeleteDC, DeleteObject, ExtTextOutW, GetDeviceCaps, SelectObject,
-        SetTextAlign, DEFAULT_CHARSET, DEVMODEW, DMORIENT_LANDSCAPE, DMORIENT_PORTRAIT, DMPAPER_A4,
-        DM_IN_BUFFER, DM_ORIENTATION, DM_OUT_BUFFER, DM_PAPERSIZE, FIXED_PITCH, FW_NORMAL, HDC,
-        HFONT, HGDIOBJ, LOGPIXELSX, LOGPIXELSY, PHYSICALOFFSETX, PHYSICALOFFSETY, TA_BASELINE,
+        CreateDCW, CreateFontW, CreatePen, CreateSolidBrush, DeleteDC, DeleteObject, ExtTextOutW,
+        FillRect, GetDeviceCaps, LineTo, MoveToEx, SelectObject, SetTextAlign, SetTextColor,
+        DEFAULT_CHARSET, DEVMODEW, DMORIENT_LANDSCAPE, DMORIENT_PORTRAIT, DMPAPER_A4, DM_IN_BUFFER,
+        DM_ORIENTATION, DM_OUT_BUFFER, DM_PAPERSIZE, FIXED_PITCH, FW_NORMAL, HDC, HFONT, HGDIOBJ,
+        LOGPIXELSX, LOGPIXELSY, PHYSICALOFFSETX, PHYSICALOFFSETY, PS_SOLID, TA_BASELINE,
     };
     use windows_sys::Win32::Graphics::Printing::{
         ClosePrinter, DocumentPropertiesW, GetDefaultPrinterW, OpenPrinterW,
@@ -163,13 +165,40 @@ mod imp {
         }
     }
 
+    /// ペン・ブラシ（Drop で削除する）。
+    struct GdiObj(HGDIOBJ);
+
+    impl Drop for GdiObj {
+        fn drop(&mut self) {
+            // SAFETY: CreatePen / CreateSolidBrush が返したオブジェクト（選択を外してから Drop する）
+            unsafe { DeleteObject(self.0) };
+        }
+    }
+
+    /// 図のページの文字のフォント（大きさ・斜体ごとに作って使い回す）。
+    struct FontCache {
+        face: Vec<u16>,
+        dpi_y: f32,
+        fonts: HashMap<(u32, bool), Font>,
+    }
+
+    fn colorref([r, g, b]: Rgb) -> u32 {
+        u32::from(r) | (u32::from(g) << 8) | (u32::from(b) << 16)
+    }
+
     impl Dc {
         fn caps(&self, index: u32) -> f32 {
             // SAFETY: 有効な DC
             unsafe { GetDeviceCaps(self.0, index as i32) as f32 }
         }
 
-        fn font(&self, size_pt: f32, dpi_y: f32, face: &[u16]) -> Result<Font, String> {
+        fn font(
+            &self,
+            size_pt: f32,
+            dpi_y: f32,
+            face: &[u16],
+            italic: bool,
+        ) -> Result<Font, String> {
             let height = -((size_pt * dpi_y / 72.0).round() as i32);
             // SAFETY: face は NUL 終端
             let font = unsafe {
@@ -179,7 +208,7 @@ mod imp {
                     0,
                     0,
                     FW_NORMAL as i32,
-                    0,
+                    u32::from(italic),
                     0,
                     0,
                     DEFAULT_CHARSET as u32,
@@ -203,8 +232,14 @@ mod imp {
             let to_y = |pt: f32| (pt * dpi_y / 72.0 - off_y).round() as i32;
 
             let face = wide(face_name());
-            let body = self.font(doc.setup.font_size_pt(), dpi_y, &face)?;
-            let header = self.font(HEADER_FONT_PT, dpi_y, &face)?;
+            let body = self.font(doc.setup.font_size_pt(), dpi_y, &face, false)?;
+            let header = self.font(HEADER_FONT_PT, dpi_y, &face, false)?;
+            // 選択を外してから Drop する（下の SelectObject で元に戻した後）
+            let mut cache = FontCache {
+                face,
+                dpi_y,
+                fonts: HashMap::new(),
+            };
 
             let title = wide(&doc.title);
             let output_w = output.map(|p| wide(&p.to_string_lossy()));
@@ -223,7 +258,7 @@ mod imp {
                 }
             }
             let original = self.select(&header);
-            let result = self.render_pages(doc, &body, &header, &to_x, &to_y);
+            let result = self.render_pages(doc, &body, &header, &mut cache, &to_x, &to_y);
             // 選択中のフォントは削除できないので元に戻してから Font を Drop する
             // SAFETY: 元の GDI オブジェクトを選択し直す
             unsafe { SelectObject(self.0, original) };
@@ -244,6 +279,7 @@ mod imp {
             doc: &PrintDoc,
             body: &Font,
             header: &Font,
+            cache: &mut FontCache,
             to_x: &dyn Fn(f32) -> f32,
             to_y: &dyn Fn(f32) -> i32,
         ) -> Result<(), String> {
@@ -257,15 +293,22 @@ mod imp {
                     return Err("ページを開始できませんでした".into());
                 }
                 self.select(header);
+                // SAFETY: 有効な DC（ヘッダーと行の印刷は黒）
+                unsafe { SetTextColor(self.0, 0) };
                 let hy = to_y(doc.setup.header_baseline_pt());
                 for (x, text) in doc.header_items(idx) {
                     self.text_out(to_x(x), hy, &text, header_cell);
                 }
-                self.select(body);
-                for (row, line) in page.iter().enumerate() {
-                    let y = to_y(doc.setup.row_baseline_pt(row));
-                    self.text_out(to_x(num_x), y, &doc.number_label(line), body_cell);
-                    self.text_out(to_x(text_x), y, &line.text, body_cell);
+                match page {
+                    PrintPage::Lines(lines) => {
+                        self.select(body);
+                        for (row, line) in lines.iter().enumerate() {
+                            let y = to_y(doc.setup.row_baseline_pt(row));
+                            self.text_out(to_x(num_x), y, &doc.number_label(line), body_cell);
+                            self.text_out(to_x(text_x), y, &line.text, body_cell);
+                        }
+                    }
+                    PrintPage::Items(items) => self.draw_items(items, cache, to_x, to_y)?,
                 }
                 // SAFETY: StartPage 済み
                 if unsafe { EndPage(self.0) } <= 0 {
@@ -273,6 +316,99 @@ mod imp {
                 }
             }
             Ok(())
+        }
+
+        /// 図のページの項目を描く（Markdown ビューの印刷）。
+        fn draw_items(
+            &self,
+            items: &[PrintItem],
+            cache: &mut FontCache,
+            to_x: &dyn Fn(f32) -> f32,
+            to_y: &dyn Fn(f32) -> i32,
+        ) -> Result<(), String> {
+            let scale = self.caps(LOGPIXELSX) / 72.0;
+            let px = |pt: f32| ((pt * scale).round() as i32).max(1);
+            let to_xi = |pt: f32| to_x(pt).round() as i32;
+            for item in items {
+                match item {
+                    PrintItem::Text {
+                        x,
+                        y,
+                        size,
+                        color,
+                        italic,
+                        text,
+                        advances,
+                    } => {
+                        let key = ((size * 100.0).round() as u32, *italic);
+                        if !cache.fonts.contains_key(&key) {
+                            let font = self.font(*size, cache.dpi_y, &cache.face, *italic)?;
+                            cache.fonts.insert(key, font);
+                        }
+                        if let Some(font) = cache.fonts.get(&key) {
+                            self.select(font);
+                        }
+                        // SAFETY: 有効な DC
+                        unsafe { SetTextColor(self.0, colorref(*color)) };
+                        let advances = advances.iter().map(|a| a * scale);
+                        self.text_out_with(to_x(*x), to_y(*y), text, advances);
+                    }
+                    PrintItem::Rect {
+                        x,
+                        y,
+                        w,
+                        h,
+                        fill,
+                        stroke,
+                    } => {
+                        let rect = RECT {
+                            left: to_xi(*x),
+                            top: to_y(*y),
+                            right: to_xi(x + w),
+                            bottom: to_y(y + h),
+                        };
+                        if let Some(fill) = fill {
+                            // SAFETY: 作ったブラシで塗り、Drop で削除する（選択はしない）
+                            unsafe {
+                                let brush = GdiObj(CreateSolidBrush(colorref(*fill)));
+                                FillRect(self.0, &rect, brush.0);
+                            }
+                        }
+                        if let Some((width, color)) = stroke {
+                            let (l, t, r, b) = (rect.left, rect.top, rect.right, rect.bottom);
+                            let points = [(l, t), (r, t), (r, b), (l, b), (l, t)];
+                            self.polyline(&points, px(*width), *color);
+                        }
+                    }
+                    PrintItem::Line {
+                        from,
+                        to,
+                        width,
+                        color,
+                    } => {
+                        let points = [(to_xi(from.0), to_y(from.1)), (to_xi(to.0), to_y(to.1))];
+                        self.polyline(&points, px(*width), *color);
+                    }
+                }
+            }
+            Ok(())
+        }
+
+        /// 折れ線を引く（デバイス座標）。
+        fn polyline(&self, points: &[(i32, i32)], width: i32, color: Rgb) {
+            let Some((&(x0, y0), rest)) = points.split_first() else {
+                return;
+            };
+            // SAFETY: 作ったペンを選んで線を引き、元に戻してから Drop で削除する
+            unsafe {
+                let pen = GdiObj(CreatePen(PS_SOLID, width, colorref(color)));
+                let old = SelectObject(self.0, pen.0);
+                MoveToEx(self.0, x0, y0, null_mut());
+                for &(x, y) in rest {
+                    LineTo(self.0, x, y);
+                }
+                SelectObject(self.0, old);
+            }
         }
 
         /// フォントを選び、それまで選ばれていたオブジェクトを返す。
@@ -283,16 +419,22 @@ mod imp {
 
         /// 文字を升目（半角 = cell、全角 = 2 cell）に置く。
         fn text_out(&self, x: f32, y: i32, text: &str, cell: f32) {
+            let advances = text.chars().map(|c| char_cells(c) as f32 * cell);
+            self.text_out_with(x, y, text, advances);
+        }
+
+        /// 文字を 1 文字ずつ送り幅（デバイス単位）を指定して置く。
+        fn text_out_with(&self, x: f32, y: i32, text: &str, advances: impl Iterator<Item = f32>) {
             if text.is_empty() {
                 return;
             }
             let mut units: Vec<u16> = Vec::with_capacity(text.len());
             let mut dx: Vec<i32> = Vec::with_capacity(text.len());
-            let mut cells = 0usize;
+            let mut end = 0.0f32;
             let mut prev = 0i32;
-            for c in text.chars() {
-                cells += char_cells(c);
-                let pos = (cells as f32 * cell).round() as i32;
+            for (c, advance) in text.chars().zip(advances) {
+                end += advance;
+                let pos = end.round() as i32;
                 let mut buf = [0u16; 2];
                 let encoded = c.encode_utf16(&mut buf);
                 units.extend_from_slice(encoded);
