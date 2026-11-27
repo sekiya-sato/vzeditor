@@ -33,7 +33,7 @@ impl VzEditorApp {
             EditorAction::DeleteLine => {
                 if in_md_view {
                     self.status_message =
-                        "ビューモード中は編集できません (^P / Alt+P で編集モードへ)".to_string();
+                        "ビューモード中は編集できません (Alt+P で編集モードへ)".to_string();
                 } else {
                     self.cur_buf_mut().delete_current_line();
                     self.need_scroll_to_cursor = true;
@@ -509,19 +509,12 @@ impl VzEditorApp {
                         continue;
                     }
 
-                    // 3.6. Alt+P: Markdown edit/view toggle
-                    if modifiers.alt && !ctrl && key == Key::P {
-                        suppress_text_this_frame = true;
-                        self.toggle_markdown_view();
-                        continue;
-                    }
-
                     // 4. VZ Ctrl-based bindings
                     if ctrl && !modifiers.alt {
                         let handled = match key {
-                            // Markdown Edit / View toggle: Ctrl+P
-                            Key::P => {
-                                self.toggle_markdown_view();
+                            // 印刷（Markdown 切替は Alt+P・Ctrl+K→V）
+                            Key::P if !modifiers.shift => {
+                                self.open_print_dialog();
                                 true
                             }
                             // Diamond cursor: Ctrl+E / S / D / X (scroll in MD View)

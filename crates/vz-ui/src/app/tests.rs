@@ -59,6 +59,8 @@ pub(super) fn make_test_app() -> VzEditorApp {
         last_disk_check: std::time::Instant::now(),
         conflict_queue: Vec::new(),
         word_wrap: false,
+        print_setup: PageSetup::default(),
+        pending_print: None,
         wrap_cols: 80,
         window_geometry: None,
         pending_window_restore: None,
@@ -1037,8 +1039,16 @@ fn test_window_style_keys_do_not_overlap() {
         Some(MenuAction::RepeatSearch(true))
     );
 
-    // Alt+P（Markdown 切替）と Alt+±は奪わない
-    assert_eq!(window_style_key_action(Key::P, Some(Key::P), alt), None);
+    // Alt+P: Markdown 切替（両方式共通）。Alt+Shift+P・Ctrl+P（印刷）は対象外。Alt+±は奪わない
+    assert_eq!(
+        window_style_key_action(Key::P, Some(Key::P), alt),
+        Some(MenuAction::ToggleMarkdownView)
+    );
+    assert_eq!(
+        window_style_key_action(Key::P, Some(Key::P), alt_shift),
+        None
+    );
+    assert_eq!(window_style_key_action(Key::P, Some(Key::P), ctrl), None);
     assert_eq!(
         window_style_key_action(Key::Minus, Some(Key::Minus), alt),
         None
@@ -1314,7 +1324,7 @@ fn test_send_prefix_keys() {
     assert_eq!(send_target_for_key(Key::N, true), None);
     assert_eq!(send_target_for_key(Key::P, true), None);
     assert_eq!(send_target_for_key(Key::D, false), None);
-    // Alt+P（VZ 互換の Markdown 切替）は Alt+C の後でなければ奪わない
+    // Alt+P は Markdown 切替（両方式共通）。Alt+C の後の P は handle_send_keys が先に取る
     assert_eq!(
         window_style_key_action(
             Key::P,
@@ -1324,7 +1334,7 @@ fn test_send_prefix_keys() {
                 ..Default::default()
             }
         ),
-        None
+        Some(MenuAction::ToggleMarkdownView)
     );
 }
 
@@ -2436,4 +2446,53 @@ fn test_tab_indents_selected_lines_both_schemes() {
         run_editor(&ctx, &mut app, none, vec![key_with(Key::Tab, none)]);
         assert_eq!(app.cur_buf().line(2), "c\t");
     }
+}
+
+#[test]
+fn test_ctrl_p_prints_instead_of_markdown_toggle() {
+    let ctx = egui::Context::default();
+    let ctrl = egui::Modifiers {
+        ctrl: true,
+        command: true,
+        ..Default::default()
+    };
+    let ctrl_p = Event::Key {
+        key: Key::P,
+        physical_key: Some(Key::P),
+        pressed: true,
+        repeat: false,
+        modifiers: ctrl,
+    };
+    for scheme in [KeyScheme::Sakura, KeyScheme::Vz] {
+        let mut app = make_sakura_app("abc\n");
+        app.key_scheme = scheme;
+        run_editor(&ctx, &mut app, ctrl, vec![ctrl_p.clone()]);
+        // Markdown 切替ではなく印刷の確認（既定のプリンターが無ければその旨を表示）
+        assert!(!app.is_markdown_view(), "{scheme:?}");
+        let opened = matches!(app.filer_modal, Some(FilerModal::ConfirmPrint { .. }));
+        assert!(
+            opened || app.status_message.contains("プリンター"),
+            "{scheme:?}: {}",
+            app.status_message
+        );
+        // Markdown ビュー中の Ctrl+P も印刷
+        app.filer_modal = None;
+        app.toggle_markdown_view();
+        run_editor(&ctx, &mut app, ctrl, vec![ctrl_p.clone()]);
+        assert!(app.is_markdown_view(), "{scheme:?}");
+    }
+}
+
+#[test]
+fn test_print_layout_uses_current_buffer_and_setup() {
+    let mut app = make_sakura_app("1\n2\n3\n");
+    let doc = app.layout_for_print().unwrap();
+    assert_eq!(doc.pages.len(), 1);
+    assert_eq!(doc.pages[0].len(), 4);
+    assert!(doc.setup.page_numbers);
+    app.print_setup.page_numbers = false;
+    app.print_setup.orientation = Orientation::Landscape;
+    let doc = app.layout_for_print().unwrap();
+    assert_eq!(doc.page_label(0), None);
+    assert_eq!(doc.setup.orientation, Orientation::Landscape);
 }

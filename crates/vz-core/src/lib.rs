@@ -6,4 +6,5 @@ pub mod encoding;
 pub mod filer;
 pub mod grep;
 pub mod huge;
+pub mod print;
 pub mod search;

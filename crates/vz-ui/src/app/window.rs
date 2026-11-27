@@ -27,6 +27,9 @@ impl VzEditorApp {
             font_size: self.font_size,
             key_scheme: self.key_scheme,
             word_wrap: self.word_wrap,
+            print_landscape: self.print_setup.orientation == Orientation::Landscape,
+            print_font_size: self.print_setup.font_pt,
+            print_page_numbers: self.print_setup.page_numbers,
             window: self.window_geometry,
         };
         if let Err(e) = settings.save() {
@@ -257,7 +260,9 @@ impl VzEditorApp {
                         if !in_editor
                             && matches!(
                                 action,
-                                MenuAction::OpenSearch(_) | MenuAction::RepeatSearch(_)
+                                MenuAction::OpenSearch(_)
+                                    | MenuAction::RepeatSearch(_)
+                                    | MenuAction::ToggleMarkdownView
                             )
                         {
                             return true;

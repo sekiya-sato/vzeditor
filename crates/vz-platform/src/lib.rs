@@ -3,8 +3,10 @@
 pub mod clipboard;
 pub mod dialog;
 pub mod file_info;
+pub mod fonts;
 pub mod keyboard;
 pub mod monitor;
+pub mod print;
 pub mod send_to_app;
 pub mod shell;
 pub mod tab_drop;

@@ -1,6 +1,6 @@
 [package]
 name = "vz-platform"
-description = "VZ Editor: OS 固有処理（ファイルダイアログ・クリップボード・外部アプリへの送信）"
+description = "VZ Editor: OS 固有処理（ファイルダイアログ・クリップボード・外部アプリへの送信・印刷）"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -8,6 +8,8 @@ repository.workspace = true
 publish = false
 
 [dependencies]
+# 印刷の割付（vz_core::print::PrintDoc）を受け取って紙へ出す
+vz-core.workspace = true
 # 仮想デスクトップの対象ウィンドウ（eframe の生ハンドル）を受け取る
 raw-window-handle = "0.6"
 
@@ -19,7 +21,9 @@ arboard = { version = "3", default-features = false }
 windows-sys = { version = "0.59", features = [
     "Win32_Foundation",
     "Win32_Graphics_Gdi",
+    "Win32_Graphics_Printing",
     "Win32_Storage_FileSystem",
+    "Win32_Storage_Xps",
     "Win32_System_Threading",
     "Win32_UI_Input_KeyboardAndMouse",
     "Win32_UI_Shell",
@@ -41,3 +45,13 @@ core-graphics = "0.23"
 # Linux X11: 仮想デスクトップ（EWMH の _NET_WM_DESKTOP）。winit と同じ版
 [target.'cfg(target_os = "linux")'.dependencies]
 x11rb = "0.13"
+
+# 印刷: PDF を作って lp（CUPS）へ渡す。日本語フォントは使った文字だけ埋め込む
+[target.'cfg(not(windows))'.dependencies]
+krilla = { version = "0.8.2", default-features = false }
+skrifa = "0.42"
+
+# Windows でも PDF 生成（macOS / Linux 用）をテストで確かめる
+[target.'cfg(windows)'.dev-dependencies]
+krilla = { version = "0.8.2", default-features = false }
+skrifa = "0.42"

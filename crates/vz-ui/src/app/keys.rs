@@ -199,7 +199,7 @@ impl VzEditorApp {
         (self.cur_slot().markdown.viewport_h * 0.85).max(self.line_height * 4.0)
     }
 
-    /// Markdown ビューでのスクロールキー（両方のキー割り当て共通。Ctrl+P はサクラ互換のみ）。
+    /// Markdown ビューでのスクロールキー（両方のキー割り当て共通。Ctrl+P の印刷はサクラ互換の経路）。
     pub(super) fn md_view_key(&mut self, key: Key, ctrl: bool) -> bool {
         let page = self.md_page_step();
         match (key, ctrl) {
@@ -209,7 +209,7 @@ impl VzEditorApp {
             (Key::PageDown, _) | (Key::Space, false) => self.scroll_markdown_by(page),
             (Key::Home, _) => self.scroll_markdown_to_top(),
             (Key::End, _) => self.scroll_markdown_to_bottom(),
-            (Key::P, true) => self.toggle_markdown_view(),
+            (Key::P, true) => self.open_print_dialog(),
             _ => return ctrl,
         }
         true
@@ -227,7 +227,7 @@ impl VzEditorApp {
         let ctrl = modifiers.ctrl || modifiers.command;
         let shift = modifiers.shift;
         if modifiers.alt {
-            // Alt 系は透過・最前面・送信（handle_events で処理済み）。サクラの Alt+P などは未対応
+            // Alt 系は透過・最前面・送信・Markdown 切替（handle_events で処理済み）
             return false;
         }
 
@@ -388,7 +388,7 @@ impl VzEditorApp {
                     self.status_message = "すべて選択しました".to_string();
                 }
                 Key::W => self.cur_buf_mut().select_word_at_cursor(),
-                Key::P => self.toggle_markdown_view(),
+                Key::P if !shift => self.open_print_dialog(),
                 Key::E if shift => {
                     if !self.view_mode_guard() {
                         self.cur_buf_mut().delete_current_line();

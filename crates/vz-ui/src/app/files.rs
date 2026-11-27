@@ -36,12 +36,10 @@ impl VzEditorApp {
         let now_view = view.visible;
         if now_view {
             view.scroll_dirty = true;
-            self.status_message =
-                "Markdown ビューモード [VIEW] (^P / Alt+P / ^K^V で編集へ戻る)".to_string();
+            self.status_message = "Markdown ビューモード [VIEW] (Alt+P で編集へ戻る)".to_string();
         } else {
             self.need_scroll_to_cursor = true;
-            self.status_message =
-                "テキスト編集モード [EDIT] (^P / Alt+P / ^K^V でプレビューへ)".to_string();
+            self.status_message = "テキスト編集モード [EDIT] (Alt+P でプレビューへ)".to_string();
         }
     }
 

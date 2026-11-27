@@ -128,6 +128,12 @@ impl VzEditorApp {
                     enabled: in_editor,
                 },
                 MenuEntry::Item {
+                    label: "印刷...",
+                    shortcut: "Ctrl+P",
+                    action: MenuAction::Print,
+                    enabled: in_editor,
+                },
+                MenuEntry::Item {
                     label: "現在のバッファを閉じる",
                     shortcut: "Ctrl+F4",
                     action: MenuAction::CloseBuffer,
@@ -307,7 +313,7 @@ impl VzEditorApp {
                     } else {
                         "Markdown ビューモードへ切替"
                     },
-                    shortcut: sc("Ctrl+Shift+V", "Ctrl+P"),
+                    shortcut: sc("Ctrl+Shift+V / Alt+P", "Alt+P / ^K^V"),
                     action: MenuAction::ToggleMarkdownView,
                     enabled: in_editor,
                 },
@@ -531,6 +537,7 @@ impl VzEditorApp {
             MenuAction::SaveFile => self.trigger_save(),
             MenuAction::SaveAs => self.trigger_save_as(),
             MenuAction::SaveWithEncoding => self.open_encoding_dialog(),
+            MenuAction::Print => self.open_print_dialog(),
             MenuAction::CloseBuffer => self.close_current_buffer(),
             MenuAction::ToggleFiler => match self.mode {
                 AppMode::Filer => self.enter_editor(),

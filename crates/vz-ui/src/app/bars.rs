@@ -108,7 +108,7 @@ impl VzEditorApp {
                                     .corner_radius(CornerRadius::same(2)),
                                 )
                                 .on_hover_text(
-                                    "クリックまたは Ctrl+P / Alt+P / Ctrl+K+V で Markdown 編集/ビュー切替",
+                                    "クリックまたは Alt+P（サクラ互換は Ctrl+Shift+V も、VZ 互換は Ctrl+K+V も）で Markdown 編集/ビュー切替",
                                 );
                             if md_resp.clicked() {
                                 toggle_md_clicked = true;

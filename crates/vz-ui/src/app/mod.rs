@@ -13,6 +13,7 @@ mod huge;
 mod input;
 mod keys;
 mod menu;
+mod print;
 mod release;
 mod restore;
 mod search;
@@ -49,7 +50,9 @@ use vz_core::filer::{
     ActivePane, FileEntry, FilerState,
 };
 use vz_core::huge::HugeDoc;
+use vz_core::print::{Orientation, PageSetup};
 use vz_platform::dialog::{spawn_open_dialog, spawn_save_dialog, DialogResult};
+use vz_platform::print::PrintResult;
 use vz_platform::send_to_app::{prepare_text, spawn_send, SendResult, SendTarget};
 use vz_platform::virtual_desktop::{NativeWindow, VirtualDesktop, VirtualDesktopManager};
 use vz_platform::{clipboard, monitor};
@@ -206,6 +209,8 @@ enum MenuAction {
     SaveAs,
     /// 文字コードを選んで保存する（キーの割り当てなし）
     SaveWithEncoding,
+    /// 印刷（Ctrl+P。確認ダイアログを出す）
+    Print,
     CloseBuffer,
     ToggleFiler,
     Quit,
@@ -319,6 +324,12 @@ enum FilerModal {
         buf_idx: usize,
         stamp: FileStamp,
         /// 表示した時刻（直後の打鍵で答えてしまわないようにする）
+        shown: std::time::Instant,
+    },
+    /// 印刷の確認（向き・文字サイズ・ページ番号を変えられる）。pages は今の設定でのページ数（None = 大きすぎる）
+    ConfirmPrint {
+        printer: String,
+        pages: Option<usize>,
         shown: std::time::Instant,
     },
     /// 前回の保存して終了で外部の変更と衝突した。差分を見せて、どちらを採用するか確認する
@@ -445,6 +456,10 @@ pub struct VzEditorApp {
 
     /// 長い行をウィンドウ幅で折り返して表示する（Alt+W）
     word_wrap: bool,
+    /// 印刷の設定（向き・文字サイズ・ページ番号。確認ダイアログで変え、settings.ini に保存する）
+    print_setup: PageSetup,
+    /// 印刷中の処理（別スレッド）
+    pending_print: Option<Receiver<PrintResult>>,
     /// 直前の描画で求めた折り返し幅（セル数）。キー操作の表示行移動に使う
     wrap_cols: usize,
 
@@ -578,6 +593,17 @@ impl VzEditorApp {
             last_disk_check: std::time::Instant::now(),
             conflict_queue: Vec::new(),
             word_wrap: settings.word_wrap,
+            print_setup: PageSetup {
+                orientation: if settings.print_landscape {
+                    Orientation::Landscape
+                } else {
+                    Orientation::Portrait
+                },
+                font_pt: settings.print_font_size,
+                page_numbers: settings.print_page_numbers,
+            }
+            .clamped(),
+            pending_print: None,
             wrap_cols: 80,
             window_geometry: settings.window,
             pending_window_restore: settings.window,
@@ -781,6 +807,8 @@ fn window_style_key_action(
         Key::G => Some(MenuAction::OpenSearch(SearchDialog::Grep)),
         Key::J => Some(MenuAction::OpenSearch(SearchDialog::Jump)),
         Key::N => Some(MenuAction::RepeatSearch(false)),
+        // Markdown 編集 / ビュー切替（両方式共通。Ctrl+P は印刷）
+        Key::P => Some(MenuAction::ToggleMarkdownView),
         _ => None,
     }
 }
@@ -852,6 +880,7 @@ impl eframe::App for VzEditorApp {
         self.handle_dropped_files(ctx);
         self.poll_dialog();
         self.poll_send(ctx);
+        self.poll_print(ctx);
         self.continue_save_and_quit(ctx);
         self.start_pending_terminal(ctx);
         self.poll_terminal();

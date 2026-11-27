@@ -1,4 +1,4 @@
-//! 設定（背景・文字の不透明度、最前面固定、フォントサイズ、キー割り当て、折り返し、ウィンドウの位置とサイズ）の保存と読み込み。
+//! 設定（背景・文字の不透明度、最前面固定、フォントサイズ、キー割り当て、折り返し、印刷、ウィンドウの位置とサイズ）の保存と読み込み。
 //!
 //! 保存先:
 //! - Windows: `%APPDATA%\vzeditor\settings.ini`
@@ -56,6 +56,12 @@ pub struct Settings {
     pub key_scheme: KeyScheme,
     /// 長い行を折り返して表示する
     pub word_wrap: bool,
+    /// 印刷の用紙を横向きにする（false = A4 縦）
+    pub print_landscape: bool,
+    /// 印刷の本文の文字サイズ（ポイント。範囲は vz_core::print で収める）
+    pub print_font_size: u8,
+    /// 印刷のヘッダーにページ番号を出す
+    pub print_page_numbers: bool,
     /// 前回のウィンドウの位置とサイズ（未保存なら None = OS の既定位置）
     pub window: Option<WindowGeometry>,
 }
@@ -69,6 +75,9 @@ impl Default for Settings {
             font_size: 16.0,
             key_scheme: KeyScheme::Sakura,
             word_wrap: false,
+            print_landscape: false,
+            print_font_size: 10,
+            print_page_numbers: true,
             window: None,
         }
     }
@@ -111,6 +120,13 @@ impl Settings {
                         s.font_size = v;
                     }
                 }
+                "print_orientation" => s.print_landscape = value == "landscape",
+                "print_font_size" => {
+                    if let Ok(v) = value.parse::<u8>() {
+                        s.print_font_size = v;
+                    }
+                }
+                "print_page_numbers" => s.print_page_numbers = value != "false",
                 "window_x" => wx = value.parse::<i32>().ok(),
                 "window_y" => wy = value.parse::<i32>().ok(),
                 "window_width" => ww = finite(value).filter(|v| *v > 0.0),
@@ -147,6 +163,16 @@ impl Settings {
             self.key_scheme.as_str(),
             self.word_wrap
         );
+        text.push_str(&format!(
+            "print_orientation={}\nprint_font_size={}\nprint_page_numbers={}\n",
+            if self.print_landscape {
+                "landscape"
+            } else {
+                "portrait"
+            },
+            self.print_font_size,
+            self.print_page_numbers
+        ));
         if let Some(w) = &self.window {
             text.push_str(&format!(
                 "window_x={}
@@ -221,6 +247,9 @@ mod tests {
             font_size: 20.0,
             key_scheme: KeyScheme::Vz,
             word_wrap: true,
+            print_landscape: true,
+            print_font_size: 12,
+            print_page_numbers: false,
             window: Some(WindowGeometry {
                 x: -1920,
                 y: 120,
@@ -275,6 +304,10 @@ window_height=500
         // 既定はサクラ互換
         assert_eq!(s.key_scheme, KeyScheme::Sakura);
         assert!(!s.word_wrap);
+        // 印刷は A4 縦・10pt・ページ番号あり
+        assert!(!s.print_landscape);
+        assert_eq!(s.print_font_size, 10);
+        assert!(s.print_page_numbers);
         assert_eq!(s.window, None);
     }
 }
