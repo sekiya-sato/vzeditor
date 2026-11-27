@@ -1,5 +1,6 @@
 //! サクラ互換のキー処理と、それが使う編集操作（選択・切り取り・貼り付けなど）。
 
+use super::function_keys::FKeyLayer;
 use super::*;
 
 impl VzEditorApp {
@@ -195,7 +196,7 @@ impl VzEditorApp {
 
     /// Markdown ビューの 1 ページ分のスクロール量。
     pub(super) fn md_page_step(&self) -> f32 {
-        (self.cur_slot().md_viewport_h * 0.85).max(self.line_height * 4.0)
+        (self.cur_slot().markdown.viewport_h * 0.85).max(self.line_height * 4.0)
     }
 
     /// Markdown ビューでのスクロールキー（両方のキー割り当て共通。Ctrl+P はサクラ互換のみ）。
@@ -242,55 +243,23 @@ impl VzEditorApp {
                 self.open_search_dialog(dialog);
                 return true;
             }
-            if key == Key::F3 {
-                if let Err(message) = self.toggle_search_marks() {
-                    self.status_message = message;
-                }
+        }
+        // Ctrl+Shift+F1 は表示欄の修飾キーの段とは別に扱う。
+        if key == Key::F1 && ctrl && shift {
+            self.show_help = false;
+            self.show_about = true;
+            return true;
+        }
+        if !(ctrl && shift) {
+            let layer = FKeyLayer::from_modifiers(modifiers);
+            if let Some(action) = Self::editor_fkey_action(key, true, in_md_view, layer) {
+                self.execute_editor_action(action);
                 return true;
             }
         }
-        // ファンクションキー
-        match (key, ctrl, shift) {
-            (Key::F1, false, false) => {
-                self.show_help = !self.show_help;
-                return true;
-            }
-            (Key::F1, true, true) => {
-                self.show_help = false;
-                self.show_about = true;
-                return true;
-            }
-            (Key::F6, false, false) => {
-                self.toggle_select_mode();
-                return true;
-            }
-            (Key::F7, false, false) => {
-                self.sakura_cut();
-                return true;
-            }
-            (Key::F8, false, _) => {
-                self.sakura_copy();
-                return true;
-            }
-            (Key::F9, false, false) => {
-                self.sakura_paste_from_clipboard();
-                return true;
-            }
-            // Ctrl+F4: 現在のバッファを閉じる
-            (Key::F4, true, false) => {
-                self.close_current_buffer();
-                return true;
-            }
-            (Key::F2, false, false) => {
-                self.execute_editor_action(EditorAction::NewBuffer);
-                return true;
-            }
-            (Key::F10, false, true) => {
-                self.sakura_duplicate_line();
-                return true;
-            }
-            (
-                Key::F2
+        if matches!(
+            key,
+            Key::F2
                 | Key::F3
                 | Key::F5
                 | Key::F6
@@ -298,14 +267,10 @@ impl VzEditorApp {
                 | Key::F9
                 | Key::F10
                 | Key::F11
-                | Key::F12,
-                _,
-                _,
-            ) => {
-                self.status_message = format!("{key:?} はサクラ互換でまだ対応していません");
-                return true;
-            }
-            _ => {}
+                | Key::F12
+        ) {
+            self.status_message = format!("{key:?} はサクラ互換でまだ対応していません");
+            return true;
         }
 
         if key == Key::Escape {

@@ -1,5 +1,6 @@
 //! VZ 互換のキー処理と、エディター・ファイラーの操作の実行。
 
+use super::function_keys::FKeyLayer;
 use super::*;
 
 impl VzEditorApp {
@@ -41,7 +42,8 @@ impl VzEditorApp {
             }
             EditorAction::MoveWordLeft => {
                 if in_md_view {
-                    let step = (self.cur_slot().md_viewport_h * 0.5).max(self.line_height * 4.0);
+                    let step =
+                        (self.cur_slot().markdown.viewport_h * 0.5).max(self.line_height * 4.0);
                     self.scroll_markdown_by(-step);
                 } else {
                     self.cur_buf_mut().move_word_left();
@@ -50,7 +52,8 @@ impl VzEditorApp {
             }
             EditorAction::MoveWordRight => {
                 if in_md_view {
-                    let step = (self.cur_slot().md_viewport_h * 0.5).max(self.line_height * 4.0);
+                    let step =
+                        (self.cur_slot().markdown.viewport_h * 0.5).max(self.line_height * 4.0);
                     self.scroll_markdown_by(step);
                 } else {
                     self.cur_buf_mut().move_word_right();
@@ -350,7 +353,12 @@ impl VzEditorApp {
 
                     if key == Key::F3 && !ctrl && !modifiers.alt {
                         suppress_text_this_frame = true;
-                        self.execute_editor_action(EditorAction::RepeatSearch(modifiers.shift));
+                        let layer = FKeyLayer::from_modifiers(modifiers);
+                        if let Some(action) =
+                            Self::editor_fkey_action(key, self.is_sakura(), in_md_view, layer)
+                        {
+                            self.execute_editor_action(action);
+                        }
                         continue;
                     }
                     // Ctrl+F4 以外はエディターの選択・カーソルを動かさない。
@@ -447,24 +455,16 @@ impl VzEditorApp {
                         PrefixKey::None => {}
                     }
 
-                    // 1.5. Ctrl+F4: ファイル（現在のバッファ）を閉じる
-                    if key == Key::F4 && ctrl && !modifiers.alt && !modifiers.shift {
-                        suppress_text_this_frame = true;
-                        self.close_current_buffer();
-                        continue;
-                    }
-
-                    // 2. Function keys F1..F10
-                    let fkey_action = match key {
-                        Key::F1 => Some(EditorAction::ToggleHelp),
-                        Key::F2 => Some(EditorAction::NewBuffer),
-                        Key::F5 => Some(EditorAction::MoveLineEnd),
-                        Key::F6 => Some(EditorAction::DeleteLine),
-                        Key::F7 => Some(EditorAction::MoveWordLeft),
-                        Key::F8 => Some(EditorAction::MoveWordRight),
-                        Key::F9 => Some(EditorAction::SwitchToFiler),
-                        Key::F10 => Some(EditorAction::SaveFile),
-                        _ => None,
+                    // F3 と Ctrl+F4 以外の VZ のファンクションキーは修飾キーを区別しない。
+                    let layer = if key == Key::F4 {
+                        FKeyLayer::Ctrl
+                    } else {
+                        FKeyLayer::Normal
+                    };
+                    let fkey_action = if key == Key::F3 {
+                        None
+                    } else {
+                        Self::editor_fkey_action(key, false, in_md_view, layer)
                     };
                     if let Some(action) = fkey_action {
                         suppress_text_this_frame = true;
@@ -749,20 +749,7 @@ impl VzEditorApp {
                     let ctrl = modifiers.ctrl || modifiers.command;
 
                     // Function keys F1..F10
-                    let fkey_action = match key {
-                        Key::F1 => Some(FilerAction::ToggleHelp),
-                        Key::F2 => Some(FilerAction::Rename),
-                        Key::F3 => Some(FilerAction::NewFile),
-                        Key::F4 => Some(FilerAction::Copy),
-                        Key::F5 => Some(FilerAction::Move),
-                        Key::F6 => Some(FilerAction::Delete),
-                        Key::F7 => Some(FilerAction::NewDir),
-                        Key::F8 => Some(FilerAction::CycleSort),
-                        Key::F9 => Some(FilerAction::BackToEditor),
-                        Key::F10 => Some(FilerAction::Quit),
-                        _ => None,
-                    };
-                    if let Some(action) = fkey_action {
+                    if let Some(action) = Self::filer_fkey_action(key) {
                         self.execute_filer_action(ctx, action);
                         if self.mode == AppMode::Editor || self.filer_modal.is_some() {
                             return;

@@ -511,11 +511,8 @@ impl VzEditorApp {
             return true;
         }
         if let Some((start, end)) = pattern.find(self.cur_buf(), up, self.search.wrap) {
-            self.cur_slot_mut().markdown_view = false;
-            self.cur_buf_mut().select_range(start, end);
-            self.select_mode = false;
-            self.need_scroll_to_cursor = true;
-            self.status_message = format!("検索結果　{}行 {}桁", start.0 + 1, start.1 + 1);
+            self.cur_slot_mut().markdown.visible = false;
+            self.apply_search_hit(start, end, false);
             true
         } else {
             if self.search.show_miss {
@@ -524,6 +521,18 @@ impl VzEditorApp {
             }
             false
         }
+    }
+
+    pub(super) fn apply_search_hit(&mut self, start: TextPos, end: TextPos, cursor_at_start: bool) {
+        let (anchor, cursor) = if cursor_at_start {
+            (end, start)
+        } else {
+            (start, end)
+        };
+        self.cur_buf_mut().select_range(anchor, cursor);
+        self.select_mode = false;
+        self.need_scroll_to_cursor = true;
+        self.status_message = format!("検索結果　{}行 {}桁", start.0 + 1, start.1 + 1);
     }
 
     pub(super) fn repeat_search(&mut self, up: bool) {
@@ -559,7 +568,7 @@ impl VzEditorApp {
             self.status_message = format!("{}行をマークしました", rows.len());
             let revision = self.cur_buf().revision;
             self.cur_slot_mut().search_marks = Some((revision, rows));
-            self.cur_slot_mut().markdown_view = false;
+            self.cur_slot_mut().markdown.visible = false;
         }
         Ok(())
     }
@@ -628,7 +637,7 @@ impl VzEditorApp {
             }
         }
         self.search.message = self.status_message.clone();
-        self.cur_slot_mut().markdown_view = false;
+        self.cur_slot_mut().markdown.visible = false;
         self.select_mode = false;
         self.need_scroll_to_cursor = true;
         Ok(())
@@ -676,7 +685,7 @@ impl VzEditorApp {
 
     pub(super) fn move_to_search_position(&mut self, line: usize, col: usize) {
         let slot = self.cur_slot_mut();
-        slot.markdown_view = false;
+        slot.markdown.visible = false;
         slot.buffer.clear_selection();
         slot.buffer.set_cursor(line, col);
         self.need_scroll_to_cursor = true;

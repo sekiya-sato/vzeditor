@@ -7,8 +7,38 @@ use std::sync::mpsc::{self, TryRecvError};
 use vz_core::huge::search::{self as huge_search, Matcher};
 use vz_core::search::SearchPattern;
 
+#[derive(Default)]
+pub(super) struct HugeBufferState {
+    /// 巨大ファイルを裏のスレッドで保存中
+    save: Option<HugeSaveJob>,
+    /// 巨大ファイルの検索（裏のスレッド）
+    find: Option<HugeFindJob>,
+    /// 巨大ファイルのすべて置換（裏のスレッド）
+    replace: Option<HugeReplaceJob>,
+    /// 巨大ファイルの行ジャンプで、索引が届くのを待っている行
+    pending_jump: Option<usize>,
+    /// 巨大ファイルの横スクロール位置（各行の何文字目から表示するか）
+    pub(super) horizontal_col: usize,
+    /// 巨大ファイルの折り返し表示で、先頭に表示している (論理行, 行内の表示行)
+    pub(super) wrap_top: (usize, usize),
+    /// 巨大ファイルの折り返しの計算結果（表示中の行だけ）
+    pub(super) wrap_cache: wrap::HugeWrapCache,
+    /// 巨大ファイルの折り返し表示のホイールの端数（ピクセル）
+    pub(super) wrap_wheel: f32,
+}
+
+impl HugeBufferState {
+    pub(super) fn is_saving(&self) -> bool {
+        self.save.is_some()
+    }
+
+    pub(super) fn is_replacing(&self) -> bool {
+        self.replace.is_some()
+    }
+}
+
 /// 裏のスレッドで実行中の保存。
-pub(super) struct HugeSaveJob {
+struct HugeSaveJob {
     path: PathBuf,
     encoding: TextEncoding,
     /// 保存を始めたときの内容の番号
@@ -38,7 +68,7 @@ impl VzEditorApp {
             }
             slot.buffer.poll();
             busy |= slot.buffer.huge().is_some_and(HugeDoc::is_indexing);
-            let Some(job) = &slot.huge_save else {
+            let Some(job) = &slot.huge.save else {
                 continue;
             };
             busy = true;
@@ -49,7 +79,7 @@ impl VzEditorApp {
                     Err(std::io::Error::other("保存が中断されました"))
                 }
             };
-            let Some(job) = slot.huge_save.take() else {
+            let Some(job) = slot.huge.save.take() else {
                 continue;
             };
             if let Some(h) = slot.buffer.huge_mut() {
@@ -101,7 +131,7 @@ impl VzEditorApp {
     /// 巨大ファイルを裏のスレッドで保存する。保存中は編集できない。
     pub(super) fn start_huge_save(&mut self, path: PathBuf, encoding: TextEncoding) {
         let idx = self.active_buf;
-        if self.buffers[idx].huge_save.is_some() {
+        if self.buffers[idx].huge.save.is_some() {
             self.status_message = "保存中です".into();
             return;
         }
@@ -139,7 +169,7 @@ impl VzEditorApp {
             self.quit_after_save = false;
             return;
         }
-        self.buffers[idx].huge_save = Some(HugeSaveJob {
+        self.buffers[idx].huge.save = Some(HugeSaveJob {
             path,
             encoding,
             rev,
@@ -162,13 +192,13 @@ impl VzEditorApp {
         } else {
             "[巨大]"
         });
-        if let Some(job) = &slot.huge_save {
+        if let Some(job) = &slot.huge.save {
             let done = job.progress.load(Ordering::Relaxed);
             text.push_str(&format!(" 保存中 {}%", percent(done, job.total)));
-        } else if let Some(job) = &slot.huge_replace {
+        } else if let Some(job) = &slot.huge.replace {
             let done = job.progress.load(Ordering::Relaxed);
             text.push_str(&format!(" 置換中 {}%", percent(done, job.total)));
-        } else if slot.huge_find.is_some() {
+        } else if slot.huge.find.is_some() {
             text.push_str(" 検索中");
         } else if h.is_indexing() {
             let (done, total) = h.index_progress();
@@ -185,7 +215,7 @@ fn percent(done: u64, total: u64) -> u64 {
 }
 
 /// 裏のスレッドで実行中の検索（次・前）。
-pub(super) struct HugeFindJob {
+struct HugeFindJob {
     up: bool,
     cancel: Arc<AtomicBool>,
     receiver: Receiver<Option<(u64, u64)>>,
@@ -200,7 +230,7 @@ impl Drop for HugeFindJob {
 }
 
 /// 裏のスレッドで実行中のすべて置換（作業ファイルへの書き出し）。
-pub(super) struct HugeReplaceJob {
+struct HugeReplaceJob {
     path: PathBuf,
     /// Esc で中止した（スレッドの終わりを待って作業ファイルを消す）
     cancelled: bool,
@@ -249,7 +279,7 @@ impl VzEditorApp {
             });
         match spawned {
             Ok(_) => {
-                self.cur_slot_mut().huge_find = Some(HugeFindJob {
+                self.cur_slot_mut().huge.find = Some(HugeFindJob {
                     up,
                     cancel,
                     receiver,
@@ -269,7 +299,7 @@ impl VzEditorApp {
         scope: Option<(TextPos, TextPos)>,
     ) -> Result<(), String> {
         let idx = self.active_buf;
-        if self.buffers[idx].huge_replace.is_some() || self.buffers[idx].huge_save.is_some() {
+        if self.buffers[idx].huge.replace.is_some() || self.buffers[idx].huge.save.is_some() {
             return Err("保存中・置換中です".into());
         }
         let buf = &self.buffers[idx].buffer;
@@ -325,7 +355,7 @@ impl VzEditorApp {
             }
             return Err(format!("置換を開始できません: {e}"));
         }
-        self.buffers[idx].huge_replace = Some(HugeReplaceJob {
+        self.buffers[idx].huge.replace = Some(HugeReplaceJob {
             path: work,
             cancelled: false,
             total,
@@ -347,7 +377,7 @@ impl VzEditorApp {
             return Ok(false);
         }
         if h.is_indexing() {
-            self.cur_slot_mut().pending_jump = Some(row);
+            self.cur_slot_mut().huge.pending_jump = Some(row);
             self.status_message = format!("索引作成中: {}行に届いたら移動します", row + 1);
             return Ok(true);
         }
@@ -358,49 +388,41 @@ impl VzEditorApp {
     pub(super) fn poll_huge_tasks(&mut self) {
         let idx = self.active_buf;
         // 行ジャンプ
-        if let Some(row) = self.buffers[idx].pending_jump {
+        if let Some(row) = self.buffers[idx].huge.pending_jump {
             if row < self.buffers[idx].buffer.line_count() {
-                self.buffers[idx].pending_jump = None;
+                self.buffers[idx].huge.pending_jump = None;
                 self.move_to_search_position(row, 0);
                 self.status_message = format!("{}行へ移動しました", row + 1);
             }
         }
         // 検索
-        if let Some(job) = &mut self.buffers[idx].huge_find {
+        if let Some(job) = &mut self.buffers[idx].huge.find {
             if job.found.is_none() {
                 match job.receiver.try_recv() {
                     Ok(Some(hit)) => job.found = Some(hit),
                     Ok(None) | Err(TryRecvError::Disconnected) => {
-                        self.buffers[idx].huge_find = None;
+                        self.buffers[idx].huge.find = None;
                         self.status_message = "一致する文字列が見つかりません".into();
                     }
                     Err(TryRecvError::Empty) => {}
                 }
             }
         }
-        if let Some((a, b)) = self.buffers[idx].huge_find.as_ref().and_then(|j| j.found) {
+        if let Some((a, b)) = self.buffers[idx].huge.find.as_ref().and_then(|j| j.found) {
             let positions = self.buffers[idx]
                 .buffer
                 .huge()
                 .and_then(|h| Some((h.offset_to_pos(a)?, h.offset_to_pos(b)?)));
             if let Some((start, end)) = positions {
-                let up = self.buffers[idx].huge_find.take().is_some_and(|j| j.up);
-                let buf = &mut self.buffers[idx].buffer;
-                // 上検索はカーソルを一致の先頭に置く
-                if up {
-                    buf.select_range(end, start);
-                } else {
-                    buf.select_range(start, end);
-                }
-                self.need_scroll_to_cursor = true;
-                self.select_mode = false;
-                self.status_message = format!("検索結果　{}行 {}桁", start.0 + 1, start.1 + 1);
+                let up = self.buffers[idx].huge.find.take().is_some_and(|j| j.up);
+                // 上検索はカーソルを一致の先頭に置く。
+                self.apply_search_hit(start, end, up);
             } else {
                 self.status_message = "検索結果: 索引作成中（届いたら移動します）".into();
             }
         }
         // すべて置換
-        let result = match &self.buffers[idx].huge_replace {
+        let result = match &self.buffers[idx].huge.replace {
             Some(job) => match job.receiver.try_recv() {
                 Ok(r) => Some(r),
                 Err(TryRecvError::Empty) => None,
@@ -411,7 +433,7 @@ impl VzEditorApp {
             None => None,
         };
         if let Some(result) = result {
-            let Some(job) = self.buffers[idx].huge_replace.take() else {
+            let Some(job) = self.buffers[idx].huge.replace.take() else {
                 return;
             };
             if job.cancelled {
@@ -443,7 +465,7 @@ impl VzEditorApp {
     /// Esc: 巨大ファイルの検索・すべて置換・行ジャンプの待ちを中止する。中止したら true。
     pub(super) fn cancel_huge_task(&mut self) -> bool {
         let slot = self.cur_slot_mut();
-        let replacing = slot.huge_replace.as_mut().filter(|job| !job.cancelled);
+        let replacing = slot.huge.replace.as_mut().filter(|job| !job.cancelled);
         let message = if let Some(job) = replacing {
             // スレッドに中止を伝え、終わったら作業ファイルを消す（書き終えていても取り込まない）
             job.cancel.store(true, Ordering::Relaxed);
@@ -452,9 +474,9 @@ impl VzEditorApp {
                 h.set_busy(false);
             }
             "すべて置換を中止しました"
-        } else if slot.huge_find.take().is_some() {
+        } else if slot.huge.find.take().is_some() {
             "検索を中止しました"
-        } else if slot.pending_jump.take().is_some() {
+        } else if slot.huge.pending_jump.take().is_some() {
             "行ジャンプを中止しました"
         } else {
             return false;
@@ -466,6 +488,61 @@ impl VzEditorApp {
     /// 巨大ファイルで、検索・置換が実行中か（実行中は再描画を続ける）。
     fn huge_task_running(&self) -> bool {
         let slot = self.cur_slot();
-        slot.huge_find.is_some() || slot.huge_replace.is_some() || slot.pending_jump.is_some()
+        slot.huge.find.is_some() || slot.huge.replace.is_some() || slot.huge.pending_jump.is_some()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::tests::make_test_app;
+    use super::*;
+
+    #[test]
+    fn huge_search_applies_upward_hit_and_discards_cancelled_hit() {
+        let dir = std::env::temp_dir().join(format!("vz_huge_find_{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("find.txt");
+        fs::write(&path, "abc\nabc\n").unwrap();
+        let mut buffer = TextBuffer::open_huge(&path).unwrap();
+        buffer.huge_mut().unwrap().wait_index();
+        buffer.move_doc_end();
+        let mut app = make_test_app();
+        app.buffers = vec![BufferSlot::new(buffer)];
+
+        let (sender, receiver) = mpsc::channel();
+        let cancel = Arc::new(AtomicBool::new(false));
+        app.cur_slot_mut().huge.find = Some(HugeFindJob {
+            up: true,
+            cancel: Arc::clone(&cancel),
+            receiver,
+            found: None,
+        });
+        sender.send(Some((4, 7))).unwrap();
+        app.select_mode = true;
+        app.need_scroll_to_cursor = false;
+        app.poll_huge_tasks();
+        assert_eq!(app.cur_buf().selection_range(), Some(((1, 0), (1, 3))));
+        assert_eq!(app.cur_buf().cursor_pos(), (1, 0));
+        assert_eq!(app.status_message, "検索結果　2行 1桁");
+        assert!(!app.select_mode);
+        assert!(app.need_scroll_to_cursor);
+
+        let (sender, receiver) = mpsc::channel();
+        let cancel = Arc::new(AtomicBool::new(false));
+        app.cur_slot_mut().huge.find = Some(HugeFindJob {
+            up: true,
+            cancel: Arc::clone(&cancel),
+            receiver,
+            found: None,
+        });
+        sender.send(Some((0, 3))).unwrap();
+        assert!(app.cancel_huge_task());
+        assert!(cancel.load(Ordering::Relaxed));
+        app.poll_huge_tasks();
+        assert_eq!(app.cur_buf().cursor_pos(), (1, 0));
+        assert_eq!(app.status_message, "検索を中止しました");
+
+        drop(app);
+        fs::remove_dir_all(&dir).unwrap();
     }
 }

@@ -2,6 +2,41 @@
 
 use super::*;
 
+use crate::markdown::{parse_markdown, render_markdown_view, MdBlock};
+
+pub(super) struct MarkdownViewState {
+    pub(super) visible: bool,
+    pub(super) scroll_y: f32,
+    pub(super) max_scroll_y: f32,
+    pub(super) viewport_h: f32,
+    pub(super) scroll_dirty: bool,
+    cache_revision: Option<u64>,
+    pub(super) blocks: Vec<MdBlock>,
+}
+
+impl Default for MarkdownViewState {
+    fn default() -> Self {
+        Self {
+            visible: false,
+            scroll_y: 0.0,
+            max_scroll_y: 0.0,
+            viewport_h: 400.0,
+            scroll_dirty: false,
+            cache_revision: None,
+            blocks: Vec::new(),
+        }
+    }
+}
+
+impl BufferSlot {
+    pub(super) fn ensure_md_cache(&mut self) {
+        if self.markdown.cache_revision != Some(self.buffer.revision) {
+            self.markdown.blocks = parse_markdown(self.buffer.text_lines());
+            self.markdown.cache_revision = Some(self.buffer.revision);
+        }
+    }
+}
+
 impl VzEditorApp {
     pub(super) fn render_markdown_canvas(&mut self, ctx: &egui::Context) {
         // Disable IME while viewing Markdown so navigation/shortcut keys work cleanly.
@@ -19,20 +54,20 @@ impl VzEditorApp {
             .frame(egui::Frame::NONE)
             .show(ctx, |ui| {
                 ui.multiply_opacity(window_style::text_alpha());
-                let slot = &mut self.buffers[active_idx];
-                let apply_offset = slot.md_scroll_dirty;
+                let view = &mut self.buffers[active_idx].markdown;
+                let apply_offset = view.scroll_dirty;
                 let out = render_markdown_view(
                     ui,
                     active_idx,
-                    &slot.md_blocks,
+                    &view.blocks,
                     font_size,
-                    slot.md_scroll_y,
+                    view.scroll_y,
                     apply_offset,
                 );
-                slot.md_scroll_y = out.scroll_y;
-                slot.md_max_scroll_y = out.max_scroll_y;
-                slot.md_viewport_h = out.viewport_h;
-                slot.md_scroll_dirty = false;
+                view.scroll_y = out.scroll_y;
+                view.max_scroll_y = out.max_scroll_y;
+                view.viewport_h = out.viewport_h;
+                view.scroll_dirty = false;
                 clicked_url = out.clicked_url;
             });
 
@@ -75,7 +110,11 @@ impl VzEditorApp {
                 let window_cols = ((avail_rect.width() / cell_w0) as usize + 8) * 2;
                 // 巨大ファイルの横スクロールは文字単位（各行を hcol 文字目から表示する）。
                 // ピクセル単位にすると、全角を含む行で文字位置と表示位置がずれるため
-                let mut hcol = if huge { self.cur_slot().huge_hcol } else { 0 };
+                let mut hcol = if huge {
+                    self.cur_slot().huge.horizontal_col
+                } else {
+                    0
+                };
                 let (cursor_line, cursor_col) = self.cur_buf().cursor_pos();
                 // 巨大ファイルの折り返し表示（表示中の行だけを折り返す。横スクロールしない）
                 let huge_wrap = huge && self.word_wrap;
@@ -206,9 +245,13 @@ impl VzEditorApp {
                     let idx = self.active_buf;
                     let BufferSlot {
                         buffer,
-                        huge_wrap: cache,
-                        huge_wrap_top,
-                        huge_wrap_wheel,
+                        huge:
+                            huge::HugeBufferState {
+                                wrap_cache: cache,
+                                wrap_top: huge_wrap_top,
+                                wrap_wheel: huge_wrap_wheel,
+                                ..
+                            },
                         ..
                     } = &mut self.buffers[idx];
                     let mut top = *huge_wrap_top;
@@ -869,7 +912,7 @@ impl VzEditorApp {
                             let norm =
                                 ((pos.y - sb_rect.min.y - thumb_h * 0.5) / track_h).clamp(0.0, 1.0);
                             let line = ((norm * lines) as usize).min(total_lines.saturating_sub(1));
-                            self.cur_slot_mut().huge_wrap_top = (line, 0);
+                            self.cur_slot_mut().huge.wrap_top = (line, 0);
                         }
                     }
                 } else if max_scroll_y > 0.0 {
@@ -896,13 +939,13 @@ impl VzEditorApp {
 
                 let slot = self.cur_slot_mut();
                 slot.scroll_x = scroll_x;
-                slot.huge_hcol = hcol;
+                slot.huge.horizontal_col = hcol;
                 if huge_wrap {
-                    let top_line = slot.huge_wrap_top.0;
+                    let top_line = slot.huge.wrap_top.0;
                     slot.scroll_y = top_line as f64 * line_h;
                 } else if huge {
                     // 折り返しにしたときに同じ辺りから表示する
-                    slot.huge_wrap_top = ((scroll_y / line_h) as usize, 0);
+                    slot.huge.wrap_top = ((scroll_y / line_h) as usize, 0);
                     slot.scroll_y = scroll_y;
                 } else {
                     slot.scroll_y = scroll_y;

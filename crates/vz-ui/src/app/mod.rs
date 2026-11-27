@@ -5,8 +5,10 @@ mod bars;
 mod browser_view;
 mod dialogs;
 mod editor_view;
+mod external_changes;
 mod filer_view;
 mod files;
+mod function_keys;
 mod huge;
 mod input;
 mod keys;
@@ -22,7 +24,6 @@ mod window;
 mod wrap;
 
 use crate::fonts::configure_japanese_fonts;
-use crate::markdown::{parse_markdown, render_markdown_view, MdBlock};
 use crate::window_style::{self, bg};
 use eframe::egui::{
     self, Align2, Color32, CornerRadius, Event, FontId, ImeEvent, Key, Pos2, Rect, Sense, Stroke,
@@ -332,13 +333,7 @@ struct BufferSlot {
     scroll_x: f32,
     /// 縦スクロール位置（ピクセル。巨大ファイルの行数でも精度が足りるよう f64）
     scroll_y: f64,
-    markdown_view: bool,
-    md_scroll_y: f32,
-    md_max_scroll_y: f32,
-    md_viewport_h: f32,
-    md_scroll_dirty: bool,
-    md_cache_rev: Option<u64>,
-    md_blocks: Vec<MdBlock>,
+    markdown: editor_view::MarkdownViewState,
     /// 折り返し表示の行割り（折り返しモードのときだけ作る）
     wrap: Option<WrapLayout>,
     /// 行マークを付けたときの文書リビジョンと論理行。
@@ -347,22 +342,7 @@ struct BufferSlot {
     ignored_stamp: Option<FileStamp>,
     /// 外部の変更と衝突して上書きしなかった vz の編集内容を持つ無題バッファなら、元のファイルのパス
     conflict_of: Option<PathBuf>,
-    /// 巨大ファイルを裏のスレッドで保存中
-    huge_save: Option<huge::HugeSaveJob>,
-    /// 巨大ファイルの検索（裏のスレッド）
-    huge_find: Option<huge::HugeFindJob>,
-    /// 巨大ファイルのすべて置換（裏のスレッド）
-    huge_replace: Option<huge::HugeReplaceJob>,
-    /// 巨大ファイルの行ジャンプで、索引が届くのを待っている行
-    pending_jump: Option<usize>,
-    /// 巨大ファイルの横スクロール位置（各行の何文字目から表示するか）
-    huge_hcol: usize,
-    /// 巨大ファイルの折り返し表示で、先頭に表示している (論理行, 行内の表示行)
-    huge_wrap_top: (usize, usize),
-    /// 巨大ファイルの折り返しの計算結果（表示中の行だけ）
-    huge_wrap: wrap::HugeWrapCache,
-    /// 巨大ファイルの折り返し表示のホイールの端数（ピクセル）
-    huge_wrap_wheel: f32,
+    huge: huge::HugeBufferState,
 }
 
 impl BufferSlot {
@@ -375,30 +355,10 @@ impl BufferSlot {
             buffer,
             scroll_x: 0.0,
             scroll_y: 0.0,
-            markdown_view: false,
-            md_scroll_y: 0.0,
-            md_max_scroll_y: 0.0,
-            md_viewport_h: 400.0,
-            md_scroll_dirty: false,
-            md_cache_rev: None,
-            md_blocks: Vec::new(),
+            markdown: editor_view::MarkdownViewState::default(),
             ignored_stamp: None,
             conflict_of: None,
-            huge_save: None,
-            huge_find: None,
-            huge_replace: None,
-            pending_jump: None,
-            huge_hcol: 0,
-            huge_wrap_top: (0, 0),
-            huge_wrap: wrap::HugeWrapCache::default(),
-            huge_wrap_wheel: 0.0,
-        }
-    }
-
-    fn ensure_md_cache(&mut self) {
-        if self.md_cache_rev != Some(self.buffer.revision) {
-            self.md_blocks = parse_markdown(self.buffer.text_lines());
-            self.md_cache_rev = Some(self.buffer.revision);
+            huge: huge::HugeBufferState::default(),
         }
     }
 
@@ -685,7 +645,7 @@ impl VzEditorApp {
     }
 
     fn is_markdown_view(&self) -> bool {
-        self.mode == AppMode::Editor && self.cur_slot().markdown_view
+        self.mode == AppMode::Editor && self.cur_slot().markdown.visible
     }
 
     // --- Font Size Scaling ---

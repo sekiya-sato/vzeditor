@@ -2,7 +2,28 @@
 
 use super::*;
 
+enum SaveProgress {
+    Saved,
+    WaitingForHugeSave,
+}
+
 impl VzEditorApp {
+    fn save_buffer(
+        &mut self,
+        idx: usize,
+        path: &Path,
+        encoding: TextEncoding,
+    ) -> std::io::Result<SaveProgress> {
+        if self.buffers[idx].buffer.is_huge() {
+            // ハードリンクの保存確認は表示中のバッファを対象とする。
+            debug_assert_eq!(idx, self.active_buf);
+            self.request_huge_save(path.to_path_buf(), encoding);
+            return Ok(SaveProgress::WaitingForHugeSave);
+        }
+        self.buffers[idx].buffer.save_to_path_as(path, encoding)?;
+        Ok(SaveProgress::Saved)
+    }
+
     pub(super) fn toggle_markdown_view(&mut self) {
         if self.cur_buf().is_huge() {
             self.status_message = "巨大ファイルでは Markdown ビューを使えません".into();
@@ -10,11 +31,11 @@ impl VzEditorApp {
         }
         self.prefix = PrefixKey::None;
         self.ime_preedit.clear();
-        let slot = self.cur_slot_mut();
-        slot.markdown_view = !slot.markdown_view;
-        let now_view = slot.markdown_view;
+        let view = &mut self.cur_slot_mut().markdown;
+        view.visible = !view.visible;
+        let now_view = view.visible;
         if now_view {
-            slot.md_scroll_dirty = true;
+            view.scroll_dirty = true;
             self.status_message =
                 "Markdown ビューモード [VIEW] (^P / Alt+P / ^K^V で編集へ戻る)".to_string();
         } else {
@@ -25,21 +46,21 @@ impl VzEditorApp {
     }
 
     pub(super) fn scroll_markdown_by(&mut self, delta_y: f32) {
-        let slot = self.cur_slot_mut();
-        slot.md_scroll_y = (slot.md_scroll_y + delta_y).clamp(0.0, slot.md_max_scroll_y);
-        slot.md_scroll_dirty = true;
+        let view = &mut self.cur_slot_mut().markdown;
+        view.scroll_y = (view.scroll_y + delta_y).clamp(0.0, view.max_scroll_y);
+        view.scroll_dirty = true;
     }
 
     pub(super) fn scroll_markdown_to_top(&mut self) {
-        let slot = self.cur_slot_mut();
-        slot.md_scroll_y = 0.0;
-        slot.md_scroll_dirty = true;
+        let view = &mut self.cur_slot_mut().markdown;
+        view.scroll_y = 0.0;
+        view.scroll_dirty = true;
     }
 
     pub(super) fn scroll_markdown_to_bottom(&mut self) {
-        let slot = self.cur_slot_mut();
-        slot.md_scroll_y = slot.md_max_scroll_y;
-        slot.md_scroll_dirty = true;
+        let view = &mut self.cur_slot_mut().markdown;
+        view.scroll_y = view.max_scroll_y;
+        view.scroll_dirty = true;
     }
 
     // --- Mode Switching ---
@@ -73,14 +94,14 @@ impl VzEditorApp {
     /// 表示中のバッファが Markdown ビューなら、スクロール位置の再計算を要求する。
     pub(super) fn mark_md_scroll_dirty(&mut self) {
         let slot = self.cur_slot_mut();
-        if slot.markdown_view {
-            slot.md_scroll_dirty = true;
+        if slot.markdown.visible {
+            slot.markdown.scroll_dirty = true;
         }
     }
 
     /// 表示中のバッファが Markdown ビューなら " [VIEW]"。
     pub(super) fn view_tag(&self) -> &'static str {
-        if self.cur_slot().markdown_view {
+        if self.cur_slot().markdown.visible {
             " [VIEW]"
         } else {
             ""
@@ -232,6 +253,17 @@ impl VzEditorApp {
             FontId::monospace(22.0),
             TEXT_CYAN,
         );
+    }
+
+    /// `path` を開いているバッファ（無題を除く）。
+    pub(super) fn find_buffer_by_path(&self, path: &Path) -> Option<usize> {
+        let target = canonical_or_self(path);
+        self.buffers.iter().position(|slot| {
+            slot.buffer
+                .file_path
+                .as_deref()
+                .is_some_and(|p| same_file(p, path, &target))
+        })
     }
 
     /// ファイルをバッファで開く。開けた（または既存バッファへ切り替えた）ら true。
@@ -423,15 +455,12 @@ impl VzEditorApp {
     }
 
     pub(super) fn perform_save(&mut self, path: PathBuf) {
-        if self.cur_buf().is_huge() {
-            let encoding = self.cur_buf().encoding;
-            self.request_huge_save(path, encoding);
-            return;
-        }
-        match self.cur_buf_mut().save_to_path(&path) {
-            Ok(()) => {
+        let encoding = self.cur_buf().encoding;
+        match self.save_buffer(self.active_buf, &path, encoding) {
+            Ok(SaveProgress::Saved) => {
                 self.status_message = format!("保存しました: {}", path.display());
             }
+            Ok(SaveProgress::WaitingForHugeSave) => {}
             Err(e) => {
                 self.status_message = format!("保存エラー: {e}");
                 self.quit_after_save = false;
@@ -457,14 +486,12 @@ impl VzEditorApp {
             self.trigger_save();
             return Ok(());
         };
-        if self.cur_buf().is_huge() {
-            self.request_huge_save(path, encoding);
-            return Ok(());
-        }
-        self.cur_buf_mut()
-            .save_to_path_as(&path, encoding)
+        let progress = self
+            .save_buffer(self.active_buf, &path, encoding)
             .map_err(|e| e.to_string())?;
-        self.status_message = format!("{encoding} で保存しました: {}", path.display());
+        if matches!(progress, SaveProgress::Saved) {
+            self.status_message = format!("{encoding} で保存しました: {}", path.display());
+        }
         Ok(())
     }
 
@@ -586,7 +613,7 @@ impl VzEditorApp {
 
     /// 「保存して終了」: パスのある未保存バッファを保存し、無題のバッファは順に保存先を尋ねる。
     pub(super) fn save_dirty_buffers_for_quit(&mut self) -> QuitSaveStep {
-        if self.buffers.iter().any(|slot| slot.huge_save.is_some()) {
+        if self.buffers.iter().any(|slot| slot.huge.is_saving()) {
             return QuitSaveStep::WaitingForHugeSave;
         }
         for idx in 0..self.buffers.len() {
@@ -598,13 +625,16 @@ impl VzEditorApp {
             };
             if self.buffers[idx].buffer.is_huge() {
                 self.switch_buffer_to(idx);
-                self.perform_save(path);
-                return QuitSaveStep::WaitingForHugeSave;
             }
-            if let Err(e) = self.buffers[idx].buffer.save_to_path(&path) {
-                self.switch_buffer_to(idx);
-                self.status_message = format!("保存エラーのため終了を中止しました: {e}");
-                return QuitSaveStep::Failed;
+            let encoding = self.buffers[idx].buffer.encoding;
+            match self.save_buffer(idx, &path, encoding) {
+                Ok(SaveProgress::Saved) => {}
+                Ok(SaveProgress::WaitingForHugeSave) => return QuitSaveStep::WaitingForHugeSave,
+                Err(e) => {
+                    self.switch_buffer_to(idx);
+                    self.status_message = format!("保存エラーのため終了を中止しました: {e}");
+                    return QuitSaveStep::Failed;
+                }
             }
         }
         match self.buffers.iter().position(|s| s.buffer.dirty) {

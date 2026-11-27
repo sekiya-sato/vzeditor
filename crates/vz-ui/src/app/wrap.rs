@@ -428,7 +428,13 @@ impl VzEditorApp {
         let cols = self.wrap_cols.max(1);
         let idx = self.active_buf;
         let BufferSlot {
-            buffer, huge_wrap, ..
+            buffer,
+            huge:
+                huge::HugeBufferState {
+                    wrap_cache: huge_wrap,
+                    ..
+                },
+            ..
         } = &mut self.buffers[idx];
         let (line, col) = buffer.cursor_pos();
         let (seg, start) = huge_wrap.seg_of_col(buffer, cols, line, col);

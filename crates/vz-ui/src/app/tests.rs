@@ -215,7 +215,7 @@ fn test_save_session_and_restore() {
     b.set_cursor(0, 5);
     b.insert_text(" new");
     app.buffers.push(BufferSlot::new(b));
-    app.buffers[1].markdown_view = true;
+    app.buffers[1].markdown.visible = true;
     let mut u = TextBuffer::new();
     u.insert_text("無題の内容\n2行目");
     app.buffers.push(BufferSlot::new(u));
@@ -237,7 +237,7 @@ fn test_save_session_and_restore() {
         Some(saved_path.as_path())
     );
     assert_eq!(app2.buffers[0].buffer.cursor_pos(), (2, 3));
-    assert!(app2.buffers[1].markdown_view);
+    assert!(app2.buffers[1].markdown.visible);
     assert_eq!(app2.buffers[1].buffer.text_lines(), vec!["# old new"]);
     let u2 = &app2.buffers[2].buffer;
     assert!(u2.file_path.is_none() && u2.dirty);
@@ -353,7 +353,7 @@ fn test_huge_hard_links_in_both_quit_paths() {
         app.filer_modal,
         Some(FilerModal::ConfirmHardLinkSave { .. })
     ));
-    assert!(app.cur_slot().huge_save.is_none());
+    assert!(!app.cur_slot().huge.is_saving());
     assert!(!app.allow_close);
     assert_eq!(vz_platform::file_info::hard_link_count(&path), Some(2));
 
@@ -369,9 +369,9 @@ fn test_huge_hard_links_in_both_quit_paths() {
     app.quit_after_save = true;
     app.continue_save_and_quit(&ctx);
     let _ = ctx.run(input(Key::Enter), |ctx| app.render_filer_modal(ctx));
-    assert!(app.cur_slot().huge_save.is_some());
+    assert!(app.cur_slot().huge.is_saving());
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-    while app.cur_slot().huge_save.is_some() {
+    while app.cur_slot().huge.is_saving() {
         assert!(std::time::Instant::now() < deadline);
         app.continue_save_and_quit(&ctx);
         app.poll_huge_buffers(&ctx);
@@ -623,19 +623,19 @@ fn test_markdown_view_toggle_and_cache() {
 
     app.toggle_markdown_view();
     assert!(app.is_markdown_view());
-    assert!(app.cur_slot().md_scroll_dirty);
+    assert!(app.cur_slot().markdown.scroll_dirty);
 
     app.cur_slot_mut().ensure_md_cache();
-    assert_eq!(app.cur_slot().md_blocks.len(), 2);
+    assert_eq!(app.cur_slot().markdown.blocks.len(), 2);
 
     // Scroll clamping
-    app.cur_slot_mut().md_max_scroll_y = 200.0;
+    app.cur_slot_mut().markdown.max_scroll_y = 200.0;
     app.scroll_markdown_by(80.0);
-    assert_eq!(app.cur_slot().md_scroll_y, 80.0);
+    assert_eq!(app.cur_slot().markdown.scroll_y, 80.0);
     app.scroll_markdown_to_bottom();
-    assert_eq!(app.cur_slot().md_scroll_y, 200.0);
+    assert_eq!(app.cur_slot().markdown.scroll_y, 200.0);
     app.scroll_markdown_to_top();
-    assert_eq!(app.cur_slot().md_scroll_y, 0.0);
+    assert_eq!(app.cur_slot().markdown.scroll_y, 0.0);
 
     // Toggle back to Edit
     app.toggle_markdown_view();
@@ -854,7 +854,7 @@ fn test_headless_render_all_modes_and_font_sizes() {
 
         // 1. Editor Edit Mode (including menu bar, active IME preedit & IME rect output)
         app.mode = AppMode::Editor;
-        app.cur_slot_mut().markdown_view = false;
+        app.cur_slot_mut().markdown.visible = false;
         app.open_menu = None;
         app.show_about = false;
         let out_edit = ctx.run(raw_input.clone(), |ctx| {
@@ -875,8 +875,8 @@ fn test_headless_render_all_modes_and_font_sizes() {
         );
 
         // 2. Markdown View Mode (IME must be disabled, content scrollable)
-        app.cur_slot_mut().markdown_view = true;
-        app.cur_slot_mut().md_scroll_dirty = true;
+        app.cur_slot_mut().markdown.visible = true;
+        app.cur_slot_mut().markdown.scroll_dirty = true;
         let out_md = ctx.run(raw_input.clone(), |ctx| {
             app.render_menu_bar(ctx);
             app.render_status_bar(ctx);
@@ -890,7 +890,7 @@ fn test_headless_render_all_modes_and_font_sizes() {
             "IME should be disabled in Markdown View mode"
         );
         assert!(
-            app.cur_slot().md_max_scroll_y > 0.0,
+            app.cur_slot().markdown.max_scroll_y > 0.0,
             "README.md should be scrollable in Markdown View mode at {size}pt"
         );
 
@@ -908,7 +908,7 @@ fn test_headless_render_all_modes_and_font_sizes() {
 
     // 4. Open each TopMenu dropdown + About dialog headlessly
     app.mode = AppMode::Editor;
-    app.cur_slot_mut().markdown_view = false;
+    app.cur_slot_mut().markdown.visible = false;
     for &menu in &TopMenu::ALL {
         app.open_top_menu(menu);
         let _ = ctx.run(raw_input.clone(), |ctx| {
@@ -1467,17 +1467,17 @@ fn test_huge_buffer_keys_with_word_wrap_and_save() {
     assert!(app.cur_buf().dirty);
     // Markdown ビュー・行マークは使えない（メッセージだけ）
     app.toggle_markdown_view();
-    assert!(!app.cur_slot().markdown_view);
+    assert!(!app.cur_slot().markdown.visible);
 
     // 保存は裏のスレッドで行い、終わったら未保存の印が消える
     app.trigger_save();
-    assert!(app.cur_slot().huge_save.is_some());
+    assert!(app.cur_slot().huge.is_saving());
     // 保存中は編集できない
     run_editor(&ctx, &mut app, none, vec![Event::Text("Y".into())]);
     assert_eq!(app.cur_buf().line(2), "line2X");
     for _ in 0..200 {
         let _ = ctx.run(egui::RawInput::default(), |ctx| app.poll_huge_buffers(ctx));
-        if app.cur_slot().huge_save.is_none() {
+        if !app.cur_slot().huge.is_saving() {
             break;
         }
         std::thread::sleep(std::time::Duration::from_millis(10));
@@ -1732,9 +1732,9 @@ fn test_sakura_paste_markdown_toggle_and_scheme_switch() {
     // Ctrl+Shift+V は egui では貼り付けとして届く → Markdown 切替
     let cs = mods(true, true);
     run_editor(&ctx, &mut app, cs, vec![Event::Paste("ignored".into())]);
-    assert!(app.cur_slot().markdown_view);
+    assert!(app.cur_slot().markdown.visible);
     run_editor(&ctx, &mut app, cs, vec![Event::Paste("ignored".into())]);
-    assert!(!app.cur_slot().markdown_view);
+    assert!(!app.cur_slot().markdown.visible);
 
     // Ctrl+V は選択範囲を置き換える
     let ctrl = mods(true, false);
@@ -1758,16 +1758,16 @@ fn test_sakura_ctrl_tab_switches_buffer_in_markdown_view() {
     let ctx = egui::Context::default();
     let mut app = make_sakura_app("one");
     app.buffers.push(BufferSlot::new(TextBuffer::new()));
-    app.cur_slot_mut().markdown_view = true;
+    app.cur_slot_mut().markdown.visible = true;
     let ctrl = mods(true, false);
     run_editor(&ctx, &mut app, ctrl, vec![key_with(Key::Tab, ctrl)]);
     assert_eq!(app.active_buf, 1);
     // 戻った先（Markdown ビュー）でも Ctrl+Shift+Tab で切り替えられる
-    app.cur_slot_mut().markdown_view = true;
+    app.cur_slot_mut().markdown.visible = true;
     let cs = mods(true, true);
     run_editor(&ctx, &mut app, cs, vec![key_with(Key::Tab, cs)]);
     assert_eq!(app.active_buf, 0);
-    assert!(app.cur_slot().markdown_view);
+    assert!(app.cur_slot().markdown.visible);
 }
 
 #[test]
@@ -2055,7 +2055,7 @@ fn test_double_click_file_tab_copies_only_the_file_name() {
     file.file_path = Some(PathBuf::from("project").join(name));
     file.dirty = true;
     let mut slot = BufferSlot::new(file);
-    slot.markdown_view = true;
+    slot.markdown.visible = true;
     app.buffers.push(slot);
 
     let frame = |app: &mut VzEditorApp, events| {

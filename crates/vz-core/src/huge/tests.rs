@@ -1,4 +1,5 @@
 use super::*;
+use std::sync::atomic::{AtomicBool, AtomicU64};
 
 struct Rng(u64);
 impl Rng {
