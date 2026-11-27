@@ -7,7 +7,6 @@ impl VzEditorApp {
     pub(super) fn render_status_bar(&mut self, ctx: &egui::Context) {
         let mut switch_next_clicked = false;
         let mut toggle_md_clicked = false;
-        let mut font_cmd: Option<i8> = None;
         let mut win_cmd: Option<MenuAction> = None;
 
         egui::TopBottomPanel::top("status_bar")
@@ -139,7 +138,7 @@ impl VzEditorApp {
 
                         // Status message (truncated so right-aligned controls never clip)
                         if !self.status_message.is_empty() {
-                            let right_reserve = 380.0_f32;
+                            let right_reserve = 260.0_f32;
                             let avail_msg_w = ui.available_width() - right_reserve;
                             if avail_msg_w > 48.0 {
                                 ui.add_space(8.0);
@@ -208,27 +207,6 @@ impl VzEditorApp {
                                 win_cmd = Some(MenuAction::SaveWithEncoding);
                             }
 
-                            ui.add_space(6.0);
-                            ui.label(
-                                egui::RichText::new("|")
-                                    .font(FontId::monospace(13.0))
-                                    .color(BORDER_BLUE),
-                            );
-                            ui.add_space(6.0);
-
-                            if let Some(cmd) = Self::paint_font_size_controls(ui, self.font_size) {
-                                font_cmd = Some(cmd);
-                            }
-                            ui.add_space(6.0);
-                            if let Some(cmd) = Self::paint_window_style_controls(
-                                ui,
-                                self.bg_opacity,
-                                self.text_opacity,
-                                self.always_on_top,
-                            ) {
-                                win_cmd = Some(cmd);
-                            }
-
                             if !self.cur_slot().markdown.visible
                                 && (self.ime_active || !self.ime_preedit.is_empty())
                             {
@@ -295,7 +273,7 @@ impl VzEditorApp {
                         }
 
                         if !self.status_message.is_empty() {
-                            let right_reserve = 250.0_f32;
+                            let right_reserve = 130.0_f32;
                             let avail_msg_w = ui.available_width() - right_reserve;
                             if avail_msg_w > 48.0 {
                                 ui.add_space(10.0);
@@ -327,27 +305,6 @@ impl VzEditorApp {
                                     .font(FontId::monospace(13.0))
                                     .color(TEXT_CYAN),
                             );
-
-                            ui.add_space(6.0);
-                            ui.label(
-                                egui::RichText::new("|")
-                                    .font(FontId::monospace(13.0))
-                                    .color(BORDER_BLUE),
-                            );
-                            ui.add_space(6.0);
-
-                            if let Some(cmd) = Self::paint_font_size_controls(ui, self.font_size) {
-                                font_cmd = Some(cmd);
-                            }
-                            ui.add_space(6.0);
-                            if let Some(cmd) = Self::paint_window_style_controls(
-                                ui,
-                                self.bg_opacity,
-                                self.text_opacity,
-                                self.always_on_top,
-                            ) {
-                                win_cmd = Some(cmd);
-                            }
                         });
                     }
                     AppMode::Terminal | AppMode::Browser => {
@@ -368,7 +325,7 @@ impl VzEditorApp {
                                         .color(STATUS_BADGE_FG),
                                 );
                             });
-                        let avail_msg_w = ui.available_width() - 250.0;
+                        let avail_msg_w = ui.available_width() - 10.0;
                         if !self.status_message.is_empty() && avail_msg_w > 48.0 {
                             ui.add_space(10.0);
                             let max_cols = ((avail_msg_w - 10.0) / 7.8).floor().max(6.0) as usize;
@@ -383,20 +340,6 @@ impl VzEditorApp {
                                     .color(msg_color),
                             );
                         }
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if let Some(cmd) = Self::paint_font_size_controls(ui, self.font_size) {
-                                font_cmd = Some(cmd);
-                            }
-                            ui.add_space(6.0);
-                            if let Some(cmd) = Self::paint_window_style_controls(
-                                ui,
-                                self.bg_opacity,
-                                self.text_opacity,
-                                self.always_on_top,
-                            ) {
-                                win_cmd = Some(cmd);
-                            }
-                        });
                     }
                 });
             });
@@ -409,13 +352,6 @@ impl VzEditorApp {
         }
         if toggle_md_clicked {
             self.toggle_markdown_view();
-        }
-        if let Some(cmd) = font_cmd {
-            match cmd {
-                1 => self.zoom_in_font(),
-                -1 => self.zoom_out_font(),
-                _ => self.reset_font_size(),
-            }
         }
     }
 

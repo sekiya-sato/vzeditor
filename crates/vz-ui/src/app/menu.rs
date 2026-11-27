@@ -775,6 +775,8 @@ impl VzEditorApp {
         let mut bar_rect = Rect::NOTHING;
         let mut clicked_header: Option<TopMenu> = None;
         let mut hovered_header: Option<TopMenu> = None;
+        let mut font_cmd: Option<i8> = None;
+        let mut win_cmd: Option<MenuAction> = None;
 
         egui::TopBottomPanel::top("menu_bar")
             .exact_height(24.0)
@@ -839,8 +841,35 @@ impl VzEditorApp {
                             );
                         }
                     }
+
+                    // 右端: 文字・背景の透過、最前面、フォントサイズ（どの画面でも同じ位置）
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.spacing_mut().item_spacing.x = 4.0;
+                        font_cmd = Self::paint_font_size_controls(ui, self.font_size);
+                        ui.add_space(6.0);
+                        win_cmd = Self::paint_window_style_controls(
+                            ui,
+                            self.bg_opacity,
+                            self.text_opacity,
+                            self.always_on_top,
+                        );
+                    });
                 });
             });
+
+        if win_cmd.is_some() || font_cmd.is_some() {
+            self.open_menu = None;
+            self.open_submenu = None;
+        }
+        if let Some(action) = win_cmd {
+            self.execute_menu_action(ctx, action);
+        }
+        match font_cmd {
+            Some(1) => self.zoom_in_font(),
+            Some(-1) => self.zoom_out_font(),
+            Some(_) => self.reset_font_size(),
+            None => {}
+        }
 
         if let Some(menu) = clicked_header {
             if self.open_menu == Some(menu) {
@@ -1080,7 +1109,7 @@ impl VzEditorApp {
 
     // --- Status Bar & Multi-Buffer Strip ---
 
-    /// ステータスバー右端の [最前面] [透過 n%] 表示。クリックで切替、透過表示は右クリックで濃くする。
+    /// メニューバー右端の [最前面] [透過 n%] 表示。クリックで切替、透過表示は右クリックで濃くする。
     pub(super) fn paint_window_style_controls(
         ui: &mut egui::Ui,
         opacity: u8,
