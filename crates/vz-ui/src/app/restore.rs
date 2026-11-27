@@ -3,13 +3,13 @@
 use super::*;
 use std::time::{Duration, UNIX_EPOCH};
 
-fn stamp_to_record(stamp: Option<FileStamp>) -> Option<(u64, u64)> {
+pub(super) fn stamp_to_record(stamp: Option<FileStamp>) -> Option<(u64, u64)> {
     let (time, len) = stamp?;
     let ns = time.duration_since(UNIX_EPOCH).ok()?.as_nanos();
     Some((u64::try_from(ns).ok()?, len))
 }
 
-fn stamp_from_record(stamp: Option<(u64, u64)>) -> Option<FileStamp> {
+pub(super) fn stamp_from_record(stamp: Option<(u64, u64)>) -> Option<FileStamp> {
     stamp.map(|(ns, len)| (UNIX_EPOCH + Duration::from_nanos(ns), len))
 }
 

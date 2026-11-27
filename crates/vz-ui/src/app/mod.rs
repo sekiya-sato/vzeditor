@@ -17,6 +17,7 @@ mod release;
 mod restore;
 mod search;
 mod send;
+mod tab_transfer;
 mod terminal_view;
 #[cfg(test)]
 mod tests;
@@ -375,6 +376,7 @@ pub struct VzEditorApp {
     mode: AppMode,
     buffers: Vec<BufferSlot>,
     active_buf: usize,
+    tab_transfer: tab_transfer::TabTransfer,
     filer: FilerState,
 
     prefix: PrefixKey,
@@ -480,6 +482,8 @@ pub enum StartupRestore {
     None,
     /// リリースの指定 PID の記録。
     Release(Box<session::release::State>),
+    /// 別の VZ から移動してきた編集タブ。
+    TabTransfer(String),
     /// Shift を押して起動した: Alt+Shift+F4 の記録を 1 つ戻す
     Saved,
     /// Shift を OS から読めない環境: 起動直後のフレームで Shift を見て決める
@@ -532,6 +536,7 @@ impl VzEditorApp {
             mode: AppMode::Editor,
             buffers: vec![BufferSlot::new(initial_buffer)],
             active_buf: 0,
+            tab_transfer: tab_transfer::TabTransfer::default(),
             filer: FilerState::new(initial_dir),
             prefix: PrefixKey::None,
             status_message,
@@ -588,7 +593,11 @@ impl VzEditorApp {
             browser_url_editing: false,
         };
         let session_dir = session::session_dir();
+        if let Some(dir) = &session_dir {
+            app.start_tab_inbox(dir, &cc.egui_ctx);
+        }
         match restore {
+            StartupRestore::TabTransfer(id) => app.restore_transferred_tab(&cc.egui_ctx, &id),
             StartupRestore::Release(state) => app.restore_release_state(state),
             StartupRestore::Saved => {
                 if let Some(dir) = &session_dir {
@@ -837,6 +846,8 @@ impl eframe::App for VzEditorApp {
         self.handle_save_state_key(ctx);
         self.poll_release_request(ctx);
 
+        self.close_if_workspace_emptied(ctx);
+        self.poll_tab_transfers(ctx);
         self.check_external_changes(ctx);
         self.handle_dropped_files(ctx);
         self.poll_dialog();
@@ -849,7 +860,7 @@ impl eframe::App for VzEditorApp {
 
         self.render_menu_bar(ctx);
         self.render_status_bar(ctx);
-        self.render_buffer_strip(ctx);
+        self.render_buffer_strip(ctx, Some(frame));
         self.render_fkey_bar(ctx);
 
         match self.mode {
@@ -882,6 +893,7 @@ impl eframe::App for VzEditorApp {
         // Keep OS window title bar synchronized with current file, dirty state, or filer directory
         self.sync_window_title(ctx);
         self.finish_release_startup(ctx);
+        self.close_if_workspace_emptied(ctx);
 
         if self.pending_dialog.is_some() {
             ctx.request_repaint_after(std::time::Duration::from_millis(100));

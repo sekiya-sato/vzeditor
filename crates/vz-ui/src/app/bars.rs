@@ -421,10 +421,18 @@ impl VzEditorApp {
 
     /// バッファ帯（ファイルが 2 件以上、またはターミナル・ブラウザを開いたとき）。
     /// ファイルのタブの後ろにターミナル（1 つ）・ブラウザ（タブごと）のタブを並べる。
-    pub(super) fn render_buffer_strip(&mut self, ctx: &egui::Context) {
+    pub(super) fn render_buffer_strip(
+        &mut self,
+        ctx: &egui::Context,
+        frame: Option<&eframe::Frame>,
+    ) {
         let has_terminal = self.terminal.is_some();
         let has_browser = !self.browsers.is_empty();
-        if self.mode == AppMode::Filer || (self.buffers.len() < 2 && !has_terminal && !has_browser)
+        if self.mode == AppMode::Filer
+            || (self.buffers.len() == 1
+                && self.buffers[0].is_untouched_untitled()
+                && !has_terminal
+                && !has_browser)
         {
             return;
         }
@@ -439,8 +447,7 @@ impl VzEditorApp {
             && self.open_menu.is_none()
             && !self.show_help
             && !self.show_about;
-        let can_reorder = self.buffers.len() > 1 && can_use_tab_gestures;
-        let file_tab_sense = if can_reorder {
+        let file_tab_sense = if can_use_tab_gestures {
             Sense::click_and_drag()
         } else {
             Sense::click()
@@ -488,7 +495,7 @@ impl VzEditorApp {
                                 && slot.buffer.file_path.is_some();
                             selected_tab = Some((idx, copy_name.then_some(name)));
                         }
-                        if can_reorder {
+                        if can_use_tab_gestures {
                             if response.drag_started_by(primary) {
                                 egui::DragAndDrop::set_payload(ctx, FileTabDrag(slot.tab_id));
                             }
@@ -560,6 +567,35 @@ impl VzEditorApp {
                 });
             });
 
+        if can_use_tab_gestures {
+            if let (Some(frame), Some(drag)) =
+                (frame, egui::DragAndDrop::payload::<FileTabDrag>(ctx))
+            {
+                let outside = ctx.input(|input| {
+                    input
+                        .pointer
+                        .latest_pos()
+                        .is_none_or(|pos| !input.screen_rect().contains(pos))
+                });
+                let native_down = (!released && outside)
+                    .then(|| vz_platform::tab_drop::primary_down(frame))
+                    .flatten();
+                if released || native_down == Some(false) {
+                    egui::DragAndDrop::clear_payload(ctx);
+                    let target = vz_platform::tab_drop::target_at_pointer(frame);
+                    if matches!(target, vz_platform::tab_drop::DropTarget::Other(_)) {
+                        self.send_tab(drag.0, target);
+                        ctx.request_repaint();
+                        return;
+                    }
+                } else {
+                    ctx.set_cursor_icon(egui::CursorIcon::Grabbing);
+                    if native_down == Some(true) {
+                        ctx.request_repaint_after(std::time::Duration::from_millis(30));
+                    }
+                }
+            }
+        }
         if let Some((from, to)) = tab_move {
             self.move_buffer_tab(from, to);
             ctx.request_repaint();

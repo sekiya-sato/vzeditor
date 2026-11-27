@@ -24,16 +24,23 @@ fn main() -> eframe::Result<()> {
     // 複数ファイル・フォルダを引数で受け取る（エクスプローラーで exe へ複数ドロップした場合も同じ）
     let (restore, initial_paths) = if let Some(state) = release_state {
         (StartupRestore::Release(state), Vec::new())
+    } else if let [flag, id] = args.as_slice() {
+        if flag == "--tab-transfer" {
+            (
+                StartupRestore::TabTransfer(id.to_string_lossy().into_owned()),
+                Vec::new(),
+            )
+        } else {
+            regular_startup(args)
+        }
     } else {
-        // Shift を押して起動したら、Alt+Shift+F4 で記録した状態を戻す。
-        let restore = match vz_platform::keyboard::shift_held() {
-            Some(true) => StartupRestore::Saved,
-            Some(false) => StartupRestore::None,
-            None => StartupRestore::SavedIfShift,
-        };
-        (restore, args.into_iter().map(PathBuf::from).collect())
+        regular_startup(args)
     };
-    let settings = Settings::load();
+    let mut settings = Settings::load();
+    if matches!(&restore, StartupRestore::TabTransfer(_)) {
+        // 切り離した窓を元の窓と同じ保存位置に重ねず、OS に配置を任せる。
+        settings.window = None;
+    }
 
     let mut viewport = egui::ViewportBuilder::default()
         .with_app_id("vzeditor")
@@ -73,4 +80,14 @@ fn main() -> eframe::Result<()> {
             )))
         }),
     )
+}
+
+fn regular_startup(args: Vec<std::ffi::OsString>) -> (StartupRestore, Vec<PathBuf>) {
+    // Shift を押して起動したら、Alt+Shift+F4 で記録した状態を戻す。
+    let restore = match vz_platform::keyboard::shift_held() {
+        Some(true) => StartupRestore::Saved,
+        Some(false) => StartupRestore::None,
+        None => StartupRestore::SavedIfShift,
+    };
+    (restore, args.into_iter().map(PathBuf::from).collect())
 }

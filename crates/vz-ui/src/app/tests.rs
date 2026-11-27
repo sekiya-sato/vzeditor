@@ -18,6 +18,7 @@ pub(super) fn make_test_app() -> VzEditorApp {
         mode: AppMode::Editor,
         buffers: vec![BufferSlot::new(buf)],
         active_buf: 0,
+        tab_transfer: tab_transfer::TabTransfer::default(),
         filer: FilerState::new(std::env::temp_dir()),
         prefix: PrefixKey::None,
         status_message: String::new(),
@@ -868,7 +869,7 @@ fn test_headless_render_all_modes_and_font_sizes() {
         let out_edit = ctx.run(raw_input.clone(), |ctx| {
             app.render_menu_bar(ctx);
             app.render_status_bar(ctx);
-            app.render_buffer_strip(ctx);
+            app.render_buffer_strip(ctx, None);
             app.render_fkey_bar(ctx);
             app.render_editor_canvas(ctx);
             app.sync_window_title(ctx);
@@ -888,7 +889,7 @@ fn test_headless_render_all_modes_and_font_sizes() {
         let out_md = ctx.run(raw_input.clone(), |ctx| {
             app.render_menu_bar(ctx);
             app.render_status_bar(ctx);
-            app.render_buffer_strip(ctx);
+            app.render_buffer_strip(ctx, None);
             app.render_fkey_bar(ctx);
             app.render_markdown_canvas(ctx);
             app.sync_window_title(ctx);
@@ -1974,7 +1975,7 @@ fn test_drag_file_tabs_in_the_buffer_strip() {
                 events,
                 ..Default::default()
             },
-            |ctx| app.render_buffer_strip(ctx),
+            |ctx| app.render_buffer_strip(ctx, None),
         )
     };
     let tab_positions = |output: egui::FullOutput| {
@@ -2073,7 +2074,7 @@ fn test_double_click_file_tab_copies_only_the_file_name() {
                 events,
                 ..Default::default()
             },
-            |ctx| app.render_buffer_strip(ctx),
+            |ctx| app.render_buffer_strip(ctx, None),
         )
     };
     let output = frame(&mut app, vec![]);
@@ -2127,7 +2128,7 @@ fn test_buffer_strip_and_browser_screen_render_headless() {
     };
     let _ = ctx.run(raw_input, |ctx| {
         app.render_status_bar(ctx);
-        app.render_buffer_strip(ctx);
+        app.render_buffer_strip(ctx, None);
         app.render_browser_canvas(ctx);
     });
     // ブラウザの領域がツールバーの下に決まる

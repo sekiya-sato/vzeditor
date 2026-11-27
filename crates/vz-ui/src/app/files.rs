@@ -112,11 +112,15 @@ impl VzEditorApp {
 
     /// 未編集の [無題] だけなら置き換え、それ以外は末尾に追加してアクティブにする。
     pub(super) fn add_buffer(&mut self, buf: TextBuffer) {
+        self.add_buffer_slot(BufferSlot::new(buf));
+    }
+
+    pub(super) fn add_buffer_slot(&mut self, slot: BufferSlot) {
         if self.buffers.len() == 1 && self.buffers[0].is_untouched_untitled() {
-            self.buffers[0] = BufferSlot::new(buf);
+            self.buffers[0] = slot;
             self.active_buf = 0;
         } else {
-            self.buffers.push(BufferSlot::new(buf));
+            self.buffers.push(slot);
             self.active_buf = self.buffers.len() - 1;
         }
         self.mode = AppMode::Editor;

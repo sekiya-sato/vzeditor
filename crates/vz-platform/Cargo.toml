@@ -35,6 +35,8 @@ windows = { version = "0.62", features = [
 # macOS: クリップボード（ファイルダイアログは osascript）
 [target.'cfg(target_os = "macos")'.dependencies]
 arboard = { version = "3", default-features = false }
+core-foundation = "0.9"
+core-graphics = "0.23"
 
 # Linux X11: 仮想デスクトップ（EWMH の _NET_WM_DESKTOP）。winit と同じ版
 [target.'cfg(target_os = "linux")'.dependencies]
