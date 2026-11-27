@@ -219,6 +219,16 @@ impl VzEditorApp {
             self.handle_menu_events(ctx);
             return;
         }
+        // ヘルプ表示中は F1 / ESC で閉じるだけ（ターミナル・ブラウザでもシェルへ送らない）
+        if self.show_help {
+            if ctx.input_mut(|i| {
+                i.consume_key(egui::Modifiers::NONE, Key::F1)
+                    | i.consume_key(egui::Modifiers::NONE, Key::Escape)
+            }) {
+                self.show_help = false;
+            }
+            return;
+        }
         match self.mode {
             AppMode::Editor => self.handle_editor_events(ctx),
             AppMode::Filer => self.handle_filer_events(ctx),

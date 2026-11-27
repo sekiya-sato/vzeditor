@@ -37,7 +37,6 @@ pub(super) fn make_test_app() -> VzEditorApp {
         submenu_selected_idx: 0,
         show_help: false,
         show_about: false,
-        help_click_armed: false,
         about_click_armed: false,
         pending_dialog: None,
         inline_prompt: None,
@@ -834,24 +833,58 @@ fn test_help_and_about_close_on_click() {
         }
     };
     let pos = Pos2::new(20.0, 20.0);
-    for about in [false, true] {
-        if about {
-            app.show_about = true;
-        } else {
+    let frame = |app: &mut VzEditorApp| {
+        let _ = ctx.run(click(pos), |ctx| {
+            app.render_help_overlay(ctx);
+            app.render_about_dialog(ctx);
+        });
+    };
+    // ヘルプはクリックでは閉じない（スクロールバー操作のため）
+    app.show_help = true;
+    frame(&mut app);
+    frame(&mut app);
+    assert!(app.show_help);
+    app.show_help = false;
+
+    app.show_about = true;
+    // 開いたフレームのクリック（メニュー操作など）では閉じない
+    frame(&mut app);
+    assert!(app.show_about);
+    // 次のクリックで閉じる
+    frame(&mut app);
+    assert!(!app.show_about);
+}
+
+#[test]
+fn test_help_closes_only_by_f1_or_esc_in_all_modes() {
+    let ctx = egui::Context::default();
+    let mut app = make_test_app();
+    let press = |key: Key| egui::RawInput {
+        screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(1024.0, 680.0))),
+        events: vec![Event::Key {
+            key,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        }],
+        ..Default::default()
+    };
+    for mode in [
+        AppMode::Editor,
+        AppMode::Filer,
+        AppMode::Terminal,
+        AppMode::Browser,
+    ] {
+        app.mode = mode;
+        for key in [Key::F1, Key::Escape] {
             app.show_help = true;
+            let _ = ctx.run(press(Key::A), |ctx| app.handle_events(ctx));
+            assert!(app.show_help, "{mode:?} {key:?}");
+            let _ = ctx.run(press(key), |ctx| app.handle_events(ctx));
+            assert!(!app.show_help, "{mode:?} {key:?}");
+            assert_eq!(app.mode, mode);
         }
-        let frame = |app: &mut VzEditorApp| {
-            let _ = ctx.run(click(pos), |ctx| {
-                app.render_help_overlay(ctx);
-                app.render_about_dialog(ctx);
-            });
-        };
-        // 開いたフレームのクリック（メニュー操作など）では閉じない
-        frame(&mut app);
-        assert!(app.show_help || app.show_about, "about={about}");
-        // 次のクリックで閉じる
-        frame(&mut app);
-        assert!(!app.show_help && !app.show_about, "about={about}");
     }
 }
 

@@ -430,8 +430,7 @@ pub struct VzEditorApp {
     submenu_selected_idx: usize,
     show_help: bool,
     show_about: bool,
-    /// ヘルプ / About が前のフレームから表示中か。開いたフレームのクリック（メニュー操作）で閉じないための判定。
-    help_click_armed: bool,
+    /// About が前のフレームから表示中か。開いたフレームのクリック（メニュー操作）で閉じないための判定。
     about_click_armed: bool,
     pending_dialog: Option<Receiver<DialogResult>>,
     inline_prompt: Option<InlinePathPrompt>,
@@ -601,7 +600,6 @@ impl VzEditorApp {
             submenu_selected_idx: 0,
             show_help: false,
             show_about: false,
-            help_click_armed: false,
             about_click_armed: false,
             pending_dialog: None,
             inline_prompt: None,

@@ -5,21 +5,17 @@ use super::*;
 impl VzEditorApp {
     pub(super) fn render_help_overlay(&mut self, ctx: &egui::Context) {
         if !self.show_help {
-            self.help_click_armed = false;
             return;
         }
-        let close_by_click = self.help_click_armed && ctx.input(|i| i.pointer.any_click());
-        self.help_click_armed = true;
-        let mut open = self.show_help;
+        // 閉じるのは F1 / ESC のみ（handle_events）。中はホイール・スクロールバーで縦スクロール
         let title = match self.mode {
-            AppMode::Editor => "VZ Editor - エディタ キーバインド (F1 / ESC / クリックで閉じる)",
-            AppMode::Filer => "VZ Filer - 2画面ファイラー操作 (F1 / ESC / クリックで閉じる)",
-            AppMode::Terminal => "VZ Terminal - ターミナル操作 (クリックで閉じる)",
-            AppMode::Browser => "VZ Browser - 簡易ブラウザ操作 (クリックで閉じる)",
+            AppMode::Editor => "VZ Editor - エディタ キーバインド (F1 / ESC で閉じる)",
+            AppMode::Filer => "VZ Filer - 2画面ファイラー操作 (F1 / ESC で閉じる)",
+            AppMode::Terminal => "VZ Terminal - ターミナル操作 (F1 / ESC で閉じる)",
+            AppMode::Browser => "VZ Browser - 簡易ブラウザ操作 (F1 / ESC で閉じる)",
         };
-        modal_window(ctx, title, TEXT_CYAN)
-            .open(&mut open)
-            .show(ctx, |ui| {
+        let max_h = (ctx.screen_rect().height() - 120.0).max(80.0);
+        modal_window(ctx, title, TEXT_CYAN).show(ctx, |ui| {
                 let rows: &[(&str, &str)] = match self.mode {
                     AppMode::Editor if self.key_scheme == KeyScheme::Sakura => &[
                         ("Ctrl+N・F2 / Ctrl+O", "新規作成 / 開く"),
@@ -132,27 +128,31 @@ impl VzEditorApp {
                         ("外部ブラウザ", "表示中のページを既定のブラウザで開く"),
                     ],
                 };
-                egui::Grid::new("vz_help_grid")
-                    .num_columns(2)
-                    .spacing([18.0, 6.0])
+                egui::ScrollArea::vertical()
+                    .id_salt("vz_help_scroll")
+                    .max_height(max_h)
                     .show(ui, |ui| {
-                        for &(k, desc) in rows {
-                            ui.label(
-                                egui::RichText::new(k)
-                                    .font(FontId::monospace(13.5))
-                                    .strong()
-                                    .color(TEXT_CYAN),
-                            );
-                            ui.label(
-                                egui::RichText::new(desc)
-                                    .font(FontId::monospace(13.5))
-                                    .color(TEXT_WHITE),
-                            );
-                            ui.end_row();
-                        }
+                        egui::Grid::new("vz_help_grid")
+                            .num_columns(2)
+                            .spacing([18.0, 6.0])
+                            .show(ui, |ui| {
+                                for &(k, desc) in rows {
+                                    ui.label(
+                                        egui::RichText::new(k)
+                                            .font(FontId::monospace(13.5))
+                                            .strong()
+                                            .color(TEXT_CYAN),
+                                    );
+                                    ui.label(
+                                        egui::RichText::new(desc)
+                                            .font(FontId::monospace(13.5))
+                                            .color(TEXT_WHITE),
+                                    );
+                                    ui.end_row();
+                                }
+                            });
                     });
             });
-        self.show_help = open && !close_by_click;
     }
 
     pub(super) fn render_about_dialog(&mut self, ctx: &egui::Context) {
