@@ -971,7 +971,7 @@ impl VzEditorApp {
                 .map(|(_, r)| *r)
                 .unwrap_or(bar_rect);
             let entries = self.build_menu_entries(active_menu);
-            let popup_w = 276.0_f32;
+            let popup_w = 302.0_f32;
             let row_h = 24.0_f32;
             let sep_h = 9.0_f32;
             let selected_idx = self.menu_selected_idx;
@@ -1066,7 +1066,7 @@ impl VzEditorApp {
                         })
                         .fold(0.0_f32, f32::max);
                     let sub_w = (text_w + 24.0)
-                        .max(300.0)
+                        .max(326.0)
                         .min(screen.width() - frame_pad * 2.0 - 8.0);
                     let mut x = popup_rect.max.x - 2.0;
                     if x + sub_w + frame_pad * 2.0 > screen.max.x {
