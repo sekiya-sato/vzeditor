@@ -230,6 +230,8 @@ impl VzEditorApp {
         if entries.is_empty() {
             return failed;
         }
+        // 復元で開き直すファイルは、利用者が開いたものではないので履歴に記録しない
+        self.history_paused = true;
         let mut active: Option<usize> = None;
         let mut restored = 0usize;
         let mut left_dir = None;
@@ -407,6 +409,7 @@ impl VzEditorApp {
                 huge_errors.join(" / ")
             );
         }
+        self.history_paused = false;
         failed
     }
 }

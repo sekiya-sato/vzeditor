@@ -47,6 +47,9 @@ pub(super) fn make_test_app() -> VzEditorApp {
         text_opacity: 100,
         always_on_top: false,
         persist_settings: false,
+        history: History::default(),
+        history_file: None,
+        history_paused: false,
         quit_after_save: false,
         allow_close: false,
         shift_restore_until: None,
@@ -2639,4 +2642,138 @@ fn test_print_layout_in_markdown_view_uses_view_image() {
     assert!(texts.contains("Title") && texts.contains("Bold"), "{texts}");
     assert!(!texts.contains('#') && !texts.contains('*') && !texts.contains('`'));
     assert!(doc.pages[0].lines().is_empty());
+}
+
+#[test]
+fn test_history_records_open_save_and_filer_moves() {
+    let dir = std::env::temp_dir().join(format!("vz_history_app_{}", std::process::id()));
+    let _ = fs::remove_dir_all(&dir);
+    let sub = dir.join("sub");
+    fs::create_dir_all(&sub).unwrap();
+    let a = dir.join("a.txt");
+    let b = sub.join("b.txt");
+    fs::write(&a, "a").unwrap();
+    fs::write(&b, "b").unwrap();
+    let history_file = dir.join("history.ini");
+
+    let mut app = make_test_app();
+    app.history_file = Some(history_file.clone());
+    assert!(app.open_file_in_buffer(a.clone()));
+    assert!(app.open_file_in_buffer(b.clone()));
+    // 開いているファイルへの切替も先頭へ移す
+    assert!(app.open_file_in_buffer(a.clone()));
+    let files: Vec<PathBuf> = app.history.files.iter().map(|f| f.path.clone()).collect();
+    assert_eq!(files, vec![a.clone(), b.clone()]);
+    assert_eq!(app.history.files[0].encoding, "UTF-8");
+    assert_eq!(app.history.folders, vec![dir.clone(), sub.clone()]);
+
+    // 名前を付けて保存も記録する
+    let c = sub.join("c.txt");
+    app.perform_save(c.clone());
+    assert_eq!(app.history.files[0].path, c);
+    assert_eq!(app.history.folders[0], sub);
+
+    // ファイラーで入ったフォルダ・親フォルダを記録する
+    app.filer_enter_dir(dir.clone()).unwrap();
+    app.filer_enter_dir(sub.clone()).unwrap();
+    let current = history::normalize(&app.filer.active_pane().current_dir).unwrap();
+    assert!(history::same_path(&app.history.folders[0], &current));
+    app.filer_go_parent();
+    let parent = history::normalize(&app.filer.active_pane().current_dir).unwrap();
+    assert!(history::same_path(&app.history.folders[0], &parent));
+
+    // 他のプロセスと同じファイルを共有する
+    assert_eq!(History::load_from(&history_file), app.history);
+
+    // 状態の復元で開き直したファイルは記録しない
+    let before = app.history.clone();
+    let mut restored = tool_session_entry(EntryKind::File, false, Some(b.clone()));
+    restored.active = true;
+    app.restore_entries(&[restored]);
+    assert_eq!(app.history, before);
+    assert!(!app.history_paused);
+
+    fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn test_recent_menus_open_history_entries() {
+    let dir = std::env::temp_dir().join(format!("vz_history_menu_{}", std::process::id()));
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).unwrap();
+    let a = dir.join("a.txt");
+    fs::write(&a, "a").unwrap();
+    let ctx = egui::Context::default();
+    let press = |app: &mut VzEditorApp, key: Key| {
+        let raw = egui::RawInput {
+            events: vec![key_with(key, egui::Modifiers::NONE)],
+            ..Default::default()
+        };
+        let _ = ctx.run(raw, |ctx| app.handle_events(ctx));
+    };
+    let submenu = |app: &VzEditorApp, name: &str| -> (usize, Vec<MenuEntry>) {
+        app.build_menu_entries(TopMenu::File)
+            .into_iter()
+            .enumerate()
+            .find_map(|(i, e)| match e {
+                MenuEntry::Submenu { label, items } if label == name => Some((i, items)),
+                _ => None,
+            })
+            .unwrap()
+    };
+
+    let mut app = make_test_app();
+    // 履歴が無ければ選べない 1 行だけ
+    let (_, items) = submenu(&app, "最近使ったファイル");
+    assert!(matches!(
+        items.as_slice(),
+        [MenuEntry::Item { enabled: false, .. }]
+    ));
+
+    for i in 0..40 {
+        app.history.apply(Visit::File(
+            &dir.join(format!("missing{i}.txt")),
+            "Shift_JIS",
+        ));
+    }
+    app.history.apply(Visit::File(&a, "UTF-8"));
+    app.history.apply(Visit::Folder(&dir));
+    let (file_idx, items) = submenu(&app, "最近使ったファイル");
+    assert_eq!(items.len(), 36);
+    let MenuEntry::Recent { label, checked, .. } = &items[0] else {
+        panic!("history row expected");
+    };
+    assert_eq!(label, &format!("0 {}  [UTF-8]", a.display()));
+    assert!(!checked);
+    assert!(matches!(&items[10], MenuEntry::Recent { label, .. } if label.starts_with("A ")));
+    assert!(matches!(&items[35], MenuEntry::Recent { label, .. } if label.starts_with("Z ")));
+
+    // アクセスキー 0 で開き、開いているファイルに印が付く
+    app.open_top_menu(TopMenu::File);
+    app.menu_selected_idx = file_idx;
+    press(&mut app, Key::ArrowRight);
+    assert_eq!(app.open_submenu, Some(file_idx));
+    press(&mut app, Key::Num0);
+    assert_eq!(app.open_menu, None);
+    assert_eq!(app.cur_buf().file_path.as_deref(), Some(a.as_path()));
+    let (_, items) = submenu(&app, "最近使ったファイル");
+    assert!(matches!(&items[0], MenuEntry::Recent { checked: true, .. }));
+
+    // 無いファイルは開かずに知らせる
+    let buffers = app.buffers.len();
+    app.execute_menu_action(&ctx, MenuAction::OpenRecentFile(1));
+    assert_eq!(app.buffers.len(), buffers);
+    assert!(app.status_message.starts_with("ファイルが見つかりません"));
+
+    // フォルダーはファイラーで開く
+    let (_, items) = submenu(&app, "最近使ったフォルダー");
+    assert!(
+        matches!(&items[0], MenuEntry::Recent { label, checked: false, .. } if label == &format!("0 {}", dir.display()))
+    );
+    app.execute_menu_action(&ctx, MenuAction::OpenRecentFolder(0));
+    assert_eq!(app.mode, AppMode::Filer);
+    let current = history::normalize(&app.filer.active_pane().current_dir).unwrap();
+    assert!(history::same_path(&current, &dir));
+
+    fs::remove_dir_all(&dir).unwrap();
 }

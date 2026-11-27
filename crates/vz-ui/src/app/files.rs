@@ -18,10 +18,100 @@ impl VzEditorApp {
             // ハードリンクの保存確認は表示中のバッファを対象とする。
             debug_assert_eq!(idx, self.active_buf);
             self.request_huge_save(path.to_path_buf(), encoding);
+            self.record_file_history(path, encoding);
             return Ok(SaveProgress::WaitingForHugeSave);
         }
         self.buffers[idx].buffer.save_to_path_as(path, encoding)?;
+        self.record_file_history(path, encoding);
         Ok(SaveProgress::Saved)
+    }
+
+    // --- File / Folder History ---
+
+    /// 履歴に記録する（状態の復元中は記録しない）。共通の履歴ファイルを読み直して書き戻し、
+    /// 書けなければこのプロセスの履歴にだけ加えてステータスに出す。
+    pub(super) fn record_history(&mut self, visits: &[Visit]) {
+        if self.history_paused {
+            return;
+        }
+        if let Some(file) = &self.history_file {
+            match History::record(file, visits) {
+                Ok(history) => {
+                    self.history = history;
+                    return;
+                }
+                Err(e) => self.status_message = format!("履歴の保存に失敗しました: {e}"),
+            }
+        }
+        for &visit in visits {
+            self.history.apply(visit);
+        }
+    }
+
+    /// ファイルと、それを含むフォルダを履歴に記録する。
+    pub(super) fn record_file_history(&mut self, path: &Path, encoding: TextEncoding) {
+        let mut visits = vec![Visit::File(path, encoding.label())];
+        if let Some(dir) = path.parent().filter(|d| !d.as_os_str().is_empty()) {
+            visits.push(Visit::Folder(dir));
+        }
+        self.record_history(&visits);
+    }
+
+    /// 他のプロセスが記録した分を含めて読み直す（ファイルメニューを開いたとき）。
+    pub(super) fn reload_history(&mut self) {
+        if let Some(file) = &self.history_file {
+            self.history = History::load_from(file);
+        }
+    }
+
+    /// ファイラーの表示中の窓でフォルダへ入り、履歴に記録する。
+    pub(super) fn filer_enter_dir(&mut self, dir: PathBuf) -> std::io::Result<()> {
+        self.filer.active_pane_mut().enter_dir(dir)?;
+        let current = self.filer.active_pane().current_dir.clone();
+        self.record_history(&[Visit::Folder(&current)]);
+        Ok(())
+    }
+
+    /// ファイラーの表示中の窓で親フォルダへ移り、履歴に記録する。失敗はステータスに出す。
+    pub(super) fn filer_go_parent(&mut self) {
+        match self.filer.active_pane_mut().go_parent() {
+            Ok(true) => {
+                let current = self.filer.active_pane().current_dir.clone();
+                self.record_history(&[Visit::Folder(&current)]);
+            }
+            Ok(false) => {}
+            Err(e) => self.status_message = format!("移動エラー: {e}"),
+        }
+    }
+
+    /// ファイル→最近使ったファイル。
+    pub(super) fn open_recent_file(&mut self, idx: usize) {
+        let Some(path) = self.history.files.get(idx).map(|f| f.path.clone()) else {
+            return;
+        };
+        if !path.is_file() {
+            self.status_message = format!("ファイルが見つかりません: {}", path.display());
+            return;
+        }
+        self.open_file_in_buffer(path);
+    }
+
+    /// ファイル→最近使ったフォルダー。ファイラーでそのフォルダを開く。
+    pub(super) fn open_recent_folder(&mut self, idx: usize) {
+        let Some(dir) = self.history.folders.get(idx).cloned() else {
+            return;
+        };
+        self.open_folder_in_filer(dir);
+    }
+
+    fn open_folder_in_filer(&mut self, dir: PathBuf) {
+        match self.filer_enter_dir(dir.clone()) {
+            Ok(()) => {
+                self.enter_filer();
+                self.status_message = format!("フォルダを開きました: {}", dir.display());
+            }
+            Err(e) => self.status_message = format!("フォルダを開けません: {e}"),
+        }
     }
 
     pub(super) fn toggle_markdown_view(&mut self) {
@@ -180,13 +270,7 @@ impl VzEditorApp {
                 self.status_message = msg;
             }
         } else if let Some(dir) = first_dir {
-            match self.filer.active_pane_mut().enter_dir(dir.clone()) {
-                Ok(()) => {
-                    self.enter_filer();
-                    self.status_message = format!("フォルダを開きました: {}", dir.display());
-                }
-                Err(e) => self.status_message = format!("フォルダを開けません: {e}"),
-            }
+            self.open_folder_in_filer(dir);
         } else if !failed.is_empty() {
             self.status_message = format!("開けなかったファイル: {}", failed.join(", "));
         }
@@ -272,6 +356,8 @@ impl VzEditorApp {
     pub(super) fn open_file_in_buffer(&mut self, path: PathBuf) -> bool {
         // If already open in an existing buffer, switch directly to it.
         if let Some(existing_idx) = self.find_buffer_by_path(&path) {
+            let encoding = self.buffers[existing_idx].buffer.encoding;
+            self.record_file_history(&path, encoding);
             self.active_buf = existing_idx;
             self.mode = AppMode::Editor;
             self.need_scroll_to_cursor = true;
@@ -292,6 +378,7 @@ impl VzEditorApp {
                 } else {
                     ""
                 };
+                self.record_file_history(&path, buf.encoding);
                 self.add_buffer(buf);
                 self.status_message = format!(
                     "開きました [{}/{}]: {}{hint}",

@@ -140,6 +140,15 @@ impl VzEditorApp {
                     enabled: true,
                 },
                 MenuEntry::Separator,
+                MenuEntry::Submenu {
+                    label: "最近使ったファイル",
+                    items: self.recent_menu_items(false),
+                },
+                MenuEntry::Submenu {
+                    label: "最近使ったフォルダー",
+                    items: self.recent_menu_items(true),
+                },
+                MenuEntry::Separator,
                 MenuEntry::Item {
                     label: if in_editor {
                         "2画面ファイラーへ切替"
@@ -518,13 +527,65 @@ impl VzEditorApp {
         }
     }
 
+    /// 最近使ったファイル／フォルダーのサブメニュー（新しい順に先頭 36 件。0-9・A-Z をアクセスキーにする）。
+    /// ファイルは文字コードを添え、開いているものに印を付ける。
+    fn recent_menu_items(&self, folders: bool) -> Vec<MenuEntry> {
+        let items: Vec<MenuEntry> = if folders {
+            self.history
+                .folders
+                .iter()
+                .take(RECENT_MENU_MAX)
+                .enumerate()
+                .map(|(i, dir)| MenuEntry::Recent {
+                    label: format!("{} {}", recent_access_key(i), dir.display()),
+                    action: MenuAction::OpenRecentFolder(i),
+                    checked: false,
+                })
+                .collect()
+        } else {
+            let open: Vec<PathBuf> = self
+                .buffers
+                .iter()
+                .filter_map(|slot| slot.buffer.file_path.as_deref())
+                .filter_map(history::normalize)
+                .collect();
+            self.history
+                .files
+                .iter()
+                .take(RECENT_MENU_MAX)
+                .enumerate()
+                .map(|(i, f)| MenuEntry::Recent {
+                    label: format!(
+                        "{} {}  [{}]",
+                        recent_access_key(i),
+                        f.path.display(),
+                        f.encoding
+                    ),
+                    action: MenuAction::OpenRecentFile(i),
+                    checked: open.iter().any(|p| history::same_path(p, &f.path)),
+                })
+                .collect()
+        };
+        if items.is_empty() {
+            return vec![MenuEntry::Item {
+                label: "（履歴はありません）",
+                shortcut: "",
+                action: MenuAction::NewBuffer,
+                enabled: false,
+            }];
+        }
+        items
+    }
+
     pub(super) fn first_selectable_menu_idx(entries: &[MenuEntry]) -> usize {
         entries
             .iter()
             .position(|e| {
                 matches!(
                     e,
-                    MenuEntry::Item { enabled: true, .. } | MenuEntry::Submenu { .. }
+                    MenuEntry::Item { enabled: true, .. }
+                        | MenuEntry::Recent { .. }
+                        | MenuEntry::Submenu { .. }
                 )
             })
             .or_else(|| {
@@ -569,6 +630,9 @@ impl VzEditorApp {
 
     pub(super) fn open_top_menu(&mut self, menu: TopMenu) {
         self.prefix = PrefixKey::None;
+        if menu == TopMenu::File {
+            self.reload_history();
+        }
         let entries = self.build_menu_entries(menu);
         self.menu_selected_idx = Self::first_selectable_menu_idx(&entries);
         self.open_submenu = None;
@@ -587,6 +651,8 @@ impl VzEditorApp {
             MenuAction::SaveWithEncoding => self.open_encoding_dialog(),
             MenuAction::Print => self.open_print_dialog(),
             MenuAction::CloseBuffer => self.close_current_buffer(),
+            MenuAction::OpenRecentFile(idx) => self.open_recent_file(idx),
+            MenuAction::OpenRecentFolder(idx) => self.open_recent_folder(idx),
             MenuAction::ToggleFiler => match self.mode {
                 AppMode::Filer => self.enter_editor(),
                 _ => self.enter_filer(),
@@ -702,17 +768,26 @@ impl VzEditorApp {
                             self.open_top_menu(active_menu);
                         }
                         Key::Enter => {
-                            if let Some(MenuEntry::Item {
-                                action,
-                                enabled: true,
-                                ..
-                            }) = items.get(self.submenu_selected_idx)
+                            if let Some(
+                                MenuEntry::Item {
+                                    action,
+                                    enabled: true,
+                                    ..
+                                }
+                                | MenuEntry::Recent { action, .. },
+                            ) = items.get(self.submenu_selected_idx)
                             {
                                 self.execute_menu_action(ctx, *action);
                                 return;
                             }
                         }
-                        _ => {}
+                        _ => {
+                            // 履歴の 0-9・A-Z で直接開く
+                            if let Some(action) = recent_action_for_key(&items, key) {
+                                self.execute_menu_action(ctx, action);
+                                return;
+                            }
+                        }
                     }
                     continue;
                 }
@@ -941,6 +1016,7 @@ impl VzEditorApp {
                                         triggered_action = Some(*action);
                                     }
                                 }
+                                MenuEntry::Recent { .. } => {}
                                 MenuEntry::Submenu { label, .. } => {
                                     let (rect, resp) = ui.allocate_exact_size(
                                         Vec2::new(popup_w, row_h),
@@ -971,9 +1047,27 @@ impl VzEditorApp {
             // サブメニュー: 親項目の右に開く（画面の右端を越えるなら左に開く）
             if let Some((parent_idx, anchor)) = submenu_anchor {
                 if let Some(MenuEntry::Submenu { items, .. }) = entries.get(parent_idx) {
-                    let sub_w = 300.0_f32;
                     let frame_pad = 4.0_f32;
                     let screen = ctx.screen_rect();
+                    // 履歴はパスが長いので、最も長い行に合わせて広げる（画面幅まで）
+                    let text_w = items
+                        .iter()
+                        .filter_map(|e| match e {
+                            MenuEntry::Recent { label, .. } => Some(ctx.fonts(|f| {
+                                f.layout_no_wrap(
+                                    recent_row_text(label),
+                                    FontId::monospace(12.5),
+                                    TEXT_WHITE,
+                                )
+                                .size()
+                                .x
+                            })),
+                            _ => None,
+                        })
+                        .fold(0.0_f32, f32::max);
+                    let sub_w = (text_w + 24.0)
+                        .max(300.0)
+                        .min(screen.width() - frame_pad * 2.0 - 8.0);
                     let mut x = popup_rect.max.x - 2.0;
                     if x + sub_w + frame_pad * 2.0 > screen.max.x {
                         x = (popup_rect.min.x - sub_w - frame_pad * 2.0 + 2.0).max(screen.min.x);
@@ -1011,6 +1105,34 @@ impl VzEditorApp {
                                                 is_selected,
                                             );
                                             if *enabled && resp.clicked() {
+                                                triggered_action = Some(*action);
+                                            }
+                                        }
+                                        MenuEntry::Recent {
+                                            label,
+                                            action,
+                                            checked,
+                                        } => {
+                                            let (rect, resp) = ui.allocate_exact_size(
+                                                Vec2::new(sub_w, row_h),
+                                                Sense::click(),
+                                            );
+                                            if resp.hovered() {
+                                                self.submenu_selected_idx = idx;
+                                            }
+                                            let is_selected = idx == sub_selected || resp.hovered();
+                                            Self::paint_menu_row(
+                                                ui,
+                                                rect,
+                                                &recent_row_text(label),
+                                                "",
+                                                true,
+                                                is_selected,
+                                            );
+                                            if *checked {
+                                                Self::paint_menu_check(ui, rect);
+                                            }
+                                            if resp.clicked() {
                                                 triggered_action = Some(*action);
                                             }
                                         }
@@ -1060,6 +1182,20 @@ impl VzEditorApp {
             ],
             Stroke::new(1.0_f32, GUTTER_SEP),
         );
+    }
+
+    /// 履歴の行の左端の印（開いているファイル）。フォントに頼らず線で描く。
+    fn paint_menu_check(ui: &egui::Ui, rect: Rect) {
+        let x = rect.min.x + 6.0;
+        let y = rect.center().y;
+        ui.painter().add(egui::Shape::line(
+            vec![
+                Pos2::new(x, y),
+                Pos2::new(x + 3.5, y + 3.5),
+                Pos2::new(x + 10.0, y - 4.5),
+            ],
+            Stroke::new(2.0_f32, TEXT_CYAN),
+        ));
     }
 
     /// メニューの 1 行（左に項目名、右にショートカットかサブメニューの ▶）。
@@ -1265,4 +1401,35 @@ impl VzEditorApp {
 
         cmd
     }
+}
+
+/// 履歴のサブメニューに出す件数（アクセスキー 0-9・A-Z の数）。
+const RECENT_MENU_MAX: usize = 36;
+
+/// 履歴の行の印の幅を空けた表示文字列。
+fn recent_row_text(label: &str) -> String {
+    format!("  {label}")
+}
+
+/// 履歴の `idx` 番目のアクセスキー（0-9、続けて A-Z）。
+fn recent_access_key(idx: usize) -> char {
+    match idx {
+        0..=9 => char::from(b'0' + idx as u8),
+        _ => char::from(b'A' + (idx - 10) as u8),
+    }
+}
+
+/// サブメニューで押されたキーに当たる履歴の項目。
+fn recent_action_for_key(items: &[MenuEntry], key: Key) -> Option<MenuAction> {
+    let mut chars = key.name().chars();
+    let (Some(c), None) = (chars.next(), chars.next()) else {
+        return None;
+    };
+    if !c.is_ascii_alphanumeric() {
+        return None;
+    }
+    items.iter().find_map(|e| match e {
+        MenuEntry::Recent { label, action, .. } if label.starts_with(c) => Some(*action),
+        _ => None,
+    })
 }

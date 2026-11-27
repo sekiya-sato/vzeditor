@@ -103,11 +103,9 @@ impl VzEditorApp {
             return;
         };
         if entry.is_parent {
-            if let Err(e) = self.filer.active_pane_mut().go_parent() {
-                self.status_message = format!("移動エラー: {e}");
-            }
+            self.filer_go_parent();
         } else if entry.is_dir {
-            if let Err(e) = self.filer.active_pane_mut().enter_dir(entry.path) {
+            if let Err(e) = self.filer_enter_dir(entry.path) {
                 self.status_message = format!("ディレクトリを開けません: {e}");
             }
         } else {
@@ -791,9 +789,7 @@ impl VzEditorApp {
                                 self.filer.active = ActivePane::Right;
                             }
                             Key::H => {
-                                if let Err(e) = self.filer.active_pane_mut().go_parent() {
-                                    self.status_message = format!("移動エラー: {e}");
-                                }
+                                self.filer_go_parent();
                             }
                             Key::M => {
                                 self.filer_open_selected();
@@ -845,9 +841,7 @@ impl VzEditorApp {
                                 self.filer.active_pane_mut().toggle_mark_and_advance();
                             }
                             Key::Backspace => {
-                                if let Err(e) = self.filer.active_pane_mut().go_parent() {
-                                    self.status_message = format!("移動エラー: {e}");
-                                }
+                                self.filer_go_parent();
                             }
                             Key::Enter if modifiers.shift => self.filer_run_selected(),
                             Key::Enter => {

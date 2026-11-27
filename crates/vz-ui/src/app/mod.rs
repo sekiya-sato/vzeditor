@@ -40,6 +40,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::Receiver;
 use std::sync::Arc;
 use theme::*;
+use vz_config::history::{self, History, Visit};
 use vz_config::session::{self, DesktopState, EntryKind, SessionEntry, SessionWindow};
 use vz_config::settings::{KeyScheme, Settings, WindowGeometry};
 use vz_core::buffer::{char_to_byte_idx, expand_tabs_for_display, FileStamp, TextBuffer, TextPos};
@@ -212,6 +213,10 @@ enum MenuAction {
     /// 印刷（Ctrl+P。確認ダイアログを出す）
     Print,
     CloseBuffer,
+    /// ファイル→最近使ったファイル（履歴の位置）
+    OpenRecentFile(usize),
+    /// ファイル→最近使ったフォルダー（履歴の位置）
+    OpenRecentFolder(usize),
     ToggleFiler,
     Quit,
     /// 状態を記録して終了（Alt+Shift+F4。次に Shift を押して起動すると戻る）
@@ -268,6 +273,12 @@ enum MenuEntry {
         shortcut: &'static str,
         action: MenuAction,
         enabled: bool,
+    },
+    /// 履歴の 1 件（サブメニュー内だけ）。`label` の先頭 1 文字がアクセスキー。開いているファイルは `checked`
+    Recent {
+        label: String,
+        action: MenuAction,
+        checked: bool,
     },
     /// 右へ開くサブメニュー（入れ子にはしない）
     Submenu {
@@ -431,6 +442,11 @@ pub struct VzEditorApp {
     always_on_top: bool,
     /// false in tests so that user settings are never overwritten.
     persist_settings: bool,
+    /// ファイル履歴・フォルダ履歴（全プロセス共通。`history_file` が None なら記録はメモリだけ）
+    history: History,
+    history_file: Option<PathBuf>,
+    /// 状態の復元中は履歴に記録しない
+    history_paused: bool,
 
     // Quit confirmation (未保存時の終了確認)
     /// 「保存して終了」で保存ダイアログの完了を待っている
@@ -557,6 +573,7 @@ impl VzEditorApp {
         let bg_opacity = window_style::set_opacity_percent(settings.opacity);
         let text_opacity = window_style::set_text_opacity_percent(settings.text_opacity);
 
+        let history_file = history::history_path();
         let mut app = Self {
             mode: AppMode::Editor,
             buffers: vec![BufferSlot::new(initial_buffer)],
@@ -590,6 +607,12 @@ impl VzEditorApp {
             text_opacity,
             always_on_top: settings.always_on_top,
             persist_settings: true,
+            history: history_file
+                .as_deref()
+                .map(History::load_from)
+                .unwrap_or_default(),
+            history_file,
+            history_paused: false,
             quit_after_save: false,
             allow_close: false,
             shift_restore_until: matches!(&restore, StartupRestore::SavedIfShift)
