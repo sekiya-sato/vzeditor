@@ -144,11 +144,21 @@ impl VzEditorApp {
                 MenuEntry::Separator,
                 MenuEntry::Submenu {
                     label: "最近使ったファイル",
-                    items: self.recent_menu_items(false),
+                    items: self.recent_file_menu_items(),
                 },
                 MenuEntry::Submenu {
                     label: "最近使ったフォルダー",
-                    items: self.recent_menu_items(true),
+                    items: recent_path_menu_items(
+                        &self.history.folders,
+                        MenuAction::OpenRecentFolder,
+                    ),
+                },
+                MenuEntry::Submenu {
+                    label: "最近起動したファイル",
+                    items: recent_path_menu_items(
+                        &self.history.launched_files,
+                        MenuAction::RunRecentFile,
+                    ),
                 },
                 MenuEntry::Separator,
                 MenuEntry::Item {
@@ -551,28 +561,15 @@ impl VzEditorApp {
         }
     }
 
-    /// 最近使ったファイル／フォルダーのサブメニュー（新しい順に先頭 36 件。0-9・A-Z をアクセスキーにする）。
-    /// ファイルは文字コードを添え、開いているものに印を付ける。
-    fn recent_menu_items(&self, folders: bool) -> Vec<MenuEntry> {
-        let items: Vec<MenuEntry> = if folders {
-            self.history
-                .folders
-                .iter()
-                .take(RECENT_MENU_MAX)
-                .enumerate()
-                .map(|(i, dir)| MenuEntry::Recent {
-                    label: format!("{} {}", recent_access_key(i), dir.display()),
-                    action: MenuAction::OpenRecentFolder(i),
-                    checked: false,
-                })
-                .collect()
-        } else {
-            let open: Vec<PathBuf> = self
-                .buffers
-                .iter()
-                .filter_map(|slot| slot.buffer.file_path.as_deref())
-                .filter_map(history::normalize)
-                .collect();
+    /// 最近使ったファイルに文字コードを添え、開いているものに印を付ける。
+    fn recent_file_menu_items(&self) -> Vec<MenuEntry> {
+        let open: Vec<PathBuf> = self
+            .buffers
+            .iter()
+            .filter_map(|slot| slot.buffer.file_path.as_deref())
+            .filter_map(history::normalize)
+            .collect();
+        recent_items_or_placeholder(
             self.history
                 .files
                 .iter()
@@ -588,17 +585,8 @@ impl VzEditorApp {
                     action: MenuAction::OpenRecentFile(i),
                     checked: open.iter().any(|p| history::same_path(p, &f.path)),
                 })
-                .collect()
-        };
-        if items.is_empty() {
-            return vec![MenuEntry::Item {
-                label: "（履歴はありません）",
-                shortcut: "",
-                action: MenuAction::NewBuffer,
-                enabled: false,
-            }];
-        }
-        items
+                .collect(),
+        )
     }
 
     pub(super) fn first_selectable_menu_idx(entries: &[MenuEntry]) -> usize {
@@ -677,6 +665,7 @@ impl VzEditorApp {
             MenuAction::CloseBuffer => self.close_current_buffer(),
             MenuAction::OpenRecentFile(idx) => self.open_recent_file(idx),
             MenuAction::OpenRecentFolder(idx) => self.open_recent_folder(idx),
+            MenuAction::RunRecentFile(idx) => self.run_recent_file(idx),
             MenuAction::ToggleFiler => match self.mode {
                 AppMode::Filer => self.enter_editor(),
                 _ => self.enter_filer(),
@@ -882,6 +871,11 @@ impl VzEditorApp {
                 let path = self.history.folders[idx].clone();
                 self.record_history(&[Visit::RemoveFolder(&path)]);
                 self.history.folders.len()
+            }
+            MenuAction::RunRecentFile(idx) => {
+                let path = self.history.launched_files[idx].clone();
+                self.record_history(&[Visit::RemoveLaunchedFile(&path)]);
+                self.history.launched_files.len()
             }
             _ => return,
         };
@@ -1464,6 +1458,34 @@ fn font_step_button(ui: &mut egui::Ui, label: &str, active: bool, hover: &str) -
 
 /// 履歴のサブメニューに出す件数（アクセスキー 0-9・A-Z の数）。
 const RECENT_MENU_MAX: usize = 36;
+
+fn recent_path_menu_items(paths: &[PathBuf], action: fn(usize) -> MenuAction) -> Vec<MenuEntry> {
+    recent_items_or_placeholder(
+        paths
+            .iter()
+            .take(RECENT_MENU_MAX)
+            .enumerate()
+            .map(|(i, path)| MenuEntry::Recent {
+                label: format!("{} {}", recent_access_key(i), path.display()),
+                action: action(i),
+                checked: false,
+            })
+            .collect(),
+    )
+}
+
+fn recent_items_or_placeholder(items: Vec<MenuEntry>) -> Vec<MenuEntry> {
+    if items.is_empty() {
+        vec![MenuEntry::Item {
+            label: "（履歴はありません）",
+            shortcut: "",
+            action: MenuAction::NewBuffer,
+            enabled: false,
+        }]
+    } else {
+        items
+    }
+}
 
 /// サブメニューの幅と左端。`want_w` は中身の幅、`chrome` は枠（余白と線）の左右の合計、
 /// `edge` は 1 文字分の幅。親メニューの右に開き、入らなければ左に開く。

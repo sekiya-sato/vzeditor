@@ -1389,7 +1389,52 @@ fn test_filer_shift_enter_does_not_open_in_editor() {
     assert_eq!(app.mode, AppMode::Filer);
     assert_eq!(app.filer.active_pane().current_dir, before);
     assert!(app.status_message.contains("実行できません"));
+    assert!(app.history.launched_files.is_empty());
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_filer_launch_history_records_successful_files_only() {
+    let dir = std::env::temp_dir().join(format!("vz_launch_history_{}", std::process::id()));
+    let subdir = dir.join("sub");
+    fs::create_dir_all(&subdir).unwrap();
+    let file = dir.join("sample.txt");
+    fs::write(&file, "sample").unwrap();
+    let history_file = dir.join("history.ini");
+    let mut app = make_test_app();
+    app.history_file = Some(history_file.clone());
+    app.filer = FilerState::new(dir.clone());
+    app.mode = AppMode::Filer;
+
+    let pane = app.filer.active_pane_mut();
+    pane.cursor = pane
+        .entries
+        .iter()
+        .position(|entry| entry.name == "sample.txt")
+        .unwrap();
+    app.filer_run_selected(|_| Err("起動に失敗".into()));
+    assert!(app.history.launched_files.is_empty());
+    app.filer_run_selected(|path| {
+        assert_eq!(path.file_name(), Some(std::ffi::OsStr::new("sample.txt")));
+        Ok(())
+    });
+    assert_eq!(app.history.launched_files, [file]);
+
+    let pane = app.filer.active_pane_mut();
+    pane.cursor = pane
+        .entries
+        .iter()
+        .position(|entry| entry.name == "sub")
+        .unwrap();
+    app.filer_run_selected(|path| {
+        assert!(path.is_dir());
+        Ok(())
+    });
+    assert_eq!(app.history.launched_files.len(), 1);
+    assert!(app.history.files.is_empty());
+    assert!(app.history.folders.is_empty());
+    assert_eq!(History::load_from(&history_file), app.history);
+    fs::remove_dir_all(&dir).unwrap();
 }
 
 fn key_event(key: Key, alt: bool) -> Event {
@@ -2846,6 +2891,21 @@ fn test_recent_menus_open_history_entries() {
         dir.canonicalize().unwrap()
     );
 
+    let missing_launch = dir.join("missing.exe");
+    app.history.apply(Visit::LaunchFile(&missing_launch));
+    app.history.apply(Visit::LaunchFile(&a));
+    let (launch_idx, items) = submenu(&app, "最近起動したファイル");
+    assert!(matches!(
+        &items[1],
+        MenuEntry::Recent { label, .. } if label == &format!("1 {}", missing_launch.display())
+    ));
+    app.open_top_menu(TopMenu::File);
+    app.open_submenu = Some(launch_idx);
+    press(&mut app, Key::Num1);
+    assert_eq!(app.open_menu, None);
+    assert_eq!(app.history.launched_files, [missing_launch, a]);
+    assert!(app.status_message.starts_with("ファイルが見つかりません"));
+
     fs::remove_dir_all(&dir).unwrap();
 }
 
@@ -2868,10 +2928,16 @@ fn test_delete_removes_selected_recent_entries_and_saves_history() {
             Visit::File(&newer_file, "UTF-8"),
             Visit::Folder(&dir),
             Visit::Folder(&newer_folder),
+            Visit::LaunchFile(&recent_file),
+            Visit::LaunchFile(&newer_file),
         ]);
         app.open_top_menu(TopMenu::File);
         let entries = app.build_menu_entries(TopMenu::File);
-        for name in ["最近使ったファイル", "最近使ったフォルダー"] {
+        for name in [
+            "最近使ったファイル",
+            "最近使ったフォルダー",
+            "最近起動したファイル",
+        ] {
             app.open_submenu = entries.iter().position(
                 |entry| matches!(entry, MenuEntry::Submenu { label, .. } if *label == name),
             );
@@ -2895,6 +2961,10 @@ fn test_delete_removes_selected_recent_entries_and_saves_history() {
         assert_eq!(app.history.files.len(), 1);
         assert_eq!(app.history.files[0].path, newer_file);
         assert_eq!(app.history.folders, vec![newer_folder.clone()]);
+        assert_eq!(
+            app.history.launched_files,
+            std::slice::from_ref(&newer_file)
+        );
         assert_eq!(History::load_from(&file), app.history);
         assert!(recent_file.is_file());
         assert!(dir.is_dir());

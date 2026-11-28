@@ -107,6 +107,21 @@ impl VzEditorApp {
         self.open_folder_in_filer(dir, false);
     }
 
+    pub(super) fn run_recent_file(&mut self, idx: usize) {
+        let Some(path) = self.history.launched_files.get(idx).cloned() else {
+            return;
+        };
+        self.record_history(&[Visit::LaunchFile(&path)]);
+        if !path.is_file() {
+            self.status_message = format!("ファイルが見つかりません: {}", path.display());
+        } else {
+            self.status_message = match vz_platform::shell::open_with_os(&path) {
+                Ok(()) => format!("実行しました: {}", path.display()),
+                Err(e) => format!("実行できません: {}（{e}）", path.display()),
+            };
+        }
+    }
+
     fn open_folder_in_filer(&mut self, dir: PathBuf, record_history: bool) {
         let result = if record_history {
             self.filer_enter_dir(dir.clone())

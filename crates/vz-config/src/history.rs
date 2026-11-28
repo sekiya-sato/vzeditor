@@ -1,4 +1,4 @@
-//! ファイル・フォルダ・検索入力の履歴（`<設定フォルダ>/vzeditor/history.ini`）。
+//! ファイル・フォルダ・起動したファイル・検索入力の履歴（`<設定フォルダ>/vzeditor/history.ini`）。
 //!
 //! 全プロセスで 1 つのファイルを共有する。記録のたびにファイルを読み直して追加し、すぐ書き戻すので、
 //! 他のプロセスが書いた履歴は消えない。新しいものが先頭で、上限を超えたら古いものから消す。
@@ -8,6 +8,8 @@
 //! UTF-8<TAB>C:\work\a.txt
 //! [folders]
 //! C:\work
+//! [launched_files]
+//! C:\work\tool.exe
 //! [search]
 //! =検索語
 //! ```
@@ -16,7 +18,7 @@ use std::fs::{self, OpenOptions};
 use std::io;
 use std::path::{Path, PathBuf};
 
-/// ファイル履歴・フォルダ履歴それぞれの上限。
+/// ファイル・フォルダ・起動したファイルの履歴それぞれの上限。
 pub const MAX_ENTRIES: usize = 100;
 
 const MAX_INPUT_ENTRIES: usize = 50;
@@ -42,8 +44,10 @@ pub enum Visit<'a> {
     File(&'a Path, &'a str),
     /// フォルダを開いた
     Folder(&'a Path),
+    LaunchFile(&'a Path),
     RemoveFile(&'a Path),
     RemoveFolder(&'a Path),
+    RemoveLaunchedFile(&'a Path),
     Search(&'a str),
     Replace(&'a str),
     GrepRoot(&'a str),
@@ -55,6 +59,8 @@ pub struct History {
     pub files: Vec<FileRecord>,
     /// 新しい順
     pub folders: Vec<PathBuf>,
+    /// OS の関連付けで起動したファイル。新しい順。
+    pub launched_files: Vec<PathBuf>,
     pub queries: Vec<String>,
     pub replacements: Vec<String>,
     pub grep_roots: Vec<String>,
@@ -87,10 +93,15 @@ impl History {
                         });
                     }
                 }
-            } else if section == "[folders]" && history.folders.len() < MAX_ENTRIES {
+            } else if matches!(section, "[folders]" | "[launched_files]") {
+                let entries = if section == "[folders]" {
+                    &mut history.folders
+                } else {
+                    &mut history.launched_files
+                };
                 let path = Path::new(line);
-                if !history.folders.iter().any(|d| same_path(d, path)) {
-                    history.folders.push(path.to_path_buf());
+                if entries.len() < MAX_ENTRIES && !entries.iter().any(|p| same_path(p, path)) {
+                    entries.push(path.to_path_buf());
                 }
             } else {
                 let entries = match section {
@@ -119,6 +130,12 @@ impl History {
         text.push_str("[folders]\n");
         for d in &self.folders {
             text.push_str(&format!("{}\n", d.display()));
+        }
+        if !self.launched_files.is_empty() {
+            text.push_str("[launched_files]\n");
+            for path in &self.launched_files {
+                text.push_str(&format!("{}\n", path.display()));
+            }
         }
         for (section, entries) in [
             ("[search]", &self.queries),
@@ -161,16 +178,11 @@ impl History {
                 );
                 self.files.truncate(MAX_ENTRIES);
             }
-            Visit::Folder(path) => {
-                let Some(path) = normalize(path) else {
-                    return;
-                };
-                self.folders.retain(|d| !same_path(d, &path));
-                self.folders.insert(0, path);
-                self.folders.truncate(MAX_ENTRIES);
-            }
+            Visit::Folder(path) => remember_path(&mut self.folders, path),
+            Visit::LaunchFile(path) => remember_path(&mut self.launched_files, path),
             Visit::RemoveFile(path) => self.files.retain(|f| !same_path(&f.path, path)),
             Visit::RemoveFolder(path) => self.folders.retain(|d| !same_path(d, path)),
+            Visit::RemoveLaunchedFile(path) => self.launched_files.retain(|p| !same_path(p, path)),
             Visit::Search(value) => remember_input(&mut self.queries, value),
             Visit::Replace(value) => remember_input(&mut self.replacements, value),
             Visit::GrepRoot(value) => remember_input(&mut self.grep_roots, value),
@@ -213,6 +225,15 @@ impl History {
         }
         Ok(history)
     }
+}
+
+fn remember_path(entries: &mut Vec<PathBuf>, path: &Path) {
+    let Some(path) = normalize(path) else {
+        return;
+    };
+    entries.retain(|entry| !same_path(entry, &path));
+    entries.insert(0, path);
+    entries.truncate(MAX_ENTRIES);
 }
 
 fn remember_input(entries: &mut Vec<String>, value: &str) {
@@ -298,12 +319,15 @@ mod tests {
         for i in 0..MAX_ENTRIES + 5 {
             h.apply(Visit::File(&abs(&format!("f{i}.txt")), "UTF-8"));
             h.apply(Visit::Folder(&abs(&format!("d{i}"))));
+            h.apply(Visit::LaunchFile(&abs(&format!("app{i}.exe"))));
         }
         assert_eq!(h.files.len(), MAX_ENTRIES);
         assert_eq!(h.folders.len(), MAX_ENTRIES);
         assert_eq!(h.files[0].path, abs(&format!("f{}.txt", MAX_ENTRIES + 4)));
         assert_eq!(h.files[MAX_ENTRIES - 1].path, abs("f5.txt"));
         assert_eq!(h.folders[MAX_ENTRIES - 1], abs("d5"));
+        assert_eq!(h.launched_files.len(), MAX_ENTRIES);
+        assert_eq!(h.launched_files[MAX_ENTRIES - 1], abs("app5.exe"));
     }
 
     #[test]
@@ -327,6 +351,7 @@ mod tests {
         h.apply(Visit::File(&abs("a b.txt"), "UTF-8"));
         h.apply(Visit::File(&abs("c.txt"), "UTF-16LE"));
         h.apply(Visit::Folder(&abs("dir")));
+        h.apply(Visit::LaunchFile(&abs("app a.exe")));
         assert_eq!(History::parse(&h.serialize()), h);
         assert_eq!(History::parse(""), History::default());
     }

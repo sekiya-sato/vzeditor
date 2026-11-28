@@ -220,6 +220,8 @@ enum MenuAction {
     OpenRecentFile(usize),
     /// ファイル→最近使ったフォルダー（履歴の位置）
     OpenRecentFolder(usize),
+    /// ファイル→最近起動したファイル（履歴の位置）
+    RunRecentFile(usize),
     ToggleFiler,
     Quit,
     /// 状態を記録して終了（Alt+Shift+F4。次に Shift を押して起動すると戻る）
@@ -454,7 +456,7 @@ pub struct VzEditorApp {
     always_on_top: bool,
     /// false in tests so that user settings are never overwritten.
     persist_settings: bool,
-    /// ファイル履歴・フォルダ履歴（全プロセス共通。`history_file` が None なら記録はメモリだけ）
+    /// 履歴（全プロセス共通。`history_file` が None なら記録はメモリだけ）
     history: History,
     history_file: Option<PathBuf>,
     /// 状態の復元中は履歴に記録しない
