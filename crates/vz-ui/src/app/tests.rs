@@ -1037,9 +1037,9 @@ fn test_tools_submenu_keyboard() {
         labels,
         [
             "ブラウザ",
-            "フォント",
             "背景透過",
             "文字透過",
+            "フォント",
             "他アプリ連携"
         ]
     );
@@ -1055,6 +1055,14 @@ fn test_tools_submenu_keyboard() {
             )
         })
         .unwrap();
+
+    assert!(matches!(
+        entries.get(font_idx.wrapping_sub(1)),
+        Some(MenuEntry::Submenu {
+            label: "文字透過",
+            ..
+        })
+    ));
 
     // フォントへ移動し → で開く。← で閉じ、Enter で開き直す
     app.open_top_menu(TopMenu::Tools);

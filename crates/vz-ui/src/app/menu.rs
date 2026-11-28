@@ -382,29 +382,6 @@ impl VzEditorApp {
                     ],
                 },
                 MenuEntry::Separator,
-                MenuEntry::Submenu {
-                    label: "フォント",
-                    items: vec![
-                        MenuEntry::Item {
-                            label: "サイズ拡大",
-                            shortcut: "Ctrl++",
-                            action: MenuAction::FontZoomIn,
-                            enabled: self.font_size < MAX_FONT_SIZE,
-                        },
-                        MenuEntry::Item {
-                            label: "サイズ縮小",
-                            shortcut: "Ctrl+-",
-                            action: MenuAction::FontZoomOut,
-                            enabled: self.font_size > MIN_FONT_SIZE,
-                        },
-                        MenuEntry::Item {
-                            label: "サイズリセット (16pt)",
-                            shortcut: "Ctrl+0",
-                            action: MenuAction::FontReset,
-                            enabled: true,
-                        },
-                    ],
-                },
                 MenuEntry::Item {
                     label: if self.word_wrap {
                         "折り返し表示を解除"
@@ -492,6 +469,29 @@ impl VzEditorApp {
                             shortcut: "Alt+Shift+0",
                             action: MenuAction::TextOpacityReset,
                             enabled: self.text_opacity < window_style::MAX_OPACITY,
+                        },
+                    ],
+                },
+                MenuEntry::Submenu {
+                    label: "フォント",
+                    items: vec![
+                        MenuEntry::Item {
+                            label: "サイズ拡大",
+                            shortcut: "Ctrl++",
+                            action: MenuAction::FontZoomIn,
+                            enabled: self.font_size < MAX_FONT_SIZE,
+                        },
+                        MenuEntry::Item {
+                            label: "サイズ縮小",
+                            shortcut: "Ctrl+-",
+                            action: MenuAction::FontZoomOut,
+                            enabled: self.font_size > MIN_FONT_SIZE,
+                        },
+                        MenuEntry::Item {
+                            label: "サイズリセット (16pt)",
+                            shortcut: "Ctrl+0",
+                            action: MenuAction::FontReset,
+                            enabled: true,
                         },
                     ],
                 },
