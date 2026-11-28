@@ -811,7 +811,7 @@ mod tests {
             let vz = |layer| VzEditorApp::editor_fkeys(false, md, layer);
             let normal = vz(FKeyLayer::Normal);
             assert_eq!(normal[2].1, RepeatSearch(false));
-            assert_eq!(normal[3].1, Nop);
+            assert_eq!(normal[3].1, ToggleSplit);
             assert_eq!(vz(FKeyLayer::Shift)[2].1, RepeatSearch(true));
             assert_eq!(vz(FKeyLayer::Shift)[3].1, Nop);
             assert_eq!(vz(FKeyLayer::Ctrl)[2].1, ToggleSearchHighlight);
@@ -820,7 +820,7 @@ mod tests {
             assert_eq!(vz(FKeyLayer::Alt)[3].1, Quit);
         }
         assert_eq!(sakura(FKeyLayer::Normal)[2].1, RepeatSearch(false));
-        assert_eq!(sakura(FKeyLayer::Normal)[3].1, Nop);
+        assert_eq!(sakura(FKeyLayer::Normal)[3].1, ToggleSplit);
         let filer_alt = VzEditorApp::filer_fkeys(FKeyLayer::Alt);
         assert_eq!(filer_alt[3].1, FilerAction::Quit);
     }

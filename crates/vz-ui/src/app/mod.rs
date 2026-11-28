@@ -90,6 +90,7 @@ enum PrefixKey {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum EditorAction {
     ToggleHelp,
+    ToggleSplit,
     NewBuffer,
     MoveLineStart,
     MoveLineEnd,

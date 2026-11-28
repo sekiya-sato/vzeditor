@@ -41,7 +41,7 @@ impl VzEditorApp {
                         ("ヘルプ", ToggleHelp),
                         ("新規", NewBuffer),
                         ("次検索", RepeatSearch(false)),
-                        NONE,
+                        ("分割", ToggleSplit),
                         NONE,
                         ("選択", BeginSelect),
                         ("切取", Cut),
@@ -71,7 +71,7 @@ impl VzEditorApp {
             ("ヘルプ", ToggleHelp),
             ("新規", NewBuffer),
             ("次検索", RepeatSearch(false)),
-            NONE,
+            ("分割", ToggleSplit),
             (f5, MoveLineEnd),
             ("行削除", DeleteLine),
             (f7, MoveWordLeft),
@@ -82,7 +82,11 @@ impl VzEditorApp {
             NONE,
         ];
         match layer {
-            FKeyLayer::Shift => keys[2] = ("前検索", RepeatSearch(true)),
+            FKeyLayer::Shift => {
+                keys[2] = ("前検索", RepeatSearch(true));
+                // F4 は修飾キーなしのときだけ分割する
+                keys[3] = NONE;
+            }
             FKeyLayer::Ctrl => {
                 keys[2] = ("強調切替", ToggleSearchHighlight);
                 keys[3] = ("閉じる", CloseBuffer);

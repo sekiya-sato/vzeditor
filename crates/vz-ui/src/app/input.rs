@@ -11,6 +11,7 @@ impl VzEditorApp {
             EditorAction::ToggleHelp => {
                 self.show_help = !self.show_help;
             }
+            EditorAction::ToggleSplit => self.toggle_split(),
             EditorAction::NewBuffer => {
                 self.new_empty_buffer();
             }
@@ -366,6 +367,14 @@ impl VzEditorApp {
                             Self::editor_fkey_action(key, self.is_sakura(), in_md_view, layer)
                         {
                             self.execute_editor_action(action);
+                        }
+                        continue;
+                    }
+                    // F4: 上下分割の切替（両方式共通。修飾キーなしのときだけ）
+                    if key == Key::F4 && !ctrl && !modifiers.alt && !modifiers.shift {
+                        suppress_text_this_frame = true;
+                        if !repeat {
+                            self.execute_editor_action(EditorAction::ToggleSplit);
                         }
                         continue;
                     }

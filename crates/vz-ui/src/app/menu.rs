@@ -404,7 +404,7 @@ impl VzEditorApp {
                     } else {
                         "上下に分割"
                     },
-                    shortcut: "Alt+S",
+                    shortcut: "F4 / Alt+S",
                     action: MenuAction::ToggleSplit,
                     enabled: in_editor && !self.cur_buf().is_huge(),
                 },

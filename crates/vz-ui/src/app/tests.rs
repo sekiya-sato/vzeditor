@@ -2986,3 +2986,38 @@ fn test_split_ruler_ticks_and_visible_cols() {
     // 表示域がない
     assert_eq!(split::ruler_cols(100.0, 10.0, 100.0, 90.0).len(), 0);
 }
+
+#[test]
+fn test_f4_toggles_split_in_both_schemes() {
+    let none = egui::Modifiers::default();
+    let shift = egui::Modifiers {
+        shift: true,
+        ..Default::default()
+    };
+    // 同じ Context で押し続けると 2 回目は押しっぱなし（repeat）になるので、毎回新しくする
+    for mut app in [make_test_app(), make_sakura_app("abc\ndef\n")] {
+        run_editor(
+            &egui::Context::default(),
+            &mut app,
+            none,
+            vec![key_with(Key::F4, none)],
+        );
+        assert!(app.cur_slot().split.is_some());
+        // Shift+F4 は分割しない（解除もしない）
+        run_editor(
+            &egui::Context::default(),
+            &mut app,
+            shift,
+            vec![key_with(Key::F4, shift)],
+        );
+        assert!(app.cur_slot().split.is_some());
+        run_editor(
+            &egui::Context::default(),
+            &mut app,
+            none,
+            vec![key_with(Key::F4, none)],
+        );
+        assert!(app.cur_slot().split.is_none());
+        assert_eq!(app.buffers.len(), 1);
+    }
+}
