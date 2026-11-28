@@ -1109,19 +1109,26 @@ impl VzEditorApp {
                             _ => None,
                         })
                         .fold(0.0_f32, f32::max);
-                    let sub_w = (text_w + 24.0)
-                        .max(326.0)
-                        .min(screen.width() - frame_pad * 2.0 - 8.0);
-                    let mut x = popup_rect.max.x - 2.0;
-                    if x + sub_w + frame_pad * 2.0 > screen.max.x {
-                        x = (popup_rect.min.x - sub_w - frame_pad * 2.0 + 2.0).max(screen.min.x);
-                    }
+                    // 入らないときは親メニューの左端から 1 文字分右に置き、親の項目を選べるようにする
+                    let edge = ctx.fonts(|f| {
+                        f.layout_no_wrap("M".to_string(), FontId::monospace(12.5), TEXT_WHITE)
+                            .size()
+                            .x
+                    });
+                    let (sub_w, x) = submenu_placement(
+                        text_w + 24.0,
+                        popup_rect,
+                        screen,
+                        frame_pad * 2.0 + 3.0,
+                        edge,
+                    );
                     let sub_selected = self.submenu_selected_idx;
                     let has_recent_items = matches!(items.first(), Some(MenuEntry::Recent { .. }));
                     let pointer_moved = ctx.input(|input| input.pointer.delta() != Vec2::ZERO);
                     let sub_resp = egui::Area::new(egui::Id::new("lz_menu_submenu"))
                         .order(egui::Order::Foreground)
                         .fixed_pos(Pos2::new(x, anchor.min.y - frame_pad))
+                        .constrain(false)
                         .show(ctx, |ui| {
                             Self::menu_popup_frame().show(ui, |ui| {
                                 ui.set_width(sub_w);
@@ -1259,7 +1266,8 @@ impl VzEditorApp {
         if !ui.is_rect_visible(rect) {
             return;
         }
-        let p = ui.painter();
+        // 長い履歴のパスは行の右端で切る（枠の外へはみ出さない）
+        let p = ui.painter_at(rect);
         if selected && enabled {
             p.rect_filled(rect, CornerRadius::same(2), MENU_ITEM_HOVER);
         }
@@ -1455,6 +1463,31 @@ impl VzEditorApp {
 /// 履歴のサブメニューに出す件数（アクセスキー 0-9・A-Z の数）。
 const RECENT_MENU_MAX: usize = 36;
 
+/// サブメニューの幅と左端。`want_w` は中身の幅、`chrome` は枠（余白と線）の左右の合計、
+/// `edge` は 1 文字分の幅。親メニューの右に開き、入らなければ左に開く。
+/// どちらにも入らなければ、親メニューの左端から 1 文字分右に置き（親メニューの左端を
+/// 見えるままにして、マウスで親の項目を選べるようにする）、幅を画面の右端に収める。
+fn submenu_placement(
+    want_w: f32,
+    parent: Rect,
+    screen: Rect,
+    chrome: f32,
+    edge: f32,
+) -> (f32, f32) {
+    let w = want_w.max(326.0);
+    let right = parent.max.x - 2.0;
+    if right + w + chrome <= screen.max.x - edge {
+        return (w, right);
+    }
+    let left = parent.min.x - w - chrome + 2.0;
+    if left >= screen.min.x + edge {
+        return (w, left);
+    }
+    let x = (parent.min.x + edge).max(screen.min.x + edge);
+    let max_w = (screen.max.x - edge - x - chrome).max(40.0);
+    (w.min(max_w), x)
+}
+
 /// 履歴の行の印の幅を空けた表示文字列。
 fn recent_row_text(label: &str) -> String {
     format!("  {label}")
@@ -1481,4 +1514,31 @@ fn recent_action_for_key(items: &[MenuEntry], key: Key) -> Option<MenuAction> {
         MenuEntry::Recent { label, action, .. } if label.starts_with(c) => Some(*action),
         _ => None,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_submenu_placement_keeps_left_margin() {
+        let screen = Rect::from_min_max(Pos2::ZERO, Pos2::new(800.0, 600.0));
+        let parent = Rect::from_min_max(Pos2::new(0.0, 20.0), Pos2::new(300.0, 400.0));
+        // 短ければ親の右に開く
+        assert_eq!(
+            submenu_placement(200.0, parent, screen, 11.0, 8.0),
+            (326.0, 298.0)
+        );
+        // 画面より長いパスなら親メニューの左端から 1 文字分右に置き、右端も画面に収める
+        let parent = Rect::from_min_max(Pos2::new(4.0, 20.0), Pos2::new(300.0, 400.0));
+        let (w, x) = submenu_placement(5000.0, parent, screen, 11.0, 8.0);
+        assert_eq!(x, 12.0);
+        assert_eq!(x + w + 11.0, 800.0 - 8.0);
+        // 親メニューが右寄りで、左に開けば入るなら左に開く
+        let parent = Rect::from_min_max(Pos2::new(500.0, 20.0), Pos2::new(700.0, 400.0));
+        assert_eq!(
+            submenu_placement(400.0, parent, screen, 11.0, 8.0),
+            (400.0, 91.0)
+        );
+    }
 }
