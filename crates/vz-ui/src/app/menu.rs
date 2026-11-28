@@ -1063,6 +1063,16 @@ impl VzEditorApp {
                                     if *enabled && resp.clicked() {
                                         triggered_action = Some(*action);
                                     }
+                                    if matches!(
+                                        action,
+                                        MenuAction::OpenSearch(
+                                            SearchDialog::Find
+                                                | SearchDialog::Replace
+                                                | SearchDialog::Grep
+                                        )
+                                    ) {
+                                        resp.on_hover_text(super::search::HISTORY_HINT);
+                                    }
                                 }
                                 MenuEntry::Recent { .. } => {}
                                 MenuEntry::Submenu { label, .. } => {

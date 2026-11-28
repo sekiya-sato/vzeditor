@@ -5,6 +5,8 @@ use std::sync::mpsc::{self, TryRecvError};
 use vz_core::grep::{self, GrepOptions, GrepOutput, GrepResults};
 use vz_core::search::{SearchOptions, SearchPattern};
 
+pub(super) const HISTORY_HINT: &str = "入力欄を空にして ↑ で履歴を表示し、↓ で空欄まで戻ります";
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum SearchDialog {
     Find,
@@ -46,19 +48,54 @@ impl Drop for GrepJob {
     }
 }
 
+#[derive(Default)]
+struct InputHistory {
+    entries: Vec<String>,
+    position: Option<usize>,
+}
+
+impl InputHistory {
+    fn remember(&mut self, value: &str) {
+        self.position = None;
+        if value.is_empty() || self.entries.first().is_some_and(|entry| entry == value) {
+            return;
+        }
+        self.entries.retain(|entry| entry != value);
+        self.entries.insert(0, value.to_owned());
+        self.entries.truncate(50);
+    }
+
+    fn step(&mut self, value: &mut String, key: Key) -> bool {
+        self.position = match (key, self.position) {
+            (Key::ArrowUp, None) if value.is_empty() && !self.entries.is_empty() => Some(0),
+            (Key::ArrowUp, Some(index)) => Some((index + 1).min(self.entries.len() - 1)),
+            (Key::ArrowDown, Some(index)) => index.checked_sub(1),
+            _ => return false,
+        };
+        value.clear();
+        if let Some(index) = self.position {
+            value.push_str(&self.entries[index]);
+        }
+        true
+    }
+}
+
 pub(super) struct SearchState {
     dialog: Option<SearchDialog>,
     focus: bool,
     message: String,
     query: String,
+    query_history: InputHistory,
     options: SearchOptions,
     wrap: bool,
     show_miss: bool,
     auto_close: bool,
     replace: String,
+    replace_history: InputHistory,
     clipboard: bool,
     selection_only: bool,
     root: String,
+    root_history: InputHistory,
     recursive: bool,
     include: String,
     exclude_files: String,
@@ -81,14 +118,17 @@ impl Default for SearchState {
             focus: false,
             message: String::new(),
             query: String::new(),
+            query_history: InputHistory::default(),
             options: SearchOptions::default(),
             wrap: false,
             show_miss: true,
             auto_close: true,
             replace: String::new(),
+            replace_history: InputHistory::default(),
             clipboard: false,
             selection_only: false,
             root: String::new(),
+            root_history: InputHistory::default(),
             recursive: true,
             include: "*".into(),
             exclude_files: "*.exe;*.dll;*.obj;*.pdb;*.lib;*.ico;*.png;*.jpg;*.zip".into(),
@@ -212,20 +252,25 @@ impl SearchState {
                                     } else {
                                         "検索条件"
                                     });
-                                    let field = ui.add(
-                                        egui::TextEdit::singleline(&mut self.query)
-                                            .desired_width(f32::INFINITY),
+                                    let field = history_field(
+                                        ui,
+                                        (dialog.title(), "query"),
+                                        &mut self.query,
+                                        &mut self.query_history,
                                     );
                                     focus_and_select(ui, focus, field, self.query.chars().count());
                                 });
                                 if dialog == SearchDialog::Replace {
                                     ui.horizontal(|ui| {
                                         ui.label("置換後");
-                                        ui.add_enabled(
-                                            !self.clipboard,
-                                            egui::TextEdit::singleline(&mut self.replace)
-                                                .desired_width(f32::INFINITY),
-                                        );
+                                        ui.add_enabled_ui(!self.clipboard, |ui| {
+                                            history_field(
+                                                ui,
+                                                "replace",
+                                                &mut self.replace,
+                                                &mut self.replace_history,
+                                            );
+                                        });
                                     });
                                     ui.checkbox(&mut self.clipboard, "クリップボードの内容で置換");
                                     ui.add_enabled(
@@ -319,11 +364,12 @@ impl SearchState {
     fn render_grep_options(&mut self, ui: &mut egui::Ui, current_dir: &Path) {
         ui.horizontal(|ui| {
             ui.label("検索場所");
-            ui.add(egui::TextEdit::singleline(&mut self.root).desired_width(f32::INFINITY));
+            history_field(ui, "grep_root", &mut self.root, &mut self.root_history);
         });
         ui.horizontal_wrapped(|ui| {
             if ui.button("現フォルダー").clicked() {
                 self.root = current_dir.to_string_lossy().into_owned();
+                self.root_history.position = None;
             }
             if ui.button("上階層").clicked() {
                 if let Some(parent) = Path::new(&self.root)
@@ -331,6 +377,7 @@ impl SearchState {
                     .filter(|p| !p.as_os_str().is_empty())
                 {
                     self.root = parent.to_string_lossy().into_owned();
+                    self.root_history.position = None;
                 }
             }
             ui.checkbox(&mut self.recursive, "サブフォルダーも検索");
@@ -437,6 +484,56 @@ pub(super) fn highlight_ranges(
     ranges
 }
 
+fn history_field(
+    ui: &mut egui::Ui,
+    id: impl std::hash::Hash,
+    value: &mut String,
+    history: &mut InputHistory,
+) -> egui::Response {
+    let id = ui.make_persistent_id(id);
+    let mut recalled = false;
+    if ui.is_enabled() && ui.memory(|memory| memory.has_focus(id)) {
+        ui.input_mut(|input| {
+            input.events.retain(|event| {
+                if let Event::Key {
+                    key,
+                    pressed: true,
+                    modifiers: egui::Modifiers::NONE,
+                    ..
+                } = *event
+                {
+                    if history.step(value, key) {
+                        recalled = true;
+                        return false;
+                    }
+                }
+                true
+            });
+        });
+    }
+    if recalled {
+        let mut state = egui::TextEdit::load_state(ui.ctx(), id).unwrap_or_default();
+        let end = egui::text::CCursor::new(value.chars().count());
+        state
+            .cursor
+            .set_char_range(Some(egui::text::CCursorRange::one(end)));
+        state.store(ui.ctx(), id);
+    }
+    let field = ui.add(
+        egui::TextEdit::singleline(value)
+            .id(id)
+            .desired_width(f32::INFINITY),
+    );
+    if field.changed() {
+        history.position = None;
+    }
+    if field.gained_focus() {
+        // egui は一度フォーカスを得てから次のフレームで矢印キーを入力欄に固定する。
+        ui.ctx().request_repaint();
+    }
+    field.on_hover_text(HISTORY_HINT)
+}
+
 fn focus_and_select(ui: &egui::Ui, focus: bool, field: egui::Response, len: usize) {
     if focus {
         field.request_focus();
@@ -470,6 +567,9 @@ impl VzEditorApp {
         self.ime_preedit.clear();
         self.ime_active = false;
         self.search.dialog = Some(dialog);
+        self.search.query_history.position = None;
+        self.search.replace_history.position = None;
+        self.search.root_history.position = None;
         self.search.focus = true;
         self.search.message.clear();
         match dialog {
@@ -510,6 +610,7 @@ impl VzEditorApp {
     }
 
     fn find_match(&mut self, pattern: &SearchPattern, up: bool) -> bool {
+        self.search.query_history.remember(&self.search.query);
         self.search.highlight = Some(pattern.clone());
         if self.cur_buf().is_huge() {
             // 巨大ファイルは裏のスレッドで探し、見つかったら選択する
@@ -571,10 +672,11 @@ impl VzEditorApp {
             self.status_message = "検索の行マークを解除しました".into();
         } else {
             let pattern = self.search.pattern()?;
-            let buf = self.cur_buf();
-            if buf.is_huge() {
+            if self.cur_buf().is_huge() {
                 return Err("巨大ファイルでは行マークは使えません".into());
             }
+            self.search.query_history.remember(&self.search.query);
+            let buf = self.cur_buf();
             let rows: Vec<_> = buf
                 .text_lines()
                 .iter()
@@ -749,6 +851,8 @@ impl VzEditorApp {
                 ctx.request_repaint();
             })
             .map_err(|err| format!("Grep を開始できません: {err}"))?;
+        self.search.query_history.remember(&self.search.query);
+        self.search.root_history.remember(self.search.root.trim());
         self.search.results = None;
         self.search.grep_job = Some(GrepJob {
             receiver,
@@ -790,6 +894,10 @@ impl VzEditorApp {
             DialogAction::Replace | DialogAction::ReplaceAll => {
                 let pattern = self.search.pattern()?;
                 self.replace_match(&pattern, matches!(action, DialogAction::ReplaceAll))?;
+                self.search.query_history.remember(&self.search.query);
+                if !self.search.clipboard {
+                    self.search.replace_history.remember(&self.search.replace);
+                }
             }
             DialogAction::Grep => self.start_grep(ctx)?,
             DialogAction::OpenHit(i) => {
@@ -903,6 +1011,90 @@ mod tests {
         );
         assert_eq!(app.cur_buf().selection_range(), Some(((1, 0), (1, 1))));
         assert_eq!(app.cur_buf().text_lines(), ["一 猫", "猫"]);
+    }
+
+    #[test]
+    fn search_history_arrows_start_in_empty_field_and_return_to_empty() {
+        let ctx = egui::Context::default();
+        let mut app = app_with_text("");
+        app.open_search_dialog(SearchDialog::Find);
+        for word in ["猫", "犬", "猫"] {
+            app.search.query = word.into();
+            app.perform_search_action(&ctx, DialogAction::Find(false))
+                .unwrap();
+        }
+        input_frame(&ctx, &mut app, vec![]);
+        for (key, expected) in [(Key::ArrowUp, "猫"), (Key::ArrowDown, "猫")] {
+            input_frame(&ctx, &mut app, vec![key_event(key, egui::Modifiers::NONE)]);
+            assert_eq!(app.search.query, expected);
+        }
+        input_frame(
+            &ctx,
+            &mut app,
+            vec![key_event(Key::Backspace, egui::Modifiers::NONE)],
+        );
+        assert!(app.search.query.is_empty());
+        for (key, expected) in [
+            (Key::ArrowUp, "猫"),
+            (Key::ArrowUp, "犬"),
+            (Key::ArrowUp, "犬"),
+            (Key::ArrowDown, "猫"),
+            (Key::ArrowDown, ""),
+        ] {
+            input_frame(&ctx, &mut app, vec![key_event(key, egui::Modifiers::NONE)]);
+            assert_eq!(app.search.query, expected);
+        }
+        input_frame(
+            &ctx,
+            &mut app,
+            vec![key_event(Key::ArrowUp, egui::Modifiers::SHIFT)],
+        );
+        assert!(app.search.query.is_empty());
+        input_frame(
+            &ctx,
+            &mut app,
+            vec![key_event(Key::ArrowUp, egui::Modifiers::NONE)],
+        );
+        input_frame(&ctx, &mut app, vec![Event::Text("語".into())]);
+        input_frame(
+            &ctx,
+            &mut app,
+            vec![key_event(Key::ArrowDown, egui::Modifiers::NONE)],
+        );
+        assert_eq!(app.search.query, "猫語");
+    }
+
+    #[test]
+    fn replacement_history_belongs_to_the_replacement_field() {
+        let ctx = egui::Context::default();
+        let mut app = app_with_text("猫");
+        app.open_search_dialog(SearchDialog::Replace);
+        app.search.query = "猫".into();
+        app.search.replace = "犬".into();
+        app.perform_search_action(&ctx, DialogAction::ReplaceAll)
+            .unwrap();
+        assert_eq!(app.cur_buf().text_lines(), ["犬"]);
+        app.search.replace.clear();
+        input_frame(&ctx, &mut app, vec![]);
+        input_frame(
+            &ctx,
+            &mut app,
+            vec![key_event(Key::Tab, egui::Modifiers::NONE)],
+        );
+        input_frame(&ctx, &mut app, vec![]);
+        input_frame(
+            &ctx,
+            &mut app,
+            vec![key_event(Key::ArrowUp, egui::Modifiers::NONE)],
+        );
+        assert_eq!(app.search.query, "猫");
+        assert_eq!(app.search.replace, "犬");
+        input_frame(
+            &ctx,
+            &mut app,
+            vec![key_event(Key::ArrowDown, egui::Modifiers::NONE)],
+        );
+        assert!(app.search.replace.is_empty());
     }
 
     #[test]
@@ -1171,10 +1363,25 @@ mod tests {
         fs::create_dir_all(&root).unwrap();
         let path = root.join("sample.txt");
         fs::write(&path, "first\r\n字 猫").unwrap();
-        app.open_search_dialog(SearchDialog::Grep);
-        app.search.root = root.to_string_lossy().into_owned();
+        app.open_search_dialog(SearchDialog::Find);
         app.search.query = "猫".into();
+        app.perform_search_action(&ctx, DialogAction::Find(false))
+            .unwrap();
+        app.search.close();
+        app.open_search_dialog(SearchDialog::Grep);
+        app.search.query.clear();
+        app.search.root = root.to_string_lossy().into_owned();
+        input_frame(&ctx, &mut app, vec![]);
+        input_frame(
+            &ctx,
+            &mut app,
+            vec![key_event(Key::ArrowUp, egui::Modifiers::NONE)],
+        );
+        assert_eq!(app.search.query, "猫");
+        app.search.query = "字|猫".into();
+        app.search.options.regex = true;
         app.start_grep(&ctx).unwrap();
+        app.search.root.clear();
         let job = app.search.grep_job.take().unwrap();
         app.search.results = Some(
             job.receiver
@@ -1190,7 +1397,42 @@ mod tests {
         );
         fs::remove_file(&path).unwrap();
         fs::remove_dir(&root).unwrap();
-        assert_eq!(app.cur_buf().cursor_pos(), (1, 2));
+        assert_eq!(app.cur_buf().cursor_pos(), (1, 0));
         assert!(!app.search.is_open());
+
+        app.open_search_dialog(SearchDialog::Find);
+        app.search.query.clear();
+        input_frame(&ctx, &mut app, vec![]);
+        input_frame(
+            &ctx,
+            &mut app,
+            vec![key_event(Key::ArrowUp, egui::Modifiers::NONE)],
+        );
+        assert_eq!(app.search.query, "字|猫");
+
+        app.search.close();
+        app.open_search_dialog(SearchDialog::Grep);
+        app.search.root.clear();
+        input_frame(&ctx, &mut app, vec![]);
+        for _ in 0..4 {
+            input_frame(
+                &ctx,
+                &mut app,
+                vec![key_event(Key::Tab, egui::Modifiers::NONE)],
+            );
+        }
+        input_frame(&ctx, &mut app, vec![]);
+        input_frame(
+            &ctx,
+            &mut app,
+            vec![key_event(Key::ArrowUp, egui::Modifiers::NONE)],
+        );
+        assert_eq!(app.search.root, root.to_string_lossy());
+        input_frame(
+            &ctx,
+            &mut app,
+            vec![key_event(Key::ArrowDown, egui::Modifiers::NONE)],
+        );
+        assert!(app.search.root.is_empty());
     }
 }
