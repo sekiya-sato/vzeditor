@@ -4375,7 +4375,7 @@ dependencies = [
 
 [[package]]
 name = "vz-browser"
-version = "1.0.3"
+version = "1.0.4"
 dependencies = [
  "raw-window-handle",
  "wry",
@@ -4383,14 +4383,14 @@ dependencies = [
 
 [[package]]
 name = "vz-config"
-version = "1.0.3"
+version = "1.0.4"
 dependencies = [
  "tempfile",
 ]
 
 [[package]]
 name = "vz-core"
-version = "1.0.3"
+version = "1.0.4"
 dependencies = [
  "chrono",
  "encoding_rs",
@@ -4405,7 +4405,7 @@ dependencies = [
 
 [[package]]
 name = "vz-platform"
-version = "1.0.3"
+version = "1.0.4"
 dependencies = [
  "arboard",
  "core-foundation",
@@ -4422,7 +4422,7 @@ dependencies = [
 
 [[package]]
 name = "vz-terminal"
-version = "1.0.3"
+version = "1.0.4"
 dependencies = [
  "portable-pty",
  "vt100",
@@ -4430,7 +4430,7 @@ dependencies = [
 
 [[package]]
 name = "vz-ui"
-version = "1.0.3"
+version = "1.0.4"
 dependencies = [
  "chrono",
  "eframe",
@@ -4444,7 +4444,7 @@ dependencies = [
 
 [[package]]
 name = "vzeditor"
-version = "1.0.3"
+version = "1.0.4"
 dependencies = [
  "eframe",
  "vz-config",
