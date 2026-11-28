@@ -1547,6 +1547,25 @@ fn make_sakura_app(text: &str) -> VzEditorApp {
 }
 
 #[test]
+fn test_f11_copies_current_line_up_to_last_dot() {
+    let none = mods(false, false);
+    let title = "[sudekuma×塚上] 最凶貴族は死亡フラグを覆す 第01巻";
+    let text = format!("先頭\r\n{title}.zip  DIR_ido8\\\r\n  名前だけ  \r\nその.次.tar.gz\r\n");
+    for scheme in [KeyScheme::Sakura, KeyScheme::Vz] {
+        let mut app = make_sakura_app(&text);
+        app.key_scheme = scheme;
+        for (line, expected) in [(1, title), (2, "  名前だけ  "), (3, "その.次.tar")] {
+            app.cur_buf_mut().set_cursor(line, 2);
+            let ctx = egui::Context::default();
+            run_editor(&ctx, &mut app, none, vec![key_with(Key::F11, none)]);
+            assert_eq!(app.clipboard_out.as_deref(), Some(expected));
+            assert_eq!(app.internal_clipboard, expected);
+            assert_eq!(app.cur_buf().cursor_pos(), (line, 2));
+        }
+    }
+}
+
+#[test]
 fn test_huge_wrap_cache_matches_full_wrap() {
     let dir = std::env::temp_dir().join(format!("vz_app_hugewrap_{}", std::process::id()));
     fs::create_dir_all(&dir).unwrap();

@@ -109,6 +109,7 @@ enum EditorAction {
     RepeatSearch(bool),
     /// 行の複製（Shift+F10）
     DuplicateLine,
+    CopySpecialLine,
     /// 検索ハイライトの切替（Ctrl+F3）
     ToggleSearchHighlight,
     /// 終了（Alt+F4。ctx が要るので F キー欄の側で request_quit を呼ぶ）
@@ -228,6 +229,7 @@ enum MenuAction {
     Redo,
     Cut,
     Copy,
+    CopySpecialLine,
     Paste,
     DeleteLine,
     MoveLineStart,

@@ -82,6 +82,15 @@ impl VzEditorApp {
         self.status_message = msg.to_string();
     }
 
+    pub(super) fn copy_special_line(&mut self) {
+        let line = self.cur_buf().current_line_str();
+        let text = line
+            .rsplit_once('.')
+            .map_or(line.as_ref(), |(prefix, _)| prefix);
+        self.copy_to_clipboard(text.to_owned());
+        self.status_message = "特殊行コピーを実行しました".to_string();
+    }
+
     /// 文字入力・IME 確定。上書きモードならカーソル位置の文字を置き換える（貼り付けは常に挿入）。
     pub(super) fn type_text(&mut self, text: &str) {
         if self.overwrite_mode {
@@ -251,15 +260,7 @@ impl VzEditorApp {
         }
         if matches!(
             key,
-            Key::F2
-                | Key::F3
-                | Key::F5
-                | Key::F6
-                | Key::F7
-                | Key::F9
-                | Key::F10
-                | Key::F11
-                | Key::F12
+            Key::F2 | Key::F3 | Key::F5 | Key::F6 | Key::F7 | Key::F9 | Key::F10 | Key::F12
         ) {
             self.status_message = format!("{key:?} はサクラ互換でまだ対応していません");
             return true;

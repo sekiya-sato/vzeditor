@@ -48,6 +48,7 @@ impl VzEditorApp {
                         ("コピー", Copy),
                         ("貼付", Paste),
                     ]);
+                    keys[10] = ("特殊", CopySpecialLine);
                 }
                 FKeyLayer::Shift => {
                     keys[2] = ("前検索", RepeatSearch(true));
@@ -95,7 +96,7 @@ impl VzEditorApp {
                 keys[2] = NONE;
                 keys[3] = ("終了", Quit);
             }
-            FKeyLayer::Normal => {}
+            FKeyLayer::Normal => keys[10] = ("特殊", CopySpecialLine),
         }
         keys
     }

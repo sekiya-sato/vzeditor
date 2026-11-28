@@ -212,6 +212,12 @@ impl VzEditorApp {
                     enabled: in_editor,
                 },
                 MenuEntry::Item {
+                    label: "特殊行コピー",
+                    shortcut: "F11",
+                    action: MenuAction::CopySpecialLine,
+                    enabled: in_editor,
+                },
+                MenuEntry::Item {
                     label: "貼り付け",
                     shortcut: "Ctrl+V",
                     action: MenuAction::Paste,
@@ -681,6 +687,7 @@ impl VzEditorApp {
             MenuAction::Redo => self.menu_redo(),
             MenuAction::Cut => self.menu_cut(ctx),
             MenuAction::Copy => self.menu_copy(ctx),
+            MenuAction::CopySpecialLine => self.copy_special_line(),
             MenuAction::Paste => self.menu_paste(),
             MenuAction::DeleteLine => self.execute_editor_action(EditorAction::DeleteLine),
             MenuAction::MoveLineStart => self.execute_editor_action(EditorAction::MoveLineStart),

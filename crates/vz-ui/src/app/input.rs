@@ -66,6 +66,7 @@ impl VzEditorApp {
             }
             EditorAction::Cut => self.sakura_cut(),
             EditorAction::Copy => self.sakura_copy(),
+            EditorAction::CopySpecialLine => self.copy_special_line(),
             EditorAction::Paste => self.sakura_paste_from_clipboard(),
             EditorAction::BeginSelect => self.toggle_select_mode(),
             EditorAction::CloseBuffer => self.close_current_buffer(),
@@ -377,6 +378,14 @@ impl VzEditorApp {
                     }
                     // Ctrl+F4 以外はエディターの選択・カーソルを動かさない。
                     if key == Key::F4 && (!ctrl || modifiers.alt || modifiers.shift) {
+                        continue;
+                    }
+
+                    if key == Key::F11 {
+                        if !ctrl && !modifiers.alt && !modifiers.shift && !repeat {
+                            suppress_text_this_frame = true;
+                            self.execute_editor_action(EditorAction::CopySpecialLine);
+                        }
                         continue;
                     }
 
