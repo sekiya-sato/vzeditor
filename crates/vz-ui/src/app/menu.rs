@@ -921,7 +921,7 @@ impl VzEditorApp {
                         });
                         let btn_size = Vec2::new(text_w + 16.0, 20.0);
                         // Non-focusable click region so keyboard focus is NEVER stolen from editor/filer
-                        let (rect, resp) = ui.allocate_exact_size(btn_size, Sense::click());
+                        let (rect, resp) = ui.allocate_exact_size(btn_size, Sense::CLICK);
                         header_rects[slot_idx] = (menu, rect);
 
                         let is_open = self.open_menu == Some(menu);
