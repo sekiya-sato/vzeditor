@@ -16,6 +16,11 @@ vz-platform.workspace = true
 vz-terminal.workspace = true
 vz-browser.workspace = true
 
+# Linux Wayland: サーバー側装飾が無い環境（GNOME など）で、タイトルバーを Adwaita 風に自前描画する。
+# eframe が使う winit と同じ版に機能だけ足す（X11 / サーバー側装飾がある環境は従来どおり）
+[target.'cfg(target_os = "linux")'.dependencies]
+winit = { version = "0.30", default-features = false, features = ["wayland", "wayland-csd-adwaita"] }
+
 # build.rs でビルド日時（About の Build At）を埋め込む
 [build-dependencies]
 chrono.workspace = true
