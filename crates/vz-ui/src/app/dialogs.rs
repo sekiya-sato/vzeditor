@@ -48,6 +48,7 @@ impl VzEditorApp {
                         ("Esc", "選択解除 / 2画面ファイラーへ切替"),
                         ("Alt+T / Alt+↑↓0", "最前面固定 / 背景の濃さ"),
                         ("Alt+W", "長い行の折り返し表示の切替"),
+                        ("Alt+S / Alt+O", "上下分割の切替 / もう一方のペインへ (境界のドラッグで高さ変更)"),
                         ("Alt+Shift+「+」「-」「0」", "文字の濃さ"),
                         ("Alt+Shift+F4", "状態を記録して終了 (Shift を押して起動で復元)"),
                         ("Alt+C → C / Alt+C → X", "バッファ全体を Claude Code / Codex へ送信"),
@@ -88,6 +89,7 @@ impl VzEditorApp {
                         ("Esc / Ctrl+K → Q / F9", "2画面ファイラーへ切替（Esc は入力中のキー列を取り消す）"),
                         ("Alt+T", "最前面固定の切替"),
                         ("Alt+W", "長い行の折り返し表示の切替"),
+                        ("Alt+S / Alt+O", "上下分割の切替 / もう一方のペインへ (境界のドラッグで高さ変更)"),
                         ("ファイルをドロップ", "複数ファイルをまとめてバッファで開く"),
                         ("Alt+C → C / Alt+C → X", "バッファ全体を Claude Code / Codex へ送信"),
                         ("Alt+C → N / Alt+C → M", "Claude Code / Codex で新規セッション (Ctrl+N)"),
@@ -217,7 +219,7 @@ impl VzEditorApp {
                     .inner_margin(egui::Margin::same(16)),
             )
             .show(ctx, |ui| {
-                ui.set_min_width(430.0);
+                ui.set_min_width(456.0);
 
                 // Logo & version header
                 ui.horizontal(|ui| {

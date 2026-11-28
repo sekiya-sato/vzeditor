@@ -18,6 +18,7 @@ mod release;
 mod restore;
 mod search;
 mod send;
+mod split;
 mod tab_transfer;
 mod terminal_view;
 #[cfg(test)]
@@ -244,6 +245,8 @@ enum MenuAction {
     NextBuffer,
     ToggleAlwaysOnTop,
     ToggleWordWrap,
+    ToggleSplit,
+    SwitchSplitPane,
     OpacityUp,
     OpacityDown,
     OpacityReset,
@@ -377,6 +380,8 @@ struct BufferSlot {
     /// 外部の変更と衝突して上書きしなかった vz の編集内容を持つ無題バッファなら、元のファイルのパス
     conflict_of: Option<PathBuf>,
     huge: huge::HugeBufferState,
+    /// 上下分割表示（分割していなければ None）
+    split: Option<split::SplitView>,
 }
 
 impl BufferSlot {
@@ -393,6 +398,7 @@ impl BufferSlot {
             ignored_stamp: None,
             conflict_of: None,
             huge: huge::HugeBufferState::default(),
+            split: None,
         }
     }
 
@@ -838,6 +844,8 @@ fn window_style_key_action(
     match key {
         Key::T => Some(MenuAction::ToggleAlwaysOnTop),
         Key::W => Some(MenuAction::ToggleWordWrap),
+        Key::S => Some(MenuAction::ToggleSplit),
+        Key::O => Some(MenuAction::SwitchSplitPane),
         Key::ArrowUp => Some(MenuAction::OpacityUp),
         Key::ArrowDown => Some(MenuAction::OpacityDown),
         Key::Num0 => Some(MenuAction::OpacityReset),

@@ -87,6 +87,7 @@ impl VzEditorApp {
         let in_md_view = self.is_markdown_view();
         let can_edit = in_editor && !in_md_view;
         let sakura = self.is_sakura();
+        let split_on = in_editor && self.cur_slot().split.is_some();
         let sc = |sakura_key: &'static str, vz_key: &'static str| {
             if sakura {
                 sakura_key
@@ -396,6 +397,22 @@ impl VzEditorApp {
                     shortcut: "Alt+W",
                     action: MenuAction::ToggleWordWrap,
                     enabled: true,
+                },
+                MenuEntry::Item {
+                    label: if split_on {
+                        "分割表示を解除"
+                    } else {
+                        "上下に分割"
+                    },
+                    shortcut: "Alt+S",
+                    action: MenuAction::ToggleSplit,
+                    enabled: in_editor && !self.cur_buf().is_huge(),
+                },
+                MenuEntry::Item {
+                    label: "もう一方のペインへ",
+                    shortcut: "Alt+O",
+                    action: MenuAction::SwitchSplitPane,
+                    enabled: split_on,
                 },
                 MenuEntry::Separator,
                 MenuEntry::Item {
@@ -710,6 +727,8 @@ impl VzEditorApp {
             MenuAction::NewSessionCodex => self.start_send(SendTarget::CodexNewSession),
             MenuAction::ToggleKeyScheme => self.toggle_key_scheme(),
             MenuAction::ToggleWordWrap => self.toggle_word_wrap(),
+            MenuAction::ToggleSplit => self.toggle_split(),
+            MenuAction::SwitchSplitPane => self.switch_split_pane(),
             MenuAction::ToggleTerminal => self.toggle_terminal(ctx),
             MenuAction::ToggleBrowser => self.toggle_browser(),
             MenuAction::NewBrowserTab => {

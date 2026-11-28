@@ -1131,6 +1131,20 @@ fn test_window_style_keys_do_not_overlap() {
         window_style_key_action(Key::W, Some(Key::W), alt_shift),
         None
     );
+    // Alt+S / Alt+O: 上下分割の切替 / もう一方のペインへ
+    assert_eq!(
+        window_style_key_action(Key::S, Some(Key::S), alt),
+        Some(MenuAction::ToggleSplit)
+    );
+    assert_eq!(
+        window_style_key_action(Key::O, Some(Key::O), alt),
+        Some(MenuAction::SwitchSplitPane)
+    );
+    assert_eq!(
+        window_style_key_action(Key::S, Some(Key::S), alt_shift),
+        None
+    );
+    assert_eq!(window_style_key_action(Key::O, Some(Key::O), ctrl), None);
     // Alt+Shift+F4: 状態を記録して終了（Alt+F4 は OS の終了のまま）
     assert_eq!(
         window_style_key_action(Key::F4, Some(Key::F4), alt_shift),
@@ -2886,4 +2900,89 @@ fn test_delete_removes_selected_recent_entries_and_saves_history() {
         assert!(dir.is_dir());
     }
     fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn test_split_keeps_cursor_and_scroll_per_pane() {
+    let mut app = make_sakura_app(
+        "a
+bb
+ccc
+dddd
+",
+    );
+    app.cur_buf_mut().set_cursor(3, 2);
+    app.cur_slot_mut().scroll_y = 40.0;
+    app.toggle_split();
+    assert!(app.cur_slot().split.is_some());
+
+    // 下のペインで移動・選択してから上のペインへ
+    app.cur_buf_mut().set_cursor(1, 1);
+    app.cur_buf_mut().anchor = Some((0, 0));
+    app.cur_slot_mut().scroll_y = 0.0;
+    app.switch_split_pane();
+    assert_eq!(app.cur_buf().cursor_pos(), (3, 2));
+    assert_eq!(app.cur_buf().anchor, None);
+    assert_eq!(app.cur_slot().scroll_y, 40.0);
+    assert!(app.cur_slot().split.as_ref().is_some_and(|s| s.active_top));
+
+    // 上のペインで末尾の行を消しても、下のペインに戻ると位置は文書内に収まる
+    app.cur_buf_mut().set_cursor(0, 0);
+    app.cur_buf_mut().anchor = Some((4, 0));
+    app.cur_buf_mut().delete_selection();
+    app.switch_split_pane();
+    let (line, col) = app.cur_buf().cursor_pos();
+    assert!(line < app.cur_buf().line_count());
+    assert!(col <= app.cur_buf().line_char_len(line));
+
+    app.toggle_split();
+    assert!(app.cur_slot().split.is_none());
+}
+
+#[test]
+fn test_split_rects_keep_min_height() {
+    let area = Rect::from_min_max(Pos2::new(0.0, 0.0), Pos2::new(100.0, 406.0));
+    let (top, sep, bottom) = split::split_rects(area, 0.5, 50.0);
+    assert_eq!(top.height(), 200.0);
+    assert_eq!(sep.height(), split::SPLIT_SEP_H);
+    assert_eq!(bottom.max.y, 406.0);
+    // 端まで動かしても最低の高さを残す
+    let (top, _, bottom) = split::split_rects(area, 0.0, 50.0);
+    assert_eq!(top.height(), 50.0);
+    assert_eq!(bottom.height(), 350.0);
+    let (top, _, bottom) = split::split_rects(area, 1.0, 50.0);
+    assert_eq!(top.height(), 350.0);
+    assert_eq!(bottom.height(), 50.0);
+}
+
+#[test]
+fn test_split_render_uses_active_pane_height() {
+    let text: String = (0..200)
+        .map(|i| {
+            format!(
+                "line {i}
+"
+            )
+        })
+        .collect();
+    let mut app = make_sakura_app(&text);
+    let ctx = egui::Context::default();
+    let input = || egui::RawInput {
+        screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(800.0, 600.0))),
+        ..Default::default()
+    };
+    let _ = ctx.run(input(), |ctx| app.render_editor_canvas(ctx));
+    let full = app.last_visible_lines;
+    app.toggle_split();
+    app.cur_buf_mut().set_cursor(150, 0);
+    app.need_scroll_to_cursor = true;
+    let _ = ctx.run(input(), |ctx| app.render_editor_canvas(ctx));
+    let half = app.last_visible_lines;
+    assert!(half < full && half >= full / 2 - 2, "{half} / {full}");
+    // 下のペインだけがカーソルへスクロールし、上のペインは元の位置のまま
+    assert!(app.cur_slot().scroll_y > 0.0);
+    assert_eq!(
+        app.cur_slot().split.as_ref().map(|s| s.other.scroll_y),
+        Some(0.0)
+    );
 }
