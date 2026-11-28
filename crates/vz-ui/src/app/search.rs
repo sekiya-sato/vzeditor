@@ -55,16 +55,6 @@ struct InputHistory {
 }
 
 impl InputHistory {
-    fn remember(&mut self, value: &str) {
-        self.position = None;
-        if value.is_empty() || self.entries.first().is_some_and(|entry| entry == value) {
-            return;
-        }
-        self.entries.retain(|entry| entry != value);
-        self.entries.insert(0, value.to_owned());
-        self.entries.truncate(50);
-    }
-
     fn step(&mut self, value: &mut String, key: Key) -> bool {
         self.position = match (key, self.position) {
             (Key::ArrowUp, None) if value.is_empty() && !self.entries.is_empty() => Some(0),
@@ -174,6 +164,7 @@ impl SearchState {
         has_selection: bool,
         can_mark: bool,
         current_dir: &Path,
+        history: &History,
     ) -> Option<DialogAction> {
         let dialog = self.dialog?;
         let focus = std::mem::take(&mut self.focus);
@@ -257,6 +248,7 @@ impl SearchState {
                                         (dialog.title(), "query"),
                                         &mut self.query,
                                         &mut self.query_history,
+                                        &history.queries,
                                     );
                                     focus_and_select(ui, focus, field, self.query.chars().count());
                                 });
@@ -269,6 +261,7 @@ impl SearchState {
                                                 "replace",
                                                 &mut self.replace,
                                                 &mut self.replace_history,
+                                                &history.replacements,
                                             );
                                         });
                                     });
@@ -290,7 +283,7 @@ impl SearchState {
                                     ui.checkbox(&mut self.options.regex, "正規表現");
                                 });
                                 if dialog == SearchDialog::Grep {
-                                    self.render_grep_options(ui, current_dir);
+                                    self.render_grep_options(ui, current_dir, &history.grep_roots);
                                 } else {
                                     ui.horizontal_wrapped(|ui| {
                                         ui.checkbox(&mut self.wrap, "先頭／末尾から再検索");
@@ -361,10 +354,16 @@ impl SearchState {
         }
     }
 
-    fn render_grep_options(&mut self, ui: &mut egui::Ui, current_dir: &Path) {
+    fn render_grep_options(&mut self, ui: &mut egui::Ui, current_dir: &Path, roots: &[String]) {
         ui.horizontal(|ui| {
             ui.label("検索場所");
-            history_field(ui, "grep_root", &mut self.root, &mut self.root_history);
+            history_field(
+                ui,
+                "grep_root",
+                &mut self.root,
+                &mut self.root_history,
+                roots,
+            );
         });
         ui.horizontal_wrapped(|ui| {
             if ui.button("現フォルダー").clicked() {
@@ -489,6 +488,7 @@ fn history_field(
     id: impl std::hash::Hash,
     value: &mut String,
     history: &mut InputHistory,
+    latest_entries: &[String],
 ) -> egui::Response {
     let id = ui.make_persistent_id(id);
     let mut recalled = false;
@@ -502,6 +502,9 @@ fn history_field(
                     ..
                 } = *event
                 {
+                    if key == Key::ArrowUp && history.position.is_none() && value.is_empty() {
+                        history.entries = latest_entries.to_vec();
+                    }
                     if history.step(value, key) {
                         recalled = true;
                         return false;
@@ -610,7 +613,6 @@ impl VzEditorApp {
     }
 
     fn find_match(&mut self, pattern: &SearchPattern, up: bool) -> bool {
-        self.search.query_history.remember(&self.search.query);
         self.search.highlight = Some(pattern.clone());
         if self.cur_buf().is_huge() {
             // 巨大ファイルは裏のスレッドで探し、見つかったら選択する
@@ -646,6 +648,7 @@ impl VzEditorApp {
         self.search.message.clear();
         match self.search.pattern() {
             Ok(pattern) => {
+                self.remember_query();
                 self.find_match(&pattern, up);
             }
             Err(message) => self.status_message = message,
@@ -675,7 +678,6 @@ impl VzEditorApp {
             if self.cur_buf().is_huge() {
                 return Err("巨大ファイルでは行マークは使えません".into());
             }
-            self.search.query_history.remember(&self.search.query);
             let buf = self.cur_buf();
             let rows: Vec<_> = buf
                 .text_lines()
@@ -687,6 +689,7 @@ impl VzEditorApp {
             let revision = self.cur_buf().revision;
             self.cur_slot_mut().search_marks = Some((revision, rows));
             self.cur_slot_mut().markdown.visible = false;
+            self.remember_query();
         }
         Ok(())
     }
@@ -821,6 +824,7 @@ impl VzEditorApp {
         } else {
             self.grep_current_dir().join(root)
         };
+        let root_for_history = root.to_string_lossy().into_owned();
         let options = GrepOptions {
             root,
             recursive: self.search.recursive,
@@ -851,8 +855,10 @@ impl VzEditorApp {
                 ctx.request_repaint();
             })
             .map_err(|err| format!("Grep を開始できません: {err}"))?;
-        self.search.query_history.remember(&self.search.query);
-        self.search.root_history.remember(self.search.root.trim());
+        let query = self.search.query.clone();
+        self.record_history(&[Visit::Search(&query), Visit::GrepRoot(&root_for_history)]);
+        self.search.query_history.position = None;
+        self.search.root_history.position = None;
         self.search.results = None;
         self.search.grep_job = Some(GrepJob {
             receiver,
@@ -874,6 +880,12 @@ impl VzEditorApp {
         self.search.grep_job = None;
     }
 
+    fn remember_query(&mut self) {
+        let query = self.search.query.clone();
+        self.record_history(&[Visit::Search(&query)]);
+        self.search.query_history.position = None;
+    }
+
     fn perform_search_action(
         &mut self,
         ctx: &egui::Context,
@@ -882,6 +894,7 @@ impl VzEditorApp {
         match action {
             DialogAction::Find(up) => {
                 let pattern = self.search.pattern()?;
+                self.remember_query();
                 self.search.highlight_enabled = true;
                 if self.find_match(&pattern, up) && self.search.auto_close {
                     self.search.close();
@@ -894,9 +907,14 @@ impl VzEditorApp {
             DialogAction::Replace | DialogAction::ReplaceAll => {
                 let pattern = self.search.pattern()?;
                 self.replace_match(&pattern, matches!(action, DialogAction::ReplaceAll))?;
-                self.search.query_history.remember(&self.search.query);
-                if !self.search.clipboard {
-                    self.search.replace_history.remember(&self.search.replace);
+                if self.search.clipboard {
+                    self.remember_query();
+                } else {
+                    let query = self.search.query.clone();
+                    let replacement = self.search.replace.clone();
+                    self.record_history(&[Visit::Search(&query), Visit::Replace(&replacement)]);
+                    self.search.query_history.position = None;
+                    self.search.replace_history.position = None;
                 }
             }
             DialogAction::Grep => self.start_grep(ctx)?,
@@ -930,6 +948,25 @@ impl VzEditorApp {
             return;
         }
         self.poll_grep();
+        if ctx.input(|i| {
+            i.events.iter().any(|event| {
+                matches!(
+                    event,
+                    Event::Key {
+                        key: Key::ArrowUp,
+                        pressed: true,
+                        modifiers: egui::Modifiers::NONE,
+                        ..
+                    }
+                )
+            })
+        }) && (self.search.query.is_empty()
+            || (self.search.dialog == Some(SearchDialog::Replace)
+                && self.search.replace.is_empty())
+            || (self.search.dialog == Some(SearchDialog::Grep) && self.search.root.is_empty()))
+        {
+            self.reload_history();
+        }
         let has_selection = self.cur_buf().has_selection();
         let can_mark = self
             .cur_slot()
@@ -937,9 +974,9 @@ impl VzEditorApp {
             .as_ref()
             .is_some_and(|(rev, _)| *rev == self.cur_buf().revision);
         let current_dir = self.grep_current_dir().to_path_buf();
-        if let Some(action) = self
-            .search
-            .render(ctx, has_selection, can_mark, &current_dir)
+        if let Some(action) =
+            self.search
+                .render(ctx, has_selection, can_mark, &current_dir, &self.history)
         {
             self.search.message.clear();
             if let Err(message) = self.perform_search_action(ctx, action) {
@@ -1062,6 +1099,56 @@ mod tests {
             vec![key_event(Key::ArrowDown, egui::Modifiers::NONE)],
         );
         assert_eq!(app.search.query, "猫語");
+    }
+
+    #[test]
+    fn open_dialog_reads_other_windows_history_and_reexecution_promotes_entry() {
+        let dir = std::env::temp_dir().join(format!("vz-ui-input-history-{}", std::process::id()));
+        let file = dir.join("history.ini");
+        let first_ctx = egui::Context::default();
+        let second_ctx = egui::Context::default();
+        let mut first = app_with_text("");
+        let mut second = app_with_text("");
+        first.history_file = Some(file.clone());
+        second.history_file = Some(file.clone());
+        first.open_search_dialog(SearchDialog::Find);
+        second.open_search_dialog(SearchDialog::Find);
+        input_frame(&second_ctx, &mut second, vec![]);
+
+        for query in ["猫", "犬"] {
+            first.search.query = query.into();
+            first
+                .perform_search_action(&first_ctx, DialogAction::Find(false))
+                .unwrap();
+        }
+        for expected in ["犬", "猫"] {
+            input_frame(
+                &second_ctx,
+                &mut second,
+                vec![key_event(Key::ArrowUp, egui::Modifiers::NONE)],
+            );
+            assert_eq!(second.search.query, expected);
+        }
+        assert_eq!(History::load_from(&file).queries, ["犬", "猫"]);
+        input_frame(
+            &second_ctx,
+            &mut second,
+            vec![key_event(Key::Enter, egui::Modifiers::NONE)],
+        );
+
+        let restarted_ctx = egui::Context::default();
+        let mut restarted = app_with_text("");
+        restarted.history_file = Some(file.clone());
+        restarted.open_search_dialog(SearchDialog::Find);
+        input_frame(&restarted_ctx, &mut restarted, vec![]);
+        input_frame(
+            &restarted_ctx,
+            &mut restarted,
+            vec![key_event(Key::ArrowUp, egui::Modifiers::NONE)],
+        );
+        assert_eq!(restarted.search.query, "猫");
+        assert_eq!(History::load_from(&file).queries, ["猫", "犬"]);
+        fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

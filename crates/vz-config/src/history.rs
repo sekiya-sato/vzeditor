@@ -1,13 +1,15 @@
-//! ファイル履歴・フォルダ履歴（`<設定フォルダ>/vzeditor/history.ini`）。
+//! ファイル・フォルダ・検索入力の履歴（`<設定フォルダ>/vzeditor/history.ini`）。
 //!
 //! 全プロセスで 1 つのファイルを共有する。記録のたびにファイルを読み直して追加し、すぐ書き戻すので、
-//! 他のプロセスが書いた履歴は消えない。新しいものが先頭で、各 [`MAX_ENTRIES`] 件を超えたら古いものから消す。
+//! 他のプロセスが書いた履歴は消えない。新しいものが先頭で、上限を超えたら古いものから消す。
 //!
 //! ```text
 //! [files]
 //! UTF-8<TAB>C:\work\a.txt
 //! [folders]
 //! C:\work
+//! [search]
+//! =検索語
 //! ```
 
 use std::fs::{self, OpenOptions};
@@ -16,6 +18,8 @@ use std::path::{Path, PathBuf};
 
 /// ファイル履歴・フォルダ履歴それぞれの上限。
 pub const MAX_ENTRIES: usize = 100;
+
+const MAX_INPUT_ENTRIES: usize = 50;
 
 const HISTORY_FILE: &str = "history.ini";
 
@@ -40,6 +44,9 @@ pub enum Visit<'a> {
     Folder(&'a Path),
     RemoveFile(&'a Path),
     RemoveFolder(&'a Path),
+    Search(&'a str),
+    Replace(&'a str),
+    GrepRoot(&'a str),
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -48,24 +55,25 @@ pub struct History {
     pub files: Vec<FileRecord>,
     /// 新しい順
     pub folders: Vec<PathBuf>,
+    pub queries: Vec<String>,
+    pub replacements: Vec<String>,
+    pub grep_roots: Vec<String>,
 }
 
 impl History {
     pub fn parse(text: &str) -> Self {
         let mut history = Self::default();
-        let mut in_files = false;
-        let mut in_folders = false;
+        let mut section = "";
         for line in text.lines() {
             let line = line.trim_end_matches('\r');
             if line.is_empty() {
                 continue;
             }
             if line.starts_with('[') {
-                in_files = line == "[files]";
-                in_folders = line == "[folders]";
+                section = line;
                 continue;
             }
-            if in_files && history.files.len() < MAX_ENTRIES {
+            if section == "[files]" && history.files.len() < MAX_ENTRIES {
                 if let Some((encoding, path)) = line.split_once('\t') {
                     if !path.is_empty()
                         && !history
@@ -79,10 +87,24 @@ impl History {
                         });
                     }
                 }
-            } else if in_folders && history.folders.len() < MAX_ENTRIES {
+            } else if section == "[folders]" && history.folders.len() < MAX_ENTRIES {
                 let path = Path::new(line);
                 if !history.folders.iter().any(|d| same_path(d, path)) {
                     history.folders.push(path.to_path_buf());
+                }
+            } else {
+                let entries = match section {
+                    "[search]" => &mut history.queries,
+                    "[replace]" => &mut history.replacements,
+                    "[grep_roots]" => &mut history.grep_roots,
+                    _ => continue,
+                };
+                if entries.len() < MAX_INPUT_ENTRIES {
+                    if let Some(value) = line.strip_prefix('=').and_then(decode_input) {
+                        if !value.is_empty() && !entries.contains(&value) {
+                            entries.push(value);
+                        }
+                    }
                 }
             }
         }
@@ -97,6 +119,27 @@ impl History {
         text.push_str("[folders]\n");
         for d in &self.folders {
             text.push_str(&format!("{}\n", d.display()));
+        }
+        for (section, entries) in [
+            ("[search]", &self.queries),
+            ("[replace]", &self.replacements),
+            ("[grep_roots]", &self.grep_roots),
+        ] {
+            if entries.is_empty() {
+                continue;
+            }
+            text.push_str(section);
+            text.push('\n');
+            for value in entries {
+                text.push('=');
+                text.push_str(
+                    &value
+                        .replace('\\', "\\\\")
+                        .replace('\r', "\\r")
+                        .replace('\n', "\\n"),
+                );
+                text.push('\n');
+            }
         }
         text
     }
@@ -128,6 +171,9 @@ impl History {
             }
             Visit::RemoveFile(path) => self.files.retain(|f| !same_path(&f.path, path)),
             Visit::RemoveFolder(path) => self.folders.retain(|d| !same_path(d, path)),
+            Visit::Search(value) => remember_input(&mut self.queries, value),
+            Visit::Replace(value) => remember_input(&mut self.replacements, value),
+            Visit::GrepRoot(value) => remember_input(&mut self.grep_roots, value),
         }
     }
 
@@ -167,6 +213,33 @@ impl History {
         }
         Ok(history)
     }
+}
+
+fn remember_input(entries: &mut Vec<String>, value: &str) {
+    if value.is_empty() || entries.first().is_some_and(|entry| entry == value) {
+        return;
+    }
+    entries.retain(|entry| entry != value);
+    entries.insert(0, value.to_owned());
+    entries.truncate(MAX_INPUT_ENTRIES);
+}
+
+fn decode_input(value: &str) -> Option<String> {
+    let mut text = String::with_capacity(value.len());
+    let mut chars = value.chars();
+    while let Some(ch) = chars.next() {
+        text.push(if ch == '\\' {
+            match chars.next()? {
+                '\\' => '\\',
+                'r' => '\r',
+                'n' => '\n',
+                _ => return None,
+            }
+        } else {
+            ch
+        });
+    }
+    Some(text)
 }
 
 /// 記録するパス（`\\?\` を外し、相対パスは絶対パスにする）。改行・タブを含むものは記録しない。
@@ -256,6 +329,51 @@ mod tests {
         h.apply(Visit::Folder(&abs("dir")));
         assert_eq!(History::parse(&h.serialize()), h);
         assert_eq!(History::parse(""), History::default());
+    }
+
+    #[test]
+    fn input_history_survives_reload_and_moves_reused_values_to_front() {
+        let dir = std::env::temp_dir().join(format!("vz_input_history_{}", std::process::id()));
+        let file = dir.join(HISTORY_FILE);
+        let query = " [files] \t日本語 ";
+        let replacement = "=$1\r\n\\n";
+        let root = r"\\server\share\work";
+        History::record(
+            &file,
+            &[
+                Visit::Search(query),
+                Visit::Replace(replacement),
+                Visit::GrepRoot(root),
+                Visit::File(&abs("keep.txt"), "UTF-8"),
+            ],
+        )
+        .unwrap();
+        History::record(
+            &file,
+            &[
+                Visit::Search("次"),
+                Visit::Replace("次の置換"),
+                Visit::GrepRoot("次の場所"),
+            ],
+        )
+        .unwrap();
+        assert_eq!(History::load_from(&file).queries, ["次", query]);
+
+        History::record(
+            &file,
+            &[
+                Visit::Search(query),
+                Visit::Replace(replacement),
+                Visit::GrepRoot(root),
+            ],
+        )
+        .unwrap();
+        let restored = History::load_from(&file);
+        assert_eq!(restored.queries, [query, "次"]);
+        assert_eq!(restored.replacements, [replacement, "次の置換"]);
+        assert_eq!(restored.grep_roots, [root, "次の場所"]);
+        assert_eq!(restored.files[0].path, abs("keep.txt"));
+        fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

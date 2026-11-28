@@ -57,7 +57,7 @@ impl VzEditorApp {
         self.record_history(&visits);
     }
 
-    /// 他のプロセスが記録した分を含めて読み直す（ファイルメニューを開いたとき）。
+    /// 他のプロセスが記録した分を含めて読み直す。
     pub(super) fn reload_history(&mut self) {
         if let Some(file) = &self.history_file {
             self.history = History::load_from(file);
