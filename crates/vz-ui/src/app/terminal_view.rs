@@ -236,13 +236,7 @@ impl VzEditorApp {
                 let Some(term) = self.terminal.as_mut() else {
                     return;
                 };
-                let cell_w = ui.fonts(|f| {
-                    (f.layout_no_wrap("M".repeat(10), font_id.clone(), TEXT_WHITE)
-                        .size()
-                        .x
-                        / 10.0)
-                        .max(1.0)
-                });
+                let cell_w = cell_width(ui, &font_id);
                 let pad = 6.0;
                 let cols = ((avail.width() - pad * 2.0) / cell_w).floor().max(10.0) as u16;
                 let rows = ((avail.height() - pad * 2.0) / row_h).floor().max(2.0) as u16;

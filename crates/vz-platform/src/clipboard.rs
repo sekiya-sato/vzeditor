@@ -12,28 +12,19 @@ pub fn read_text() -> Option<String> {
 pub fn read_text() -> Option<String> {
     use std::process::Command;
 
+    let read = |bin: &str, args: &[&str]| {
+        let out = Command::new(bin).args(args).output().ok()?;
+        if !out.status.success() {
+            return None;
+        }
+        String::from_utf8(out.stdout).ok()
+    };
+
     if std::env::var_os("WAYLAND_DISPLAY").is_some() {
-        if let Ok(out) = Command::new("wl-paste").arg("--no-newline").output() {
-            if out.status.success() {
-                if let Ok(s) = String::from_utf8(out.stdout) {
-                    return Some(s);
-                }
-            }
+        if let Some(s) = read("wl-paste", &["--no-newline"]) {
+            return Some(s);
         }
     }
-
-    for (bin, args) in [
-        ("xclip", &["-o", "-selection", "clipboard"][..]),
-        ("xsel", &["--clipboard", "--output"][..]),
-    ] {
-        if let Ok(out) = Command::new(bin).args(args).output() {
-            if out.status.success() {
-                if let Ok(s) = String::from_utf8(out.stdout) {
-                    return Some(s);
-                }
-            }
-        }
-    }
-
-    None
+    read("xclip", &["-o", "-selection", "clipboard"])
+        .or_else(|| read("xsel", &["--clipboard", "--output"]))
 }

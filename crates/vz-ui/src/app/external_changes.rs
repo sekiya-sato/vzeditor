@@ -106,10 +106,7 @@ impl VzEditorApp {
     /// 衝突の確認の結果。`Some(true)`: vz の内容でファイルを上書き、`Some(false)`: ファイルの内容を採用、
     /// `None`: あとで決める（無題バッファを残し、次の保存して終了でも引き継ぐ）。
     pub(super) fn resolve_conflict(&mut self, path: &Path, adopt_vz: Option<bool>) {
-        let name = path
-            .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_else(|| path.display().to_string());
+        let name = file_name_or_path(path);
         let Some(u) = self
             .buffers
             .iter()

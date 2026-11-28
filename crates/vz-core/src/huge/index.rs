@@ -12,7 +12,6 @@ pub const LINE_STRIDE: u64 = 1024;
 pub const INDEX_CHUNK: u64 = 16 << 20;
 
 pub struct ChunkIndex {
-    pub start: u64,
     pub end: u64,
     /// チャンク先頭より前の改行数
     pub first_nl: u64,
@@ -29,7 +28,8 @@ pub struct LineIndex {
 }
 
 impl LineIndex {
-    /// その場で全体を作る（書き出しながら作る代わりや、テスト用）。
+    /// その場で全体を作る（テスト用）。
+    #[cfg(test)]
     pub fn build(data: &[u8], base: u64, chunk: u64) -> Self {
         let mut index = Self::default();
         let mut builder = Builder::new(data.len() as u64, chunk);
@@ -61,6 +61,7 @@ impl LineIndex {
         self.chunks.last().map_or(0, |c| c.end)
     }
 
+    #[cfg(test)]
     fn total_nl(&self) -> u64 {
         self.chunks.last().map_or(0, |c| c.first_nl + c.nl)
     }
@@ -111,14 +112,6 @@ impl LineIndex {
             pos += i as u64 + 1;
         }
         Some(pos)
-    }
-
-    /// 索引が使っているメモリの概算（バイト）。
-    pub fn heap_bytes(&self) -> usize {
-        self.chunks
-            .iter()
-            .map(|c| c.marks.capacity() * 8 + 48)
-            .sum()
     }
 }
 
@@ -188,9 +181,8 @@ fn build_batch(data: &[u8], base: u64, ranges: &[(u64, u64)], first_nl: u64) -> 
     ranges
         .iter()
         .zip(parts)
-        .map(|(&(start, end), (nl, marks))| {
+        .map(|(&(_, end), (nl, marks))| {
             let c = ChunkIndex {
-                start,
                 end,
                 first_nl: nl_acc,
                 nl,
@@ -265,8 +257,7 @@ impl IndexJob {
                     index.complete = true;
                     return true;
                 }
-                Err(TryRecvError::Empty) => return grew,
-                Err(TryRecvError::Disconnected) => return grew,
+                Err(TryRecvError::Empty | TryRecvError::Disconnected) => return grew,
             }
         }
     }

@@ -1,8 +1,7 @@
 //! エディターと Grep で共有する行単位の検索・置換。
 
-use crate::buffer::{char_to_byte_idx, TextBuffer, TextPos};
+use crate::buffer::{char_to_byte_idx, normalize_newlines, TextBuffer, TextPos};
 use regex::{Regex, RegexBuilder};
-use std::borrow::Cow;
 
 pub type TextRange = (TextPos, TextPos);
 
@@ -147,11 +146,7 @@ impl SearchPattern {
         scope: Option<TextRange>,
         replacement: &str,
     ) -> usize {
-        let replacement = if replacement.contains('\r') {
-            Cow::Owned(replacement.replace("\r\n", "\n").replace('\r', "\n"))
-        } else {
-            Cow::Borrowed(replacement)
-        };
+        let replacement = normalize_newlines(replacement);
         if buf.is_huge() {
             // 巨大ファイルは別の経路（作業ファイルへの書き出し）で置換する
             return 0;

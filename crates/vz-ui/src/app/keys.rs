@@ -52,21 +52,13 @@ impl VzEditorApp {
 
     /// サクラの切り取り（Ctrl+X / Shift+Del / F7）。選択が無ければ現在行を切り取る。
     pub(super) fn sakura_cut(&mut self) {
-        if self.view_mode_guard() {
-            return;
-        }
-        let had_selection = self.cur_buf().has_selection();
+        let what = if self.cur_buf().has_selection() {
+            "選択範囲"
+        } else {
+            "現在行"
+        };
         let (start, end) = self.selection_or_line_range();
-        if let Some(text) = self.cur_buf_mut().delete_range(start, end) {
-            self.copy_to_clipboard(text);
-            self.status_message = if had_selection {
-                "選択範囲を切り取りました".to_string()
-            } else {
-                "現在行を切り取りました".to_string()
-            };
-        }
-        self.select_mode = false;
-        self.need_scroll_to_cursor = true;
+        self.sakura_cut_range(start, end, false, what);
     }
 
     /// サクラのコピー（Ctrl+C / Ctrl+Ins / F8）。選択が無ければ現在行、ビューモードでは全文。

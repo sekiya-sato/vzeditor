@@ -686,11 +686,8 @@ impl VzEditorApp {
         }
         if let Some(dir) = session_dir {
             let ctx = cc.egui_ctx.clone();
-            app.release_watcher = session::release::Watcher::start(&dir, {
-                let ctx = ctx.clone();
-                move || ctx.request_repaint()
-            })
-            .ok();
+            app.release_watcher =
+                session::release::Watcher::start(&dir, move || ctx.request_repaint()).ok();
         }
         app.sync_window_title(&cc.egui_ctx);
         app
@@ -739,13 +736,8 @@ impl VzEditorApp {
     fn is_markdown_view(&self) -> bool {
         self.mode == AppMode::Editor && self.cur_slot().markdown.visible
     }
-
-    // --- Font Size Scaling ---
 }
 
-/// ウィンドウスタイル用ショートカットの判定。該当しなければ None。
-/// Alt+C の2打目 → 送信先。C: Claude Code、X: Codex、P: GitHub Desktop の Push、
-/// N / M: Claude Code / Codex の新規セッション。Ctrl 付きは取り消し。
 /// 画面中央に固定したダイアログ（折りたたみ・サイズ変更なし、枠線の色 `stroke`）。
 fn modal_window(
     ctx: &egui::Context,
@@ -803,6 +795,26 @@ fn same_file(p: &Path, raw: &Path, canon: &Path) -> bool {
     p == raw || canonical_or_self(p) == canon
 }
 
+/// ファイル名（無ければパス全体）。
+fn file_name_or_path(path: &Path) -> String {
+    path.file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| path.display().to_string())
+}
+
+/// 等幅フォントでの半角 1 文字の幅（10 文字分の幅から求める）。
+fn cell_width(ui: &egui::Ui, font_id: &FontId) -> f32 {
+    ui.fonts(|f| {
+        (f.layout_no_wrap("M".repeat(10), font_id.clone(), TEXT_WHITE)
+            .size()
+            .x
+            / 10.0)
+            .max(1.0)
+    })
+}
+
+/// Alt+C の2打目 → 送信先。C: Claude Code、X: Codex、P: GitHub Desktop の Push、
+/// N / M: Claude Code / Codex の新規セッション。Ctrl 付きは取り消し。
 fn send_target_for_key(key: Key, ctrl: bool) -> Option<SendTarget> {
     match (key, ctrl) {
         (Key::C, false) => Some(SendTarget::ClaudeCode),
@@ -814,6 +826,7 @@ fn send_target_for_key(key: Key, ctrl: bool) -> Option<SendTarget> {
     }
 }
 
+/// ウィンドウスタイル用ショートカットの判定。該当しなければ None。
 fn window_style_key_action(
     key: Key,
     physical_key: Option<Key>,
@@ -863,10 +876,15 @@ fn window_style_key_action(
     }
 }
 
+/// 表示幅（セル数。幅の分からない文字は 1）。
+fn display_cols(s: &str) -> usize {
+    use unicode_width::UnicodeWidthChar;
+    s.chars().map(|c| c.width().unwrap_or(1)).sum()
+}
+
 fn truncate_path_left(s: &str, max_cols: usize) -> Cow<'_, str> {
     use unicode_width::UnicodeWidthChar;
-    let total_w: usize = s.chars().map(|c| c.width().unwrap_or(1)).sum();
-    if total_w <= max_cols {
+    if display_cols(s) <= max_cols {
         return Cow::Borrowed(s);
     }
     let budget = max_cols.saturating_sub(3);
@@ -885,8 +903,7 @@ fn truncate_path_left(s: &str, max_cols: usize) -> Cow<'_, str> {
 
 fn truncate_display_right(s: &str, max_cols: usize) -> Cow<'_, str> {
     use unicode_width::UnicodeWidthChar;
-    let total_w: usize = s.chars().map(|c| c.width().unwrap_or(1)).sum();
-    if total_w <= max_cols {
+    if display_cols(s) <= max_cols {
         return Cow::Borrowed(s);
     }
     let budget = max_cols.saturating_sub(2);

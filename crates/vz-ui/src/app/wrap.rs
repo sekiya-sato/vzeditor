@@ -19,6 +19,31 @@ pub(super) fn wrap_breaks(line: &str, cols: usize) -> Vec<usize> {
     breaks
 }
 
+/// 表示行 [start, end) でカーソルを置ける終端。
+/// 最後以外の表示行の終端は次の表示行の先頭になるため、1文字手前までにする。
+pub(super) fn seg_cursor_limit(start: usize, end: usize, last: bool) -> usize {
+    if last || end == start {
+        end
+    } else {
+        end - 1
+    }
+}
+
+/// `text` の先頭から、表示幅 `x` セルに収まる文字数。
+fn chars_within_width(text: &str, x: usize) -> usize {
+    let mut acc = 0usize;
+    let mut n = 0usize;
+    for c in text.chars() {
+        let w = vz_core::buffer::char_display_width(c);
+        if acc + w > x {
+            break;
+        }
+        acc += w;
+        n += 1;
+    }
+    n
+}
+
 /// 巨大ファイルの折り返しで、長い行の表示行の開始位置の目印を何表示行ごとに取るか
 const HUGE_WRAP_STRIDE: usize = 1024;
 /// 巨大ファイルの折り返しで目印を覚えておく行の数
@@ -401,23 +426,10 @@ impl VzEditorApp {
             let (tl, tseg) = layout.line_of_row(target_row);
             let tlen = buf.line_char_len(tl);
             let (ts, te) = layout.seg_range(tl, tseg, tlen);
-            // 最後以外の表示行の終端は次の表示行の先頭になるため、1文字手前までにする
-            let limit = if layout.is_last_seg(tl, tseg) || te == ts {
-                te
-            } else {
-                te - 1
-            };
-            let mut acc = 0usize;
-            let mut tcol = ts;
-            for c in buf.line(tl).chars().skip(ts).take(limit - ts) {
-                let w = vz_core::buffer::char_display_width(c);
-                if acc + w > x {
-                    break;
-                }
-                acc += w;
-                tcol += 1;
-            }
-            (tl, tcol)
+            let limit = seg_cursor_limit(ts, te, layout.is_last_seg(tl, tseg));
+            let tline = buf.line(tl);
+            let seg_text = &tline[char_to_byte_idx(&tline, ts)..char_to_byte_idx(&tline, limit)];
+            (tl, ts + chars_within_width(seg_text, x))
         };
         self.cur_buf_mut().set_cursor(target_line, target_col);
         true
@@ -455,26 +467,9 @@ impl VzEditorApp {
         else {
             return true;
         };
-        // 最後以外の表示行の終端は次の表示行の先頭になるため、1文字手前までにする
-        let limit = if row.last || row.end == row.start {
-            row.end
-        } else {
-            row.end - 1
-        };
-        let mut acc = 0usize;
-        let mut tcol = row.start;
-        for c in buffer
-            .line_segment(row.line, row.start, limit - row.start)
-            .chars()
-        {
-            let w = vz_core::buffer::char_display_width(c);
-            if acc + w > x {
-                break;
-            }
-            acc += w;
-            tcol += 1;
-        }
-        buffer.set_cursor(row.line, tcol);
+        let limit = seg_cursor_limit(row.start, row.end, row.last);
+        let seg_text = buffer.line_segment(row.line, row.start, limit - row.start);
+        buffer.set_cursor(row.line, row.start + chars_within_width(&seg_text, x));
         true
     }
 

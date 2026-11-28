@@ -62,6 +62,64 @@ pub(super) struct InlineStyle {
     pub(super) strike: bool,
 }
 
+impl InlineStyle {
+    /// 太字・斜体・打消しの無い文字。
+    pub(super) fn plain(size: f32, color: Color32) -> Self {
+        Self {
+            size,
+            color,
+            bold: false,
+            italic: false,
+            strike: false,
+        }
+    }
+}
+
+/// 見出しの前の余白（先頭の見出しには付けない）。
+pub(super) fn heading_gap(level: u8, font_size: f32) -> f32 {
+    match level {
+        1 => font_size * 0.9,
+        2 => font_size * 0.75,
+        _ => font_size * 0.5,
+    }
+}
+
+/// 見出しの文字サイズと色。
+pub(super) fn heading_style(level: u8, font_size: f32) -> (f32, Color32) {
+    match level {
+        1 => (font_size * 1.65, MD_H1_COLOR),
+        2 => (font_size * 1.38, MD_H2_COLOR),
+        3 => (font_size * 1.18, MD_H3_COLOR),
+        _ => (font_size * 1.06, MD_H4_COLOR),
+    }
+}
+
+/// 箇条書きの記号と色（タスクはチェック欄、それ以外は字下げで記号を変える）。
+pub(super) fn bullet_marker(task: Option<bool>, indent: usize) -> (&'static str, Color32) {
+    match task {
+        Some(true) => ("☑", MD_CHECK_DONE),
+        Some(false) => ("☐", MD_CHECK_TODO),
+        None => match indent % 3 {
+            0 => ("•", MD_BULLET_COLOR),
+            1 => ("◦", MD_BULLET_COLOR),
+            _ => ("▪", MD_BULLET_COLOR),
+        },
+    }
+}
+
+/// 番号付きリストの番号の欄の幅。
+pub(super) fn ordered_marker_width(number: &str, font_size: f32) -> f32 {
+    ((number.len() as f32 + 0.8) * font_size * 0.65).max(font_size * 1.8)
+}
+
+/// 文字位置 idx にあるリンクの URL。
+fn link_at(links: &[(Range<usize>, String)], idx: usize) -> Option<&str> {
+    links
+        .iter()
+        .find(|(range, _)| range.contains(&idx))
+        .map(|(_, url)| url.as_str())
+}
+
 /// Build an egui `LayoutJob` from inline spans along with clickable link char ranges.
 pub(super) fn build_inline_job(
     inlines: &[MdInline],
@@ -216,20 +274,14 @@ fn paint_rich_inlines(
     };
     let (rect, resp) = ui.allocate_exact_size(size, sense);
 
-    let mut hovered_url: Option<&str> = None;
-    if !links.is_empty() {
-        if let Some(pointer_pos) = resp.hover_pos() {
-            let rel = pointer_pos - rect.min;
-            let cursor = galley.cursor_from_pos(rel);
-            let cidx = cursor.ccursor.index;
-            for (range, url) in &links {
-                if range.contains(&cidx) {
-                    hovered_url = Some(url.as_str());
-                    break;
-                }
-            }
-        }
-    }
+    let hovered_url = if links.is_empty() {
+        None
+    } else {
+        resp.hover_pos().and_then(|pointer_pos| {
+            let cidx = galley.cursor_from_pos(pointer_pos - rect.min).ccursor.index;
+            link_at(&links, cidx)
+        })
+    };
 
     if let Some(url) = hovered_url {
         ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
@@ -304,27 +356,15 @@ pub fn render_markdown_view(
                     match block {
                         MdBlock::Heading { level, inlines } => {
                             if idx > 0 {
-                                ui.add_space(match level {
-                                    1 => font_size * 0.9,
-                                    2 => font_size * 0.75,
-                                    _ => font_size * 0.5,
-                                });
+                                ui.add_space(heading_gap(*level, font_size));
                             }
-                            let (h_size, h_color) = match level {
-                                1 => (font_size * 1.65, MD_H1_COLOR),
-                                2 => (font_size * 1.38, MD_H2_COLOR),
-                                3 => (font_size * 1.18, MD_H3_COLOR),
-                                _ => (font_size * 1.06, MD_H4_COLOR),
-                            };
+                            let (h_size, h_color) = heading_style(*level, font_size);
                             paint_rich_inlines(
                                 ui,
                                 inlines,
                                 InlineStyle {
-                                    size: h_size,
-                                    color: h_color,
                                     bold: true,
-                                    italic: false,
-                                    strike: false,
+                                    ..InlineStyle::plain(h_size, h_color)
                                 },
                                 content_max_w,
                                 &mut clicked_url,
@@ -352,13 +392,7 @@ pub fn render_markdown_view(
                             paint_rich_inlines(
                                 ui,
                                 inlines,
-                                InlineStyle {
-                                    size: font_size,
-                                    color: MD_TEXT_BODY,
-                                    bold: false,
-                                    italic: false,
-                                    strike: false,
-                                },
+                                InlineStyle::plain(font_size, MD_TEXT_BODY),
                                 content_max_w,
                                 &mut clicked_url,
                             );
@@ -422,15 +456,7 @@ pub fn render_markdown_view(
                                 if indent_px > 0.0 {
                                     ui.add_space(indent_px);
                                 }
-                                let (marker, color) = match task {
-                                    Some(true) => ("☑", MD_CHECK_DONE),
-                                    Some(false) => ("☐", MD_CHECK_TODO),
-                                    None => match indent % 3 {
-                                        0 => ("•", MD_BULLET_COLOR),
-                                        1 => ("◦", MD_BULLET_COLOR),
-                                        _ => ("▪", MD_BULLET_COLOR),
-                                    },
-                                };
+                                let (marker, color) = bullet_marker(*task, *indent);
                                 ui.allocate_ui_with_layout(
                                     Vec2::new(marker_w, font_size * 1.3),
                                     egui::Layout::left_to_right(egui::Align::TOP),
@@ -445,13 +471,7 @@ pub fn render_markdown_view(
                                 paint_rich_inlines(
                                     ui,
                                     inlines,
-                                    InlineStyle {
-                                        size: font_size,
-                                        color: MD_TEXT_BODY,
-                                        bold: false,
-                                        italic: false,
-                                        strike: false,
-                                    },
+                                    InlineStyle::plain(font_size, MD_TEXT_BODY),
                                     text_w,
                                     &mut clicked_url,
                                 );
@@ -465,8 +485,7 @@ pub fn render_markdown_view(
                             inlines,
                         } => {
                             let indent_px = (*indent as f32) * (font_size * 1.35);
-                            let marker_w = ((number.len() as f32 + 0.8) * font_size * 0.65)
-                                .max(font_size * 1.8);
+                            let marker_w = ordered_marker_width(number, font_size);
                             let text_w = (content_max_w - indent_px - marker_w).max(80.0);
 
                             ui.horizontal_top(|ui| {
@@ -489,13 +508,7 @@ pub fn render_markdown_view(
                                 paint_rich_inlines(
                                     ui,
                                     inlines,
-                                    InlineStyle {
-                                        size: font_size,
-                                        color: MD_TEXT_BODY,
-                                        bold: false,
-                                        italic: false,
-                                        strike: false,
-                                    },
+                                    InlineStyle::plain(font_size, MD_TEXT_BODY),
                                     text_w,
                                     &mut clicked_url,
                                 );
@@ -515,11 +528,8 @@ pub fn render_markdown_view(
                             let (job, links) = build_inline_job(
                                 inlines,
                                 InlineStyle {
-                                    size: font_size,
-                                    color: MD_QUOTE_TEXT,
-                                    bold: false,
                                     italic: true,
-                                    strike: false,
+                                    ..InlineStyle::plain(font_size, MD_QUOTE_TEXT)
                                 },
                                 quote_w,
                             );
@@ -549,15 +559,12 @@ pub fn render_markdown_view(
                                 if let Some(ptr) = resp.hover_pos() {
                                     let rel = ptr - text_origin;
                                     let cidx = galley.cursor_from_pos(rel).ccursor.index;
-                                    for (range, url) in &links {
-                                        if range.contains(&cidx) {
-                                            ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
-                                            if resp.clicked() {
-                                                clicked_url = Some(url.clone());
-                                            }
-                                            resp.on_hover_text(url);
-                                            break;
+                                    if let Some(url) = link_at(&links, cidx) {
+                                        ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
+                                        if resp.clicked() {
+                                            clicked_url = Some(url.to_string());
                                         }
+                                        resp.on_hover_text(url);
                                     }
                                 }
                             }
@@ -638,6 +645,7 @@ fn render_markdown_table(
                      bg: Color32,
                      is_header: bool,
                      clicked_url: &mut Option<String>| {
+        let text_color = if is_header { MD_H2_COLOR } else { MD_TEXT_BODY };
         let mut galleys = Vec::with_capacity(col_count);
         let mut row_links = Vec::with_capacity(col_count);
         let mut max_h = cell_font * 1.25;
@@ -647,11 +655,8 @@ fn render_markdown_table(
             let (job, links) = build_inline_job(
                 cell_inlines,
                 InlineStyle {
-                    size: cell_font,
-                    color: if is_header { MD_H2_COLOR } else { MD_TEXT_BODY },
                     bold: is_header,
-                    italic: false,
-                    strike: false,
+                    ..InlineStyle::plain(cell_font, text_color)
                 },
                 inner_w,
             );
@@ -699,24 +704,17 @@ fn render_markdown_table(
                     if let Some(ptr) = resp.hover_pos() {
                         if ptr.x >= cell_x && ptr.x <= cell_x + col_w {
                             let cidx = galley.cursor_from_pos(ptr - text_pos).ccursor.index;
-                            for (range, url) in &row_links[c] {
-                                if range.contains(&cidx) {
-                                    ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
-                                    if resp.clicked() {
-                                        *clicked_url = Some(url.clone());
-                                    }
-                                    break;
+                            if let Some(url) = link_at(&row_links[c], cidx) {
+                                ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
+                                if resp.clicked() {
+                                    *clicked_url = Some(url.to_string());
                                 }
                             }
                         }
                     }
                 }
 
-                p.galley(
-                    text_pos,
-                    galley,
-                    if is_header { MD_H2_COLOR } else { MD_TEXT_BODY },
-                );
+                p.galley(text_pos, galley, text_color);
             }
         }
     };

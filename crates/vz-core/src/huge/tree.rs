@@ -59,7 +59,7 @@ enum Node {
 }
 
 /// 位置の検索結果: ピース番号・ピース（末尾なら None）・ピースの文書内開始位置・それより前の改行数
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Default)]
 pub struct Hit {
     pub idx: u64,
     pub piece: Option<Piece>,
@@ -124,16 +124,6 @@ impl Tree {
 
     pub fn total(&self) -> Sum {
         self.node_sum(self.root)
-    }
-
-    pub fn depth(&self) -> usize {
-        let mut d = 1;
-        let mut id = self.root;
-        while let Node::Inner(c) = &self.nodes[id as usize] {
-            id = c[0].id;
-            d += 1;
-        }
-        d
     }
 
     // ---- 挿入 ----
@@ -373,13 +363,7 @@ impl Tree {
             return None;
         }
         let mut id = self.root;
-        let mut hit = Hit {
-            idx: 0,
-            piece: None,
-            start: 0,
-            nl_before: 0,
-            pending_before: false,
-        };
+        let mut hit = Hit::default();
         loop {
             match &self.nodes[id as usize] {
                 Node::Leaf(v) => {
@@ -420,13 +404,7 @@ impl Tree {
             };
         }
         let (mut id, mut rem) = (self.root, off);
-        let mut hit = Hit {
-            idx: 0,
-            piece: None,
-            start: 0,
-            nl_before: 0,
-            pending_before: false,
-        };
+        let mut hit = Hit::default();
         loop {
             match &self.nodes[id as usize] {
                 Node::Leaf(v) => {
@@ -467,13 +445,7 @@ impl Tree {
             return None;
         }
         let (mut id, mut rem) = (self.root, k);
-        let mut hit = Hit {
-            idx: 0,
-            piece: None,
-            start: 0,
-            nl_before: 0,
-            pending_before: false,
-        };
+        let mut hit = Hit::default();
         loop {
             match &self.nodes[id as usize] {
                 Node::Leaf(v) => {

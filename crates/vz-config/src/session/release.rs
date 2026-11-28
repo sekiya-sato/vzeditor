@@ -1,12 +1,12 @@
 //! リリースに限って、旧 PID ごとの状態を終了前に受け渡す。
 
-use super::{read_session, SessionEntry, SessionWindow};
+use super::{read_session, unix_nanos, SessionEntry, SessionWindow};
 use std::fs::{self, File, OpenOptions, TryLockError};
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant};
 
 pub const STARTUP_TIMEOUT: Duration = Duration::from_secs(90);
 
@@ -276,11 +276,7 @@ impl Watcher {
         fs::create_dir_all(&dir)?;
         let lock = lock_file(&dir.join("active"))?;
         try_lock(&lock)?;
-        let token = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos()
-            .to_string();
+        let token = unix_nanos().to_string();
         fs::write(dir.join("token"), &token)?;
         let stopping = Arc::new(AtomicBool::new(false));
         let stop = Arc::clone(&stopping);

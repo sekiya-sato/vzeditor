@@ -70,11 +70,7 @@ impl TextEncoding {
 
     /// BOM を除いて UTF-8 の文字列にする（不正なバイトは U+FFFD）。
     pub fn decode(self, bytes: &[u8]) -> Cow<'_, str> {
-        let body = bytes.strip_prefix(self.bom()).unwrap_or(bytes);
-        match self {
-            Self::Utf8 | Self::Utf8Bom => String::from_utf8_lossy(body),
-            Self::ShiftJis => SHIFT_JIS.decode_without_bom_handling(body).0,
-        }
+        self.decode_body(bytes.strip_prefix(self.bom()).unwrap_or(bytes))
     }
 
     /// 本文の一部（BOM を含まない）を UTF-8 の文字列にする。

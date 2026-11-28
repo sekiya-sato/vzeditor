@@ -142,7 +142,7 @@ pub fn unencodable_error(
 }
 
 /// 改行（\r\n・\r）を \n にそろえる。\r が無ければコピーしない。
-fn normalize_newlines(s: &str) -> Cow<'_, str> {
+pub(crate) fn normalize_newlines(s: &str) -> Cow<'_, str> {
     if s.contains('\r') {
         Cow::Owned(s.replace("\r\n", "\n").replace('\r', "\n"))
     } else {
@@ -241,22 +241,13 @@ impl TextBuffer {
         }
         let (lines, line_ending, encoding) = read_document(path)?;
         Ok(Self {
-            huge: None,
-            error: None,
-            typing_at: None,
             lines,
-            cursor_line: 0,
-            cursor_col: 0,
-            preferred_visual_col: None,
             file_path: Some(path.to_path_buf()),
-            dirty: false,
             revision: 1,
             encoding,
             line_ending,
-            undo_stack: VecDeque::new(),
-            redo_stack: Vec::new(),
-            anchor: None,
             disk_stamp: stamp,
+            ..Self::new()
         })
     }
 

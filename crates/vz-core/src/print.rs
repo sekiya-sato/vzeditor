@@ -132,8 +132,7 @@ impl PageSetup {
 
     /// 1 行に入る半角の桁数（行番号の欄を含む）。
     pub fn body_cols(&self) -> usize {
-        let (w, _) = self.paper_pt();
-        ((w - 2.0 * self.margin_pt()) / self.cell_pt()).floor() as usize
+        (self.body_width_pt() / self.cell_pt()).floor() as usize
     }
 
     /// 1 ページの行数。

@@ -16,6 +16,15 @@ pub use vt100;
 /// 保持するスクロールバックの行数
 const SCROLLBACK_LINES: usize = 5000;
 
+fn pty_size(rows: u16, cols: u16) -> PtySize {
+    PtySize {
+        rows,
+        cols,
+        pixel_width: 0,
+        pixel_height: 0,
+    }
+}
+
 /// 画面モデルからの通知（タイトル変更と、端末への応答）。
 #[derive(Default)]
 struct Hooks {
@@ -78,12 +87,7 @@ impl Terminal {
     ) -> Result<Self, String> {
         let (rows, cols) = (rows.max(2), cols.max(10));
         let pair = native_pty_system()
-            .openpty(PtySize {
-                rows,
-                cols,
-                pixel_width: 0,
-                pixel_height: 0,
-            })
+            .openpty(pty_size(rows, cols))
             .map_err(|e| format!("PTY を作れません: {e}"))?;
 
         // 正規化したパスの \\?\ は WSL・cmd が扱えないので外す
@@ -185,11 +189,7 @@ impl Terminal {
         }
         // Windows の ConPTY は子が終わっても EOF にならないことがあるので、プロセスも見る
         if self.exit_code.is_none() {
-            let exited = match self.child.try_wait() {
-                Ok(Some(status)) => Some(status.exit_code()),
-                Ok(None) => None,
-                Err(_) => closed.then_some(0),
-            };
+            let exited = self.child.try_wait().ok().flatten().map(|s| s.exit_code());
             if exited.is_some() || closed {
                 self.exit_code = exited.or(Some(0));
                 changed = true;
@@ -261,12 +261,7 @@ impl Terminal {
             return;
         }
         self.parser.screen_mut().set_size(rows, cols);
-        let _ = self.master.resize(PtySize {
-            rows,
-            cols,
-            pixel_width: 0,
-            pixel_height: 0,
-        });
+        let _ = self.master.resize(pty_size(rows, cols));
     }
 
     pub fn screen(&self) -> &vt100::Screen {
@@ -378,8 +373,7 @@ mod tests {
 
     #[test]
     fn test_dsr_is_answered_with_cursor_position() {
-        let mut hooks = Hooks::default();
-        let mut parser = vt100::Parser::new_with_callbacks(5, 20, 0, std::mem::take(&mut hooks));
+        let mut parser = vt100::Parser::new_with_callbacks(5, 20, 0, Hooks::default());
         parser.process(b"ab\x1b[6n");
         assert_eq!(parser.callbacks().replies, b"\x1b[1;3R");
     }

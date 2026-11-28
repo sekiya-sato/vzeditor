@@ -4,6 +4,7 @@
 
 use super::tree::{Piece, Src};
 use super::{Change, HugeDoc, INDEX_CHUNK};
+use crate::buffer::file_stamp;
 use crate::encoding::TextEncoding;
 use memchr::memchr_iter;
 use std::fs::File;
@@ -12,12 +13,6 @@ use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const MAGIC: &[u8; 8] = b"VZEDIT1\n";
-
-/// ファイルの状態（更新日時, サイズ）。
-pub(super) fn disk_stamp(path: &Path) -> Option<(SystemTime, u64)> {
-    let meta = std::fs::metadata(path).ok()?;
-    Some((meta.modified().ok()?, meta.len()))
-}
 
 fn nanos(t: SystemTime) -> u64 {
     t.duration_since(UNIX_EPOCH)
@@ -46,7 +41,7 @@ impl HugeDoc {
         let stamp = self
             .opened_stamp
             .ok_or_else(|| bad("元ファイルの状態が分かりません"))?;
-        if disk_stamp(path) != Some(stamp) {
+        if file_stamp(path) != Some(stamp) {
             return Err(bad("元ファイルが開いた後に変わっています"));
         }
         let snap = self.doc_snapshot();
@@ -90,7 +85,7 @@ impl HugeDoc {
             return Err(bad("一時保存した編集内容の形式が違います"));
         }
         let (mtime, len) = (get(&mut r)?, get(&mut r)?);
-        let now = disk_stamp(path).ok_or_else(|| bad("元ファイルを開けません"))?;
+        let now = file_stamp(path).ok_or_else(|| bad("元ファイルを開けません"))?;
         if (nanos(now.0), now.1) != (mtime, len) {
             return Err(bad(
                 "元ファイルが一時保存の後に変わったため、未保存の編集を戻せません",

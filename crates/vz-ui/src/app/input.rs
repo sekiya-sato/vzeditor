@@ -41,23 +41,20 @@ impl VzEditorApp {
                     self.status_message = "現在行を削除しました (^Y)".to_string();
                 }
             }
-            EditorAction::MoveWordLeft => {
+            EditorAction::MoveWordLeft | EditorAction::MoveWordRight => {
+                let right = action == EditorAction::MoveWordRight;
                 if in_md_view {
+                    // Markdown ビューでは半ページ分スクロールする
                     let step =
                         (self.cur_slot().markdown.viewport_h * 0.5).max(self.line_height * 4.0);
-                    self.scroll_markdown_by(-step);
+                    self.scroll_markdown_by(if right { step } else { -step });
                 } else {
-                    self.cur_buf_mut().move_word_left();
-                    self.need_scroll_to_cursor = true;
-                }
-            }
-            EditorAction::MoveWordRight => {
-                if in_md_view {
-                    let step =
-                        (self.cur_slot().markdown.viewport_h * 0.5).max(self.line_height * 4.0);
-                    self.scroll_markdown_by(step);
-                } else {
-                    self.cur_buf_mut().move_word_right();
+                    let buf = self.cur_buf_mut();
+                    if right {
+                        buf.move_word_right();
+                    } else {
+                        buf.move_word_left();
+                    }
                     self.need_scroll_to_cursor = true;
                 }
             }
@@ -584,11 +581,7 @@ impl VzEditorApp {
                             }
                             // Multi-buffer switch (裏画面切替): Ctrl+W / Ctrl+Shift+W
                             Key::W => {
-                                if modifiers.shift {
-                                    self.switch_buffer_step(-1);
-                                } else {
-                                    self.switch_buffer_step(1);
-                                }
+                                self.switch_buffer_step(if modifiers.shift { -1 } else { 1 });
                                 true
                             }
                             // Delete current line: Ctrl+Y
@@ -663,69 +656,31 @@ impl VzEditorApp {
                         if in_md_view {
                             // サクラ互換と同じスクロール（Ctrl なし）
                             self.md_view_key(key, false);
-                        } else {
-                            match key {
-                                Key::ArrowUp => {
-                                    self.cursor_up();
-                                    self.need_scroll_to_cursor = true;
-                                }
-                                Key::ArrowDown => {
-                                    self.cursor_down();
-                                    self.need_scroll_to_cursor = true;
-                                }
-                                Key::ArrowLeft => {
-                                    self.cur_buf_mut().move_left();
-                                    self.need_scroll_to_cursor = true;
-                                }
-                                Key::ArrowRight => {
-                                    self.cur_buf_mut().move_right();
-                                    self.need_scroll_to_cursor = true;
-                                }
-                                Key::Home => {
-                                    self.cur_buf_mut().move_line_start();
-                                    self.need_scroll_to_cursor = true;
-                                }
-                                Key::End => {
-                                    self.cur_buf_mut().move_line_end();
-                                    self.need_scroll_to_cursor = true;
-                                }
-                                Key::PageUp => {
-                                    let lines = self.last_visible_lines;
-                                    self.cur_buf_mut().move_page_up(lines);
-                                    self.need_scroll_to_cursor = true;
-                                }
-                                Key::PageDown => {
-                                    let lines = self.last_visible_lines;
-                                    self.cur_buf_mut().move_page_down(lines);
-                                    self.need_scroll_to_cursor = true;
-                                }
-                                // Enter は自動インデント、Shift+Enter は行頭から
-                                Key::Enter if modifiers.shift => {
-                                    self.cur_buf_mut().insert_newline();
-                                    self.need_scroll_to_cursor = true;
-                                }
-                                Key::Enter => {
-                                    self.cur_buf_mut().insert_newline_with_indent();
-                                    self.need_scroll_to_cursor = true;
-                                }
-                                Key::Backspace => {
-                                    self.cur_buf_mut().backspace();
-                                    self.need_scroll_to_cursor = true;
-                                }
-                                Key::Delete => {
-                                    self.cur_buf_mut().delete_char_at_cursor();
-                                    self.need_scroll_to_cursor = true;
-                                }
-                                Key::Tab => {
-                                    self.cur_buf_mut().insert_text("\t");
-                                    self.need_scroll_to_cursor = true;
-                                }
-                                Key::Insert => {
-                                    self.toggle_overwrite_mode();
-                                }
-                                _ => {}
-                            }
+                            continue;
                         }
+                        let lines = self.last_visible_lines;
+                        match key {
+                            Key::ArrowUp => self.cursor_up(),
+                            Key::ArrowDown => self.cursor_down(),
+                            Key::ArrowLeft => self.cur_buf_mut().move_left(),
+                            Key::ArrowRight => self.cur_buf_mut().move_right(),
+                            Key::Home => self.cur_buf_mut().move_line_start(),
+                            Key::End => self.cur_buf_mut().move_line_end(),
+                            Key::PageUp => self.cur_buf_mut().move_page_up(lines),
+                            Key::PageDown => self.cur_buf_mut().move_page_down(lines),
+                            // Enter は自動インデント、Shift+Enter は行頭から
+                            Key::Enter if modifiers.shift => self.cur_buf_mut().insert_newline(),
+                            Key::Enter => self.cur_buf_mut().insert_newline_with_indent(),
+                            Key::Backspace => self.cur_buf_mut().backspace(),
+                            Key::Delete => self.cur_buf_mut().delete_char_at_cursor(),
+                            Key::Tab => self.cur_buf_mut().insert_text("\t"),
+                            Key::Insert => {
+                                self.toggle_overwrite_mode();
+                                continue;
+                            }
+                            _ => continue,
+                        }
+                        self.need_scroll_to_cursor = true;
                     }
                 }
 
@@ -878,6 +833,4 @@ impl VzEditorApp {
             }
         }
     }
-
-    // --- Compact VZ-Styled Top Menu Bar (VZ Keybinding Safe) ---
 }

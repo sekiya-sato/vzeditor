@@ -288,19 +288,14 @@ impl VzEditorApp {
                     let temp = e.temp.clone().unwrap_or_default();
                     match fs::read_to_string(&temp) {
                         Ok(text) => {
-                            let mut buf = TextBuffer::from_lines(
-                                text.split('\n').map(String::from).collect(),
-                            );
+                            let mut buf = unsaved_buffer(&text, e.crlf);
                             buf.file_path = e.path.clone();
-                            buf.line_ending = if e.crlf { "\r\n" } else { "\n" };
                             if let Some(enc) =
                                 e.encoding.as_deref().and_then(TextEncoding::from_label)
                             {
                                 buf.encoding = enc;
                             }
                             buf.disk_stamp = stamp_from_record(e.disk_stamp);
-                            buf.dirty = true;
-                            buf.revision = 1;
                             self.add_buffer(buf);
                             if !defer_cleanup {
                                 let _ = fs::remove_file(&temp);
@@ -336,13 +331,7 @@ impl VzEditorApp {
                     let origin = e.path.clone().unwrap_or_default();
                     match fs::read_to_string(&temp) {
                         Ok(text) => {
-                            let mut buf = TextBuffer::from_lines(
-                                text.split('\n').map(String::from).collect(),
-                            );
-                            buf.line_ending = if e.crlf { "\r\n" } else { "\n" };
-                            buf.dirty = true;
-                            buf.revision = 1;
-                            self.add_buffer(buf);
+                            self.add_buffer(unsaved_buffer(&text, e.crlf));
                             self.cur_slot_mut().conflict_of = Some(origin.clone());
                             self.conflict_queue.push(origin);
                             if !defer_cleanup {
@@ -414,8 +403,17 @@ impl VzEditorApp {
     }
 }
 
+/// 一時保存した本文から、未保存（編集済み）のバッファを作る。
+fn unsaved_buffer(text: &str, crlf: bool) -> TextBuffer {
+    let mut buf = TextBuffer::from_lines(text.split('\n').map(String::from).collect());
+    buf.line_ending = if crlf { "\r\n" } else { "\n" };
+    buf.dirty = true;
+    buf.revision = 1;
+    buf
+}
+
 /// ファイラー・ターミナル・ブラウザの保存項目。
-fn tool_entry(kind: EntryKind, active: bool, path: Option<PathBuf>) -> SessionEntry {
+pub(super) fn tool_entry(kind: EntryKind, active: bool, path: Option<PathBuf>) -> SessionEntry {
     SessionEntry {
         kind,
         line: 0,

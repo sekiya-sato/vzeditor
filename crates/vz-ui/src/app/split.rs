@@ -44,20 +44,25 @@ pub(super) struct SplitView {
 }
 
 impl BufferSlot {
+    /// 操作中のペインの表示状態。
+    fn current_pane(&self) -> PaneView {
+        PaneView {
+            cursor: self.buffer.cursor_pos(),
+            anchor: self.buffer.anchor,
+            scroll_x: self.scroll_x,
+            scroll_y: self.scroll_y,
+        }
+    }
+
     /// 操作中のペインと、もう一方のペインの状態を入れ替える。
     /// 相手側の位置は、その後の編集で範囲外になっていれば文書内に収める。
     pub(super) fn swap_split_pane(&mut self) {
+        let mine = self.current_pane();
         let Some(split) = self.split.as_mut() else {
             return;
         };
-        let buf = &mut self.buffer;
-        let mine = PaneView {
-            cursor: (buf.cursor_line, buf.cursor_col),
-            anchor: buf.anchor,
-            scroll_x: self.scroll_x,
-            scroll_y: self.scroll_y,
-        };
         let other = std::mem::replace(&mut split.other, mine);
+        let buf = &mut self.buffer;
         buf.set_cursor(other.cursor.0, other.cursor.1);
         buf.anchor = other.anchor.map(|(line, col)| {
             let line = line.min(buf.line_count().saturating_sub(1));
@@ -173,16 +178,10 @@ impl VzEditorApp {
         if slot.split.take().is_some() {
             self.status_message = "分割表示: オフ".to_string();
         } else {
-            let buf = &slot.buffer;
             slot.split = Some(SplitView {
                 ratio: 0.5,
                 active_top: false,
-                other: PaneView {
-                    cursor: (buf.cursor_line, buf.cursor_col),
-                    anchor: buf.anchor,
-                    scroll_x: slot.scroll_x,
-                    scroll_y: slot.scroll_y,
-                },
+                other: slot.current_pane(),
             });
             self.status_message =
                 "分割表示: オン（Alt+O でペイン切替、境界のドラッグで高さ変更）".to_string();

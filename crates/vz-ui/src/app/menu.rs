@@ -88,6 +88,7 @@ impl VzEditorApp {
         let can_edit = in_editor && !in_md_view;
         let sakura = self.is_sakura();
         let split_on = in_editor && self.cur_slot().split.is_some();
+        let can_send = self.pending_send.is_none();
         let sc = |sakura_key: &'static str, vz_key: &'static str| {
             if sakura {
                 sakura_key
@@ -497,31 +498,31 @@ impl VzEditorApp {
                             label: "Claude Code へ送信",
                             shortcut: "Alt+C → C",
                             action: MenuAction::SendToClaudeCode,
-                            enabled: self.pending_send.is_none(),
+                            enabled: can_send,
                         },
                         MenuEntry::Item {
                             label: "Codex へ送信",
                             shortcut: "Alt+C → X",
                             action: MenuAction::SendToCodex,
-                            enabled: self.pending_send.is_none(),
+                            enabled: can_send,
                         },
                         MenuEntry::Item {
                             label: "Claude Code で新規セッション",
                             shortcut: "Alt+C → N",
                             action: MenuAction::NewSessionClaudeCode,
-                            enabled: self.pending_send.is_none(),
+                            enabled: can_send,
                         },
                         MenuEntry::Item {
                             label: "Codex で新規セッション",
                             shortcut: "Alt+C → M",
                             action: MenuAction::NewSessionCodex,
-                            enabled: self.pending_send.is_none(),
+                            enabled: can_send,
                         },
                         MenuEntry::Item {
                             label: "GitHub Desktop で Push",
                             shortcut: "Alt+C → P",
                             action: MenuAction::PushGitHubDesktop,
-                            enabled: self.pending_send.is_none(),
+                            enabled: can_send,
                         },
                     ],
                 },
@@ -880,14 +881,10 @@ impl VzEditorApp {
         self.submenu_selected_idx = self.submenu_selected_idx.min(remaining.saturating_sub(1));
     }
 
-    // --- Editor Actions ---
-
     pub(super) fn render_menu_bar(&mut self, ctx: &egui::Context) {
         if self.open_menu.is_some() {
             // Keep IME off while navigating an open menu so arrows / Enter / ESC stay crisp
-            ctx.output_mut(|o| {
-                o.ime = None;
-            });
+            ctx.output_mut(|o| o.ime = None);
         }
 
         let mut header_rects = TopMenu::ALL.map(|menu| (menu, Rect::NOTHING));
@@ -1300,8 +1297,6 @@ impl VzEditorApp {
         }
     }
 
-    // --- Status Bar & Multi-Buffer Strip ---
-
     /// メニューバー右端の [最前面] [透過 n%] 表示。クリックで切替、透過表示は右クリックで濃くする。
     pub(super) fn paint_window_style_controls(
         ui: &mut egui::Ui,
@@ -1309,79 +1304,42 @@ impl VzEditorApp {
         text_opacity: u8,
         always_on_top: bool,
     ) -> Option<MenuAction> {
-        let mut cmd = None;
         let top_resp = ui
-            .add(
-                egui::Button::new(
-                    egui::RichText::new(if always_on_top { "TOP" } else { "top" })
-                        .font(FontId::monospace(12.5))
-                        .strong()
-                        .color(if always_on_top {
-                            TEXT_AMBER
-                        } else {
-                            TEXT_DIM_CYAN
-                        }),
-                )
-                .fill(BG_TAB_INACTIVE)
-                .stroke(Stroke::new(1.0_f32, BORDER_BLUE)),
-            )
+            .add(bar_button(
+                egui::RichText::new(if always_on_top { "TOP" } else { "top" })
+                    .font(FontId::monospace(12.5))
+                    .strong()
+                    .color(if always_on_top {
+                        TEXT_AMBER
+                    } else {
+                        TEXT_DIM_CYAN
+                    }),
+            ))
             .on_hover_text("最前面固定の切替 (Alt+T)");
-        if top_resp.clicked() {
-            cmd = Some(MenuAction::ToggleAlwaysOnTop);
-        }
-        let op_resp = ui
-            .add(
-                egui::Button::new(
-                    egui::RichText::new(format!("背{:>3}%", opacity))
-                        .font(FontId::monospace(12.5))
-                        .color(if opacity < window_style::MAX_OPACITY {
-                            TEXT_AMBER
-                        } else {
-                            TEXT_DIM_CYAN
-                        }),
-                )
-                .fill(BG_TAB_INACTIVE)
-                .stroke(Stroke::new(1.0_f32, BORDER_BLUE)),
-            )
-            .on_hover_text("背景の不透明度: クリックで薄く / 右クリック・Shift+クリックで濃く (Alt+↓ / Alt+↑ / Alt+0)");
-        // Shift+クリックは右クリックと同じく濃くする
-        let shift = ui.input(|i| i.modifiers.shift);
-        if op_resp.secondary_clicked() || (shift && op_resp.clicked()) {
-            cmd = Some(MenuAction::OpacityUp);
-        } else if op_resp.clicked() {
-            cmd = Some(if opacity <= window_style::MIN_OPACITY {
-                MenuAction::OpacityReset
-            } else {
-                MenuAction::OpacityDown
-            });
-        }
-        let text_resp = ui
-            .add(
-                egui::Button::new(
-                    egui::RichText::new(format!("字{:>3}%", text_opacity))
-                        .font(FontId::monospace(12.5))
-                        .color(if text_opacity < window_style::MAX_OPACITY {
-                            TEXT_AMBER
-                        } else {
-                            TEXT_DIM_CYAN
-                        }),
-                )
-                .fill(BG_TAB_INACTIVE)
-                .stroke(Stroke::new(1.0_f32, BORDER_BLUE)),
-            )
-            .on_hover_text(
-                "文字の不透明度: クリックで薄く / 右クリック・Shift+クリックで濃く (Alt+Shift+- / Alt+Shift++ / Alt+Shift+0)",
-            );
-        if text_resp.secondary_clicked() || (shift && text_resp.clicked()) {
-            cmd = Some(MenuAction::TextOpacityUp);
-        } else if text_resp.clicked() {
-            cmd = Some(if text_opacity <= window_style::MIN_OPACITY {
-                MenuAction::TextOpacityReset
-            } else {
-                MenuAction::TextOpacityDown
-            });
-        }
-        cmd
+        let top_cmd = top_resp.clicked().then_some(MenuAction::ToggleAlwaysOnTop);
+        let op_cmd = opacity_button(
+            ui,
+            "背",
+            opacity,
+            "背景の不透明度: クリックで薄く / 右クリック・Shift+クリックで濃く (Alt+↓ / Alt+↑ / Alt+0)",
+            [
+                MenuAction::OpacityUp,
+                MenuAction::OpacityDown,
+                MenuAction::OpacityReset,
+            ],
+        );
+        let text_cmd = opacity_button(
+            ui,
+            "字",
+            text_opacity,
+            "文字の不透明度: クリックで薄く / 右クリック・Shift+クリックで濃く (Alt+Shift+- / Alt+Shift++ / Alt+Shift+0)",
+            [
+                MenuAction::TextOpacityUp,
+                MenuAction::TextOpacityDown,
+                MenuAction::TextOpacityReset,
+            ],
+        );
+        text_cmd.or(op_cmd).or(top_cmd)
     }
 
     pub(super) fn paint_font_size_controls(ui: &mut egui::Ui, font_size: f32) -> Option<i8> {
@@ -1390,25 +1348,12 @@ impl VzEditorApp {
         let mut cmd: Option<i8> = None;
         let is_default = (font_size - DEFAULT_FONT_SIZE).abs() < 0.1;
 
-        let plus_resp = ui
-            .add(
-                egui::Button::new(
-                    egui::RichText::new("+")
-                        .font(FontId::monospace(12.5))
-                        .strong()
-                        .color(if font_size < MAX_FONT_SIZE {
-                            TEXT_CYAN
-                        } else {
-                            TEXT_DIM_CYAN
-                        }),
-                )
-                .fill(BG_TAB_INACTIVE)
-                .stroke(Stroke::new(1.0_f32, BORDER_BLUE))
-                .corner_radius(CornerRadius::same(2))
-                .min_size(Vec2::new(18.0, 18.0)),
-            )
-            .on_hover_text("フォント拡大 (Ctrl++ / Ctrl+=)");
-        if plus_resp.clicked() {
+        if font_step_button(
+            ui,
+            "+",
+            font_size < MAX_FONT_SIZE,
+            "フォント拡大 (Ctrl++ / Ctrl+=)",
+        ) {
             cmd = Some(1);
         }
 
@@ -1434,30 +1379,70 @@ impl VzEditorApp {
             cmd = Some(0);
         }
 
-        let minus_resp = ui
-            .add(
-                egui::Button::new(
-                    egui::RichText::new("-")
-                        .font(FontId::monospace(12.5))
-                        .strong()
-                        .color(if font_size > MIN_FONT_SIZE {
-                            TEXT_CYAN
-                        } else {
-                            TEXT_DIM_CYAN
-                        }),
-                )
-                .fill(BG_TAB_INACTIVE)
-                .stroke(Stroke::new(1.0_f32, BORDER_BLUE))
-                .corner_radius(CornerRadius::same(2))
-                .min_size(Vec2::new(18.0, 18.0)),
-            )
-            .on_hover_text("フォント縮小 (Ctrl+-)");
-        if minus_resp.clicked() {
+        if font_step_button(ui, "-", font_size > MIN_FONT_SIZE, "フォント縮小 (Ctrl+-)") {
             cmd = Some(-1);
         }
 
         cmd
     }
+}
+
+/// メニューバー右端のボタンの共通の見た目。
+fn bar_button(text: egui::RichText) -> egui::Button<'static> {
+    egui::Button::new(text)
+        .fill(BG_TAB_INACTIVE)
+        .stroke(Stroke::new(1.0_f32, BORDER_BLUE))
+}
+
+/// 透過 n% のボタン。`[濃く, 薄く, 解除]` のうち、クリックで薄く（最小なら解除）、
+/// 右クリック・Shift+クリックで濃くする動作を返す。
+fn opacity_button(
+    ui: &mut egui::Ui,
+    prefix: &str,
+    value: u8,
+    hover: &str,
+    [up, down, reset]: [MenuAction; 3],
+) -> Option<MenuAction> {
+    let resp = ui
+        .add(bar_button(
+            egui::RichText::new(format!("{prefix}{value:>3}%"))
+                .font(FontId::monospace(12.5))
+                .color(if value < window_style::MAX_OPACITY {
+                    TEXT_AMBER
+                } else {
+                    TEXT_DIM_CYAN
+                }),
+        ))
+        .on_hover_text(hover);
+    // Shift+クリックは右クリックと同じく濃くする
+    let shift = ui.input(|i| i.modifiers.shift);
+    if resp.secondary_clicked() || (shift && resp.clicked()) {
+        Some(up)
+    } else if resp.clicked() {
+        Some(if value <= window_style::MIN_OPACITY {
+            reset
+        } else {
+            down
+        })
+    } else {
+        None
+    }
+}
+
+/// フォントサイズの [+] / [-] ボタン。`active` でなければ薄く表示する。クリックされたら true。
+fn font_step_button(ui: &mut egui::Ui, label: &str, active: bool, hover: &str) -> bool {
+    ui.add(
+        bar_button(
+            egui::RichText::new(label)
+                .font(FontId::monospace(12.5))
+                .strong()
+                .color(if active { TEXT_CYAN } else { TEXT_DIM_CYAN }),
+        )
+        .corner_radius(CornerRadius::same(2))
+        .min_size(Vec2::new(18.0, 18.0)),
+    )
+    .on_hover_text(hover)
+    .clicked()
 }
 
 /// 履歴のサブメニューに出す件数（アクセスキー 0-9・A-Z の数）。

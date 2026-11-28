@@ -118,8 +118,7 @@ pub fn ctrl_char(c: char) -> Option<u8> {
         '\\' | '4' => Some(0x1c),
         ']' | '5' => Some(0x1d),
         '^' | '6' => Some(0x1e),
-        '_' | '-' | '7' => Some(0x1f),
-        '/' => Some(0x1f),
+        '_' | '-' | '7' | '/' => Some(0x1f),
         '8' | '?' => Some(0x7f),
         _ => None,
     }

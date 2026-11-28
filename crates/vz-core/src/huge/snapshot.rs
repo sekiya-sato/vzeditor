@@ -1,5 +1,5 @@
-use super::{Backing, Piece, Src};
-use crate::encoding::{TextEncoding, Transcoder, DETECT_SAMPLE};
+use super::{body_piece, detect_layout, Backing, Piece, Src};
+use crate::encoding::{TextEncoding, Transcoder};
 use std::borrow::Cow;
 use std::fs::File;
 use std::io::{self, BufWriter, Write};
@@ -44,26 +44,8 @@ impl DocSnapshot {
 
     /// 対応付けたファイル全体（BOM を除く）を 1 つのピースとする写し（Grep 用）。
     pub fn from_map(map: Arc<Backing>) -> Self {
-        let head = &map[..map.len().min(DETECT_SAMPLE)];
-        let encoding = TextEncoding::detect(head, map.len() > DETECT_SAMPLE);
-        let line_ending = if memchr::memmem::find(head, b"\r\n").is_some() {
-            "\r\n"
-        } else {
-            "\n"
-        };
-        let base = encoding.bom().len() as u64;
-        let len = map.len() as u64;
-        let pieces = if len > base {
-            vec![Piece {
-                src: Src::File(0),
-                start: base,
-                len: len - base,
-                nl: 0,
-                pending: true,
-            }]
-        } else {
-            Vec::new()
-        };
+        let (encoding, line_ending, base) = detect_layout(&map);
+        let pieces = body_piece(base, map.len() as u64).into_iter().collect();
         Self::new(vec![Some(map)], Vec::new(), pieces, encoding, line_ending)
     }
 

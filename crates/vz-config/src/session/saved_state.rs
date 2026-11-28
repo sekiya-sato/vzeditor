@@ -1,8 +1,10 @@
-use super::{parse_in, parse_window, serialize, SessionEntry, SessionWindow, SESSION_FILE};
+use super::{
+    parse_in, parse_window, serialize, unix_nanos, SessionEntry, SessionWindow, SESSION_FILE,
+};
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
 // --- Alt+Shift+F4 で記録した状態（vz ごと。Shift を押して起動すると 1 つずつ戻す） ---
 
@@ -93,10 +95,7 @@ pub fn take_saved_state(saved: &Path) -> Option<SavedState> {
         })
         .collect();
     candidates.sort();
-    let stamp = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos();
+    let stamp = unix_nanos();
     for ((pid, _), path) in candidates {
         let dir = saved.join(format!("{RESTORING_PREFIX}{}-{stamp}", std::process::id()));
         if rename_retry(&path, &dir).is_err() {

@@ -92,13 +92,15 @@ impl EmbeddedBrowser {
         use std::sync::mpsc;
 
         let (tx, rx) = mpsc::channel();
-        let wake: Rc<dyn Fn()> = Rc::new(wake);
+        // 知らせを送って再描画を求める（各ハンドラーで共有する）
+        let emit = Rc::new(move |event: BrowserEvent| {
+            let _ = tx.send(event);
+            wake();
+        });
         let mut context = wry::WebContext::new(data_dir);
 
-        let (ipc_tx, ipc_wake) = (tx.clone(), wake.clone());
-        let (load_tx, load_wake) = (tx.clone(), wake.clone());
-        let (title_tx, title_wake) = (tx.clone(), wake.clone());
-        let (new_tx, new_wake) = (tx, wake);
+        let (ipc_emit, load_emit, title_emit, new_emit) =
+            (emit.clone(), emit.clone(), emit.clone(), emit);
 
         let builder = wry::WebViewBuilder::new_with_web_context(&mut context)
             .with_bounds(to_rect(bounds))
@@ -109,8 +111,7 @@ impl EmbeddedBrowser {
                     .strip_prefix("shortcut:")
                     .and_then(|k| k.chars().next())
                 {
-                    let _ = ipc_tx.send(BrowserEvent::Shortcut(key));
-                    ipc_wake();
+                    ipc_emit(BrowserEvent::Shortcut(key));
                 }
             })
             .with_on_page_load_handler(move |event, url| {
@@ -118,17 +119,14 @@ impl EmbeddedBrowser {
                     wry::PageLoadEvent::Started => BrowserEvent::Loading(url),
                     wry::PageLoadEvent::Finished => BrowserEvent::Loaded(url),
                 };
-                let _ = load_tx.send(ev);
-                load_wake();
+                load_emit(ev);
             })
             .with_document_title_changed_handler(move |title| {
-                let _ = title_tx.send(BrowserEvent::TitleChanged(title));
-                title_wake();
+                title_emit(BrowserEvent::TitleChanged(title));
             })
             // 新しいウィンドウ（target="_blank" など）は vz の新しいタブで開く
             .with_new_window_req_handler(move |url, _| {
-                let _ = new_tx.send(BrowserEvent::NewWindow(url));
-                new_wake();
+                new_emit(BrowserEvent::NewWindow(url));
                 wry::NewWindowResponse::Deny
             });
         let builder = match url {
@@ -185,10 +183,6 @@ impl EmbeddedBrowser {
                 let _ = self.view.focus_parent();
             }
         }
-    }
-
-    pub fn is_visible(&self) -> bool {
-        self.visible
     }
 
     /// キー入力を親ウィンドウ（vz）へ戻す。

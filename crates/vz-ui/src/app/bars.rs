@@ -21,19 +21,7 @@ impl VzEditorApp {
                 ui.multiply_opacity(window_style::text_alpha());
                 ui.horizontal_centered(|ui| match self.mode {
                     AppMode::Editor => {
-                        // LZ badge
-                        egui::Frame::NONE
-                            .fill(STATUS_BADGE_BG)
-                            .corner_radius(CornerRadius::same(2))
-                            .inner_margin(egui::Margin::symmetric(6, 1))
-                            .show(ui, |ui| {
-                                ui.label(
-                                    egui::RichText::new("VZ")
-                                        .font(FontId::monospace(13.0))
-                                        .strong()
-                                        .color(STATUS_BADGE_FG),
-                                );
-                            });
+                        status_badge(ui, "VZ", STATUS_BADGE_BG);
 
                         ui.add_space(6.0);
 
@@ -226,19 +214,7 @@ impl VzEditorApp {
                         });
                     }
                     AppMode::Filer => {
-                        // FILER badge
-                        egui::Frame::NONE
-                            .fill(STATUS_BADGE_FILER_BG)
-                            .corner_radius(CornerRadius::same(2))
-                            .inner_margin(egui::Margin::symmetric(6, 1))
-                            .show(ui, |ui| {
-                                ui.label(
-                                    egui::RichText::new("FILER")
-                                        .font(FontId::monospace(13.0))
-                                        .strong()
-                                        .color(STATUS_BADGE_FG),
-                                );
-                            });
+                        status_badge(ui, "FILER", STATUS_BADGE_FILER_BG);
 
                         ui.add_space(8.0);
 
@@ -313,18 +289,7 @@ impl VzEditorApp {
                         } else {
                             ("WEB", STATUS_BADGE_FILER_BG)
                         };
-                        egui::Frame::NONE
-                            .fill(badge_bg)
-                            .corner_radius(CornerRadius::same(2))
-                            .inner_margin(egui::Margin::symmetric(6, 1))
-                            .show(ui, |ui| {
-                                ui.label(
-                                    egui::RichText::new(badge)
-                                        .font(FontId::monospace(13.0))
-                                        .strong()
-                                        .color(STATUS_BADGE_FG),
-                                );
-                            });
+                        status_badge(ui, badge, badge_bg);
                         let avail_msg_w = ui.available_width() - 10.0;
                         if !self.status_message.is_empty() && avail_msg_w > 48.0 {
                             ui.add_space(10.0);
@@ -695,8 +660,22 @@ impl VzEditorApp {
         }
         response.clicked()
     }
+}
 
-    // --- Main Center View (Editor, Markdown View, or 2-Pane Filer) ---
+/// ステータスバー左端の画面名のバッジ（VZ・FILER・TERM・WEB）。
+fn status_badge(ui: &mut egui::Ui, text: &str, fill: Color32) {
+    egui::Frame::NONE
+        .fill(fill)
+        .corner_radius(CornerRadius::same(2))
+        .inner_margin(egui::Margin::symmetric(6, 1))
+        .show(ui, |ui| {
+            ui.label(
+                egui::RichText::new(text)
+                    .font(FontId::monospace(13.0))
+                    .strong()
+                    .color(STATUS_BADGE_FG),
+            );
+        });
 }
 
 /// バッファ帯のタブ 1 つ。

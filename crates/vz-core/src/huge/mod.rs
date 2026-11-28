@@ -11,6 +11,7 @@ pub mod search;
 mod snapshot;
 pub mod tree;
 
+use crate::buffer::{file_stamp, FileStamp};
 use crate::encoding::{TextEncoding, DETECT_SAMPLE};
 use index::{IndexJob, LineIndex, INDEX_CHUNK};
 use memchr::memchr_iter;
@@ -173,7 +174,7 @@ pub struct HugeDoc {
     /// 長い行の文字位置の目印: (行頭の文書内位置, marks[k] = k*COL_STRIDE 文字目の行内バイト位置)
     col_cache: RefCell<VecDeque<(u64, Vec<u64>)>>,
     /// 開いた時点のファイルの状態（更新日時, サイズ）。未保存の編集の一時保存で、元ファイルが同じかを確かめる
-    opened_stamp: Option<(std::time::SystemTime, u64)>,
+    opened_stamp: Option<FileStamp>,
 }
 
 impl HugeDoc {
@@ -200,32 +201,15 @@ impl HugeDoc {
 
     /// 対応付け（またはメモリに読み込んだ中身）から文書を作る。
     fn from_backing(path: &Path, map: Arc<Backing>, chunk: Option<u64>) -> io::Result<Self> {
-        let opened_stamp = edits::disk_stamp(path);
-        let head = &map[..map.len().min(DETECT_SAMPLE)];
-        let encoding = TextEncoding::detect(head, map.len() > DETECT_SAMPLE);
-        let line_ending = if memchr::memmem::find(head, b"\r\n").is_some() {
-            "\r\n"
-        } else {
-            "\n"
-        };
-        let base = encoding.bom().len() as u64;
-        let len = map.len() as u64;
+        let opened_stamp = file_stamp(path);
+        let (encoding, line_ending, base) = detect_layout(&map);
         let job = match chunk {
             Some(chunk) => Some(IndexJob::spawn(Arc::clone(&map), base, chunk)?),
             None => None,
         };
         let mut tree = Tree::new(NODE_MAX);
-        if len > base {
-            tree.insert(
-                0,
-                Piece {
-                    src: Src::File(0),
-                    start: base,
-                    len: len - base,
-                    nl: 0,
-                    pending: true,
-                },
-            );
+        if let Some(p) = body_piece(base, map.len() as u64) {
+            tree.insert(0, p);
         }
         Ok(Self {
             sources: vec![Some(Source {
@@ -595,10 +579,6 @@ impl HugeDoc {
         self.busy = busy;
     }
 
-    pub fn is_busy(&self) -> bool {
-        self.busy
-    }
-
     /// 位置が確定していなければ Indexing、保存中なら Busy。
     fn check_resolved(&self, off: u64) -> Result<(), EditError> {
         if self.busy {
@@ -640,9 +620,7 @@ impl HugeDoc {
 
     /// ピース p の [from, to) を切り出す。改行数は索引で求め、範囲外にかかれば pending にする。
     fn slice(&self, p: &Piece, from: u64, to: u64) -> Piece {
-        let nl = if p.pending {
-            self.file_newlines(p, from, to)
-        } else if from == 0 && to == p.len {
+        let nl = if !p.pending && from == 0 && to == p.len {
             Some(p.nl)
         } else {
             self.file_newlines(p, from, to)
@@ -1006,34 +984,50 @@ impl HugeDoc {
         for c in history {
             c.old.iter().chain(c.new.iter()).for_each(&mut mark);
         }
-        for (i, src) in self.sources.iter_mut().enumerate() {
-            if used[i] {
-                continue;
-            }
-            if let Some(s) = src.take_if(|s| s.work_file) {
-                let path = s.path.clone();
-                drop(s);
-                let _ = std::fs::remove_file(path);
-            }
-        }
-    }
-
-    /// 片付ける対応付け（すべて置換の作業ファイル）を消す。
-    fn remove_work_files(&mut self) {
-        for src in self.sources.iter_mut() {
-            if let Some(s) = src.take_if(|s| s.work_file) {
-                let path = s.path.clone();
-                drop(s);
-                let _ = std::fs::remove_file(path);
+        for (src, used) in self.sources.iter_mut().zip(used) {
+            if !used {
+                discard_work_file(src);
             }
         }
     }
 }
 
+/// すべて置換の作業ファイルなら、対応付けを外してから消す。
+fn discard_work_file(src: &mut Option<Source>) {
+    if let Some(s) = src.take_if(|s| s.work_file) {
+        let path = s.path.clone();
+        drop(s);
+        let _ = std::fs::remove_file(path);
+    }
+}
+
 impl Drop for HugeDoc {
     fn drop(&mut self) {
-        self.remove_work_files();
+        self.sources.iter_mut().for_each(discard_work_file);
     }
+}
+
+/// ファイルの先頭から文字コード・改行コード・本文の開始位置（BOM の分）を判定する。
+fn detect_layout(map: &[u8]) -> (TextEncoding, &'static str, u64) {
+    let head = &map[..map.len().min(DETECT_SAMPLE)];
+    let encoding = TextEncoding::detect(head, map.len() > DETECT_SAMPLE);
+    let line_ending = if memchr::memmem::find(head, b"\r\n").is_some() {
+        "\r\n"
+    } else {
+        "\n"
+    };
+    (encoding, line_ending, encoding.bom().len() as u64)
+}
+
+/// ファイル 0 の本文 [base, len) 全体を指すピース（改行数は未確定）。本文が空なら None。
+fn body_piece(base: u64, len: u64) -> Option<Piece> {
+    (len > base).then(|| Piece {
+        src: Src::File(0),
+        start: base,
+        len: len - base,
+        nl: 0,
+        pending: true,
+    })
 }
 
 /// bytes の n 文字目のバイト位置（足りなければ末尾）。
@@ -1050,28 +1044,16 @@ pub fn byte_of_char(encoding: TextEncoding, bytes: &[u8], n: usize) -> usize {
 
 /// bytes の文字数。
 pub fn count_chars(encoding: TextEncoding, bytes: &[u8]) -> usize {
-    match encoding {
-        TextEncoding::ShiftJis => {
-            let (mut i, mut n) = (0, 0);
-            while i < bytes.len() {
-                i = next_char(encoding, bytes, i);
-                n += 1;
-            }
-            n
-        }
-        // 正しい UTF-8 なら継続バイト以外を数える（速い）。不正なら 1 文字ずつ進める
-        _ if std::str::from_utf8(bytes).is_ok() => {
-            bytes.iter().filter(|&&b| b & 0xC0 != 0x80).count()
-        }
-        _ => {
-            let (mut i, mut n) = (0, 0);
-            while i < bytes.len() {
-                i = next_char(encoding, bytes, i);
-                n += 1;
-            }
-            n
-        }
+    // 正しい UTF-8 なら継続バイト以外を数える（速い）。Shift_JIS・不正な UTF-8 は 1 文字ずつ進める
+    if encoding != TextEncoding::ShiftJis && std::str::from_utf8(bytes).is_ok() {
+        return bytes.iter().filter(|&&b| b & 0xC0 != 0x80).count();
     }
+    let (mut i, mut n) = (0, 0);
+    while i < bytes.len() {
+        i = next_char(encoding, bytes, i);
+        n += 1;
+    }
+    n
 }
 
 /// i の文字の次の文字の位置。

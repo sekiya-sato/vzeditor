@@ -217,8 +217,6 @@ impl VzEditorApp {
         self.save_settings();
     }
 
-    // --- Claude Code / Codex への送信 ---
-
     pub(super) fn toggle_always_on_top(&mut self, ctx: &egui::Context) {
         self.always_on_top = !self.always_on_top;
         let level = if self.always_on_top {
@@ -323,6 +321,4 @@ impl VzEditorApp {
             _ => false,
         }
     }
-
-    // --- Markdown View Mode ---
 }

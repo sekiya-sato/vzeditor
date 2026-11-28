@@ -61,16 +61,14 @@ pub fn parse_markdown(lines: &[String]) -> Vec<MdBlock> {
 
         // Skip HTML comments <!-- ... -->
         if trimmed.starts_with("<!--") {
-            if trimmed.contains("-->") {
-                i += 1;
-                continue;
-            }
             i += 1;
-            while i < total && !lines[i].contains("-->") {
-                i += 1;
-            }
-            if i < total {
-                i += 1;
+            if !trimmed.contains("-->") {
+                while i < total && !lines[i].contains("-->") {
+                    i += 1;
+                }
+                if i < total {
+                    i += 1;
+                }
             }
             continue;
         }
@@ -163,29 +161,7 @@ pub fn parse_markdown(lines: &[String]) -> Vec<MdBlock> {
 
         // 6. Unordered list item (- / * / +) with optional task checkbox
         if let Some((indent, task, content)) = parse_bullet_item(raw) {
-            let mut inlines = parse_inlines(content);
-            let mut hard_break = raw.ends_with("  ");
-            i += 1;
-            // Attach indented continuation lines that are not new list items or block starters
-            while i < total {
-                let cont_raw = &lines[i];
-                let cont_trimmed = cont_raw.trim();
-                if cont_trimmed.is_empty() || is_block_starter(cont_raw, cont_trimmed) {
-                    break;
-                }
-                let leading_spaces = count_leading_spaces(cont_raw);
-                if leading_spaces < 2 {
-                    break;
-                }
-                if hard_break {
-                    inlines.push(MdInline::LineBreak);
-                } else {
-                    push_soft_space(&mut inlines, cont_trimmed);
-                }
-                inlines.extend(parse_inlines(cont_trimmed));
-                hard_break = cont_raw.ends_with("  ");
-                i += 1;
-            }
+            let inlines = parse_list_item(lines, &mut i, content);
             blocks.push(MdBlock::BulletItem {
                 indent,
                 task,
@@ -196,28 +172,7 @@ pub fn parse_markdown(lines: &[String]) -> Vec<MdBlock> {
 
         // 7. Ordered list item (1. / 2) ...)
         if let Some((indent, number, content)) = parse_ordered_item(raw) {
-            let mut inlines = parse_inlines(content);
-            let mut hard_break = raw.ends_with("  ");
-            i += 1;
-            while i < total {
-                let cont_raw = &lines[i];
-                let cont_trimmed = cont_raw.trim();
-                if cont_trimmed.is_empty() || is_block_starter(cont_raw, cont_trimmed) {
-                    break;
-                }
-                let leading_spaces = count_leading_spaces(cont_raw);
-                if leading_spaces < 2 {
-                    break;
-                }
-                if hard_break {
-                    inlines.push(MdInline::LineBreak);
-                } else {
-                    push_soft_space(&mut inlines, cont_trimmed);
-                }
-                inlines.extend(parse_inlines(cont_trimmed));
-                hard_break = cont_raw.ends_with("  ");
-                i += 1;
-            }
+            let inlines = parse_list_item(lines, &mut i, content);
             blocks.push(MdBlock::OrderedItem {
                 indent,
                 number: format!("{number}."),
@@ -266,6 +221,32 @@ pub fn parse_markdown(lines: &[String]) -> Vec<MdBlock> {
     }
 
     blocks
+}
+
+/// リストの項目 `lines[*i]`（本文 `content`）と、字下げした続きの行を読む。`*i` は次の行へ進む。
+fn parse_list_item(lines: &[String], i: &mut usize, content: &str) -> Vec<MdInline> {
+    let mut inlines = parse_inlines(content);
+    let mut hard_break = lines[*i].ends_with("  ");
+    *i += 1;
+    // Attach indented continuation lines that are not new list items or block starters
+    while let Some(cont_raw) = lines.get(*i) {
+        let cont_trimmed = cont_raw.trim();
+        if cont_trimmed.is_empty() || is_block_starter(cont_raw, cont_trimmed) {
+            break;
+        }
+        if count_leading_spaces(cont_raw) < 2 {
+            break;
+        }
+        if hard_break {
+            inlines.push(MdInline::LineBreak);
+        } else {
+            push_soft_space(&mut inlines, cont_trimmed);
+        }
+        inlines.extend(parse_inlines(cont_trimmed));
+        hard_break = cont_raw.ends_with("  ");
+        *i += 1;
+    }
+    inlines
 }
 
 fn push_soft_space(inlines: &mut Vec<MdInline>, next_text: &str) {
@@ -614,22 +595,28 @@ fn is_word_boundary_before(input: &str, byte_idx: usize) -> bool {
         .is_none_or(|c| !c.is_alphanumeric())
 }
 
+/// 閉じる記号を探すとき飛ばす部分（エスケープした 1 文字・インラインコード）の長さ。
+fn skip_escape_or_code(rest: &str) -> Option<usize> {
+    if let Some(c) = rest.strip_prefix('\\').and_then(|r| r.chars().next()) {
+        return Some(1 + c.len_utf8());
+    }
+    if rest.starts_with('`') {
+        let ticks = rest.bytes().take_while(|&b| b == b'`').count();
+        let tick_str = &rest[..ticks];
+        if let Some(end) = rest[ticks..].find(tick_str) {
+            return Some(ticks + end + ticks);
+        }
+    }
+    None
+}
+
 fn find_closing_delim(s: &str, delim: &str) -> Option<usize> {
     let mut pos = 0usize;
     while pos < s.len() {
         let rest = &s[pos..];
-        if rest.starts_with('\\') && rest.len() > 1 {
-            let next_ch = rest[1..].chars().next().unwrap();
-            pos += 1 + next_ch.len_utf8();
+        if let Some(n) = skip_escape_or_code(rest) {
+            pos += n;
             continue;
-        }
-        if rest.starts_with('`') {
-            let ticks = rest.bytes().take_while(|&b| b == b'`').count();
-            let tick_str = &rest[..ticks];
-            if let Some(end) = rest[ticks..].find(tick_str) {
-                pos += ticks + end + ticks;
-                continue;
-            }
         }
         if rest.starts_with(delim) {
             return Some(pos);
@@ -644,18 +631,9 @@ fn find_closing_single_star(s: &str) -> Option<usize> {
     let mut pos = 0usize;
     while pos < s.len() {
         let rest = &s[pos..];
-        if rest.starts_with('\\') && rest.len() > 1 {
-            let next_ch = rest[1..].chars().next().unwrap();
-            pos += 1 + next_ch.len_utf8();
+        if let Some(n) = skip_escape_or_code(rest) {
+            pos += n;
             continue;
-        }
-        if rest.starts_with('`') {
-            let ticks = rest.bytes().take_while(|&b| b == b'`').count();
-            let tick_str = &rest[..ticks];
-            if let Some(end) = rest[ticks..].find(tick_str) {
-                pos += ticks + end + ticks;
-                continue;
-            }
         }
         if rest.starts_with("**") {
             pos += 2;
@@ -675,18 +653,9 @@ fn find_closing_underscore_delim(s: &str, delim: &str) -> Option<usize> {
     let mut pos = 0usize;
     while pos < s.len() {
         let rest = &s[pos..];
-        if rest.starts_with('\\') && rest.len() > 1 {
-            let next_ch = rest[1..].chars().next().unwrap();
-            pos += 1 + next_ch.len_utf8();
+        if let Some(n) = skip_escape_or_code(rest) {
+            pos += n;
             continue;
-        }
-        if rest.starts_with('`') {
-            let ticks = rest.bytes().take_while(|&b| b == b'`').count();
-            let tick_str = &rest[..ticks];
-            if let Some(end) = rest[ticks..].find(tick_str) {
-                pos += ticks + end + ticks;
-                continue;
-            }
         }
         if rest.starts_with(delim) {
             let after = &rest[dlen..];

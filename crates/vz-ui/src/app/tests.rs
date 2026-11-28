@@ -87,6 +87,14 @@ pub(super) fn make_test_app() -> VzEditorApp {
     }
 }
 
+/// `temp_dir()` 下のプロセス ID 付きフォルダを、前回の残りを消して作り直す。
+fn fresh_test_dir(name: &str) -> PathBuf {
+    let dir = std::env::temp_dir().join(format!("{name}_{}", std::process::id()));
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).unwrap();
+    dir
+}
+
 fn viewport_info(outer: [f32; 4], ppp: f32, maximized: bool) -> egui::ViewportInfo {
     let rect = egui::Rect::from_min_max(
         egui::pos2(outer[0], outer[1]),
@@ -220,9 +228,7 @@ fn test_word_wrap_cursor_moves_by_display_row() {
 
 #[test]
 fn test_save_session_and_restore() {
-    let dir = std::env::temp_dir().join(format!("vz_session_app_{}", std::process::id()));
-    let _ = fs::remove_dir_all(&dir);
-    fs::create_dir_all(&dir).unwrap();
+    let dir = fresh_test_dir("vz_session_app");
     let saved_path = dir.join("a.txt");
     let dirty_path = dir.join("b.md");
     fs::write(&saved_path, "one\ntwo\nthree").unwrap();
@@ -275,9 +281,7 @@ fn test_save_session_and_restore() {
 
 #[test]
 fn test_save_session_keeps_huge_edits_without_writing_original() {
-    let dir = std::env::temp_dir().join(format!("vz_session_huge_{}", std::process::id()));
-    let _ = fs::remove_dir_all(&dir);
-    fs::create_dir_all(&dir).unwrap();
+    let dir = fresh_test_dir("vz_session_huge");
     let path = dir.join("big.log");
     let session_dir = dir.join("session");
     fs::write(&path, "line0\nline1\nline2\n").unwrap();
@@ -409,9 +413,7 @@ fn test_huge_hard_links_in_both_quit_paths() {
 
 #[test]
 fn test_save_session_preserves_a_pending_conflict() {
-    let dir = std::env::temp_dir().join(format!("vz_session_conflict_{}", std::process::id()));
-    let _ = fs::remove_dir_all(&dir);
-    fs::create_dir_all(&dir).unwrap();
+    let dir = fresh_test_dir("vz_session_conflict");
     let path = dir.join("README.md");
     let session_dir = dir.join("session");
     fs::write(&path, "a\nb\nc").unwrap();
@@ -489,9 +491,7 @@ fn test_save_session_preserves_a_pending_conflict() {
 
 #[test]
 fn test_external_change_detect_and_reload() {
-    let dir = std::env::temp_dir().join(format!("vz_external_change_{}", std::process::id()));
-    let _ = fs::remove_dir_all(&dir);
-    fs::create_dir_all(&dir).unwrap();
+    let dir = fresh_test_dir("vz_external_change");
     let path = dir.join("a.txt");
     fs::write(&path, "one\ntwo").unwrap();
 
@@ -2387,8 +2387,8 @@ fn test_session_restores_browser_and_terminal() {
     let work = dir.join("work");
     std::fs::create_dir_all(&work).unwrap();
     let entries = vec![
-        tool_session_entry(EntryKind::Terminal, true, Some(work.clone())),
-        tool_session_entry(EntryKind::Browser, false, None),
+        restore::tool_entry(EntryKind::Terminal, true, Some(work.clone())),
+        restore::tool_entry(EntryKind::Browser, false, None),
     ];
     session::write_session(&session_dir, &entries, &SessionWindow::default()).unwrap();
     let mut app3 = make_test_app();
@@ -2401,7 +2401,7 @@ fn test_session_restores_browser_and_terminal() {
     let gone = dir.join("gone");
     session::write_session(
         &session_dir,
-        &[tool_session_entry(EntryKind::Terminal, true, Some(gone))],
+        &[restore::tool_entry(EntryKind::Terminal, true, Some(gone))],
         &SessionWindow::default(),
     )
     .unwrap();
@@ -2411,21 +2411,6 @@ fn test_session_restores_browser_and_terminal() {
     assert_eq!(app4.pending_terminal_cwd, None);
 
     let _ = std::fs::remove_dir_all(&dir);
-}
-
-fn tool_session_entry(kind: EntryKind, active: bool, path: Option<PathBuf>) -> SessionEntry {
-    SessionEntry {
-        kind,
-        line: 0,
-        col: 0,
-        markdown_view: false,
-        active,
-        crlf: false,
-        encoding: None,
-        disk_stamp: None,
-        temp: None,
-        path,
-    }
 }
 
 #[test]
@@ -2518,9 +2503,7 @@ fn light_system_theme_keeps_dialog_controls_readable() {
 
 #[test]
 fn test_save_state_keeps_files_and_restores_one_by_one() {
-    let dir = std::env::temp_dir().join(format!("vz_saved_state_{}", std::process::id()));
-    let _ = fs::remove_dir_all(&dir);
-    fs::create_dir_all(&dir).unwrap();
+    let dir = fresh_test_dir("vz_saved_state");
     let saved = dir.join("saved");
     // UTF-8 BOM のファイルを編集したまま記録する
     let path = dir.join("bom.txt");
@@ -2748,7 +2731,7 @@ fn test_history_records_open_save_and_filer_moves() {
 
     // 状態の復元で開き直したファイルは記録しない
     let before = app.history.clone();
-    let mut restored = tool_session_entry(EntryKind::File, false, Some(b.clone()));
+    let mut restored = restore::tool_entry(EntryKind::File, false, Some(b.clone()));
     restored.active = true;
     app.restore_entries(&[restored]);
     assert_eq!(app.history, before);
@@ -2759,9 +2742,7 @@ fn test_history_records_open_save_and_filer_moves() {
 
 #[test]
 fn test_recent_menus_open_history_entries() {
-    let dir = std::env::temp_dir().join(format!("vz_history_menu_{}", std::process::id()));
-    let _ = fs::remove_dir_all(&dir);
-    fs::create_dir_all(&dir).unwrap();
+    let dir = fresh_test_dir("vz_history_menu");
     let a = dir.join("a.txt");
     fs::write(&a, "a").unwrap();
     let ctx = egui::Context::default();

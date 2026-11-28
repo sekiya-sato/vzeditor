@@ -69,6 +69,18 @@ fn lines_to_paths(s: &[u8]) -> Vec<PathBuf> {
         .collect()
 }
 
+/// ダイアログのコマンドを実行して標準出力を返す。起動できなければ None、
+/// キャンセルなどで非 0 終了したときは空。
+#[cfg(not(windows))]
+fn command_stdout(cmd: &mut std::process::Command) -> Option<Vec<u8>> {
+    let output = cmd.output().ok()?;
+    Some(if output.status.success() {
+        output.stdout
+    } else {
+        Vec::new()
+    })
+}
+
 // ---------------------------------------------------------------- Windows
 
 #[cfg(windows)]
@@ -112,16 +124,7 @@ fn applescript_quote(s: &str) -> String {
 /// osascript を実行して標準出力を返す。起動できなければ None、キャンセル時は空。
 #[cfg(target_os = "macos")]
 fn run_osascript(script: &str) -> Option<Vec<u8>> {
-    let output = std::process::Command::new("osascript")
-        .args(["-e", script])
-        .output()
-        .ok()?;
-    // キャンセル時は osascript が非 0 で終了する
-    Some(if output.status.success() {
-        output.stdout
-    } else {
-        Vec::new()
-    })
+    command_stdout(std::process::Command::new("osascript").args(["-e", script]))
 }
 
 #[cfg(target_os = "macos")]
@@ -200,12 +203,8 @@ fn run_save_dialog(initial_path: Option<&Path>) -> DialogResult {
     } else if let Ok(cwd) = std::env::current_dir() {
         cmd.arg(format!("--filename={}/untitled.txt", cwd.display()));
     }
-    if let Ok(output) = cmd.output() {
-        return DialogResult::SavePath(if output.status.success() {
-            non_empty_path(&output.stdout)
-        } else {
-            None
-        });
+    if let Some(out) = command_stdout(&mut cmd) {
+        return DialogResult::SavePath(non_empty_path(&out));
     }
 
     let mut kcmd = Command::new("kdialog");
@@ -214,12 +213,8 @@ fn run_save_dialog(initial_path: Option<&Path>) -> DialogResult {
         Some(p) => kcmd.arg(p),
         None => kcmd.arg("."),
     };
-    if let Ok(output) = kcmd.output() {
-        return DialogResult::SavePath(if output.status.success() {
-            non_empty_path(&output.stdout)
-        } else {
-            None
-        });
+    if let Some(out) = command_stdout(&mut kcmd) {
+        return DialogResult::SavePath(non_empty_path(&out));
     }
 
     DialogResult::Unavailable { is_save: true }
@@ -239,12 +234,8 @@ fn run_open_dialog(initial_dir: Option<&Path>) -> DialogResult {
     if let Some(p) = initial_dir {
         cmd.arg(format!("--filename={}/", p.display()));
     }
-    if let Ok(output) = cmd.output() {
-        return DialogResult::OpenPaths(if output.status.success() {
-            lines_to_paths(&output.stdout)
-        } else {
-            Vec::new()
-        });
+    if let Some(out) = command_stdout(&mut cmd) {
+        return DialogResult::OpenPaths(lines_to_paths(&out));
     }
 
     let mut kcmd = Command::new("kdialog");
@@ -253,12 +244,8 @@ fn run_open_dialog(initial_dir: Option<&Path>) -> DialogResult {
         Some(p) => kcmd.arg(p),
         None => kcmd.arg("."),
     };
-    if let Ok(output) = kcmd.output() {
-        return DialogResult::OpenPaths(if output.status.success() {
-            lines_to_paths(&output.stdout)
-        } else {
-            Vec::new()
-        });
+    if let Some(out) = command_stdout(&mut kcmd) {
+        return DialogResult::OpenPaths(lines_to_paths(&out));
     }
 
     DialogResult::Unavailable { is_save: false }

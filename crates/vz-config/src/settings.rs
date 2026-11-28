@@ -96,16 +96,8 @@ impl Settings {
             };
             let value = value.trim();
             match key.trim() {
-                "opacity" => {
-                    if let Ok(v) = value.parse::<u8>() {
-                        s.opacity = v;
-                    }
-                }
-                "text_opacity" => {
-                    if let Ok(v) = value.parse::<u8>() {
-                        s.text_opacity = v;
-                    }
-                }
+                "opacity" => s.opacity = value.parse().unwrap_or(s.opacity),
+                "text_opacity" => s.text_opacity = value.parse().unwrap_or(s.text_opacity),
                 "always_on_top" => s.always_on_top = value == "true",
                 "word_wrap" => s.word_wrap = value == "true",
                 "key_scheme" => {
@@ -115,27 +107,15 @@ impl Settings {
                         KeyScheme::Sakura
                     }
                 }
-                "font_size" => {
-                    if let Some(v) = finite(value) {
-                        s.font_size = v;
-                    }
-                }
+                "font_size" => s.font_size = finite(value).unwrap_or(s.font_size),
                 "print_orientation" => s.print_landscape = value == "landscape",
-                "print_font_size" => {
-                    if let Ok(v) = value.parse::<u8>() {
-                        s.print_font_size = v;
-                    }
-                }
+                "print_font_size" => s.print_font_size = value.parse().unwrap_or(s.print_font_size),
                 "print_page_numbers" => s.print_page_numbers = value != "false",
                 "window_x" => wx = value.parse::<i32>().ok(),
                 "window_y" => wy = value.parse::<i32>().ok(),
                 "window_width" => ww = finite(value).filter(|v| *v > 0.0),
                 "window_height" => wh = finite(value).filter(|v| *v > 0.0),
-                "window_scale" => {
-                    if let Some(v) = finite(value).filter(|v| *v > 0.0) {
-                        wscale = v;
-                    }
-                }
+                "window_scale" => wscale = finite(value).filter(|v| *v > 0.0).unwrap_or(wscale),
                 "window_maximized" => wmax = value == "true",
                 _ => {}
             }

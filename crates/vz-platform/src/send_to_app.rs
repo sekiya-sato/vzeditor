@@ -114,11 +114,27 @@ fn sleep_ms(ms: u64) {
     thread::sleep(Duration::from_millis(ms));
 }
 
+/// 本文を送らない相手へキーを押せたときの案内。
+fn command_sent(target: SendTarget) -> String {
+    let label = target.label();
+    let (_, name) = target.key_command();
+    format!("{label} へ {name} を指示しました（結果は {label} で確認してください）")
+}
+
+/// 本文を送れたときの案内。
+fn text_sent(target: SendTarget, text: &str) -> String {
+    format!(
+        "{} へ送信しました（{} 文字）",
+        target.label(),
+        text.chars().count()
+    )
+}
+
 // ---------------------------------------------------------------- Windows
 
 #[cfg(windows)]
 mod platform {
-    use super::{sleep_ms, SendResult, SendTarget};
+    use super::{command_sent, sleep_ms, text_sent, SendResult, SendTarget};
     use windows_sys::Win32::Foundation::{CloseHandle, BOOL, HWND, LPARAM};
     use windows_sys::Win32::System::Threading::{
         AttachThreadInput, GetCurrentThreadId, OpenProcess, QueryFullProcessImageNameW,
@@ -296,9 +312,7 @@ mod platform {
             activate(vz_hwnd);
         }
         if ok {
-            Ok(format!(
-                "{label} へ {name} を指示しました（結果は {label} で確認してください）"
-            ))
+            Ok(command_sent(target))
         } else {
             Err(format!("{label} へ {name} のキーを送れませんでした"))
         }
@@ -324,12 +338,12 @@ mod platform {
             arboard::Clipboard::new().map_err(|e| format!("クリップボードを開けません: {e}"))?;
         let saved = clipboard.get_text().ok();
         clipboard
-            .set_text(text.to_string())
+            .set_text(text)
             .map_err(|e| format!("クリップボードに書き込めません: {e}"))?;
 
         let restore = |clipboard: &mut arboard::Clipboard| {
             if let Some(old) = &saved {
-                let _ = clipboard.set_text(old.clone());
+                let _ = clipboard.set_text(old.as_str());
             }
         };
 
@@ -366,10 +380,7 @@ mod platform {
                 "{label} へ貼り付けましたが、途中でウィンドウが切り替わったため送信していません"
             ));
         }
-        Ok(format!(
-            "{label} へ送信しました（{} 文字）",
-            text.chars().count()
-        ))
+        Ok(text_sent(target, text))
     }
 }
 
@@ -377,8 +388,16 @@ mod platform {
 
 #[cfg(target_os = "macos")]
 mod platform {
-    use super::{sleep_ms, SendResult, SendTarget};
+    use super::{command_sent, sleep_ms, text_sent, SendResult, SendTarget};
     use std::process::Command;
+
+    /// vz を前面に戻す。
+    fn activate_self() {
+        let pid = std::process::id();
+        let _ = osascript(&format!(
+            "tell application \"System Events\" to set frontmost of (first process whose unix id is {pid}) to true"
+        ));
+    }
 
     fn osascript(script: &str) -> Result<(), String> {
         let out = Command::new("osascript")
@@ -407,12 +426,9 @@ mod platform {
                  tell application \"System Events\" to keystroke \"{letter}\" using command down"
             ));
             sleep_ms(300);
-            let pid = std::process::id();
-            let _ = osascript(&format!(
-                "tell application \"System Events\" to set frontmost of (first process whose unix id is {pid}) to true"
-            ));
+            activate_self();
             return match result {
-                Ok(()) => Ok(format!("{label} へ {name} を指示しました（結果は {label} で確認してください）")),
+                Ok(()) => Ok(command_sent(target)),
                 Err(e) => Err(format!(
                     "{label} へ {name} を指示できませんでした（アプリの起動と、アクセシビリティ許可を確認してください）: {e}"
                 )),
@@ -423,7 +439,7 @@ mod platform {
             arboard::Clipboard::new().map_err(|e| format!("クリップボードを開けません: {e}"))?;
         let saved = clipboard.get_text().ok();
         clipboard
-            .set_text(text.to_string())
+            .set_text(text)
             .map_err(|e| format!("クリップボードに書き込めません: {e}"))?;
 
         // 貼り付けと Enter には「アクセシビリティ」の許可が必要。Codex は Cmd+Enter で送信する
@@ -446,12 +462,9 @@ mod platform {
         if let Some(old) = saved {
             let _ = clipboard.set_text(old);
         }
-        let pid = std::process::id();
-        let _ = osascript(&format!(
-            "tell application \"System Events\" to set frontmost of (first process whose unix id is {pid}) to true"
-        ));
+        activate_self();
         match result {
-            Ok(()) => Ok(format!("{label} へ送信しました（{} 文字）", text.chars().count())),
+            Ok(()) => Ok(text_sent(target, text)),
             Err(e) => Err(format!(
                 "{label} へ送信できませんでした（アプリの起動と、システム設定のアクセシビリティ許可を確認してください）: {e}"
             )),
@@ -463,7 +476,7 @@ mod platform {
 
 #[cfg(not(any(windows, target_os = "macos")))]
 mod platform {
-    use super::{sleep_ms, SendResult, SendTarget};
+    use super::{command_sent, sleep_ms, text_sent, SendResult, SendTarget};
     use std::io::Write;
     use std::process::{Command, Stdio};
 
@@ -514,7 +527,7 @@ mod platform {
 
         if !target.sends_text() {
             // GitHub Desktop: Ctrl+P（Repository → Push）、Claude Code / Codex: Ctrl+N（新規セッション）
-            let (letter, name) = target.key_command();
+            let (letter, _) = target.key_command();
             run("xdotool", &["windowactivate", "--sync", &win])?;
             sleep_ms(250);
             let combo = format!("ctrl+{letter}");
@@ -523,9 +536,7 @@ mod platform {
             if let Some(me) = me {
                 let _ = run("xdotool", &["windowactivate", &me]);
             }
-            return Ok(format!(
-                "{label} へ {name} を指示しました（結果は {label} で確認してください）"
-            ));
+            return Ok(command_sent(target));
         }
 
         let saved = run("xclip", &["-o", "-selection", "clipboard"]).ok();
@@ -547,10 +558,7 @@ mod platform {
         if let Some(me) = me {
             let _ = run("xdotool", &["windowactivate", &me]);
         }
-        Ok(format!(
-            "{label} へ送信しました（{} 文字）",
-            text.chars().count()
-        ))
+        Ok(text_sent(target, text))
     }
 }
 

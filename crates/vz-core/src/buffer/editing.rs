@@ -44,6 +44,12 @@ impl TextBuffer {
         }
     }
 
+    /// 通常ファイルの内容を変えた後: 未保存にして版を進める。
+    fn mark_edited(&mut self) {
+        self.dirty = true;
+        self.revision = self.revision.wrapping_add(1);
+    }
+
     /// 選択範囲（無ければカーソル位置）。
     fn selection_or_cursor(&self) -> (TextPos, TextPos) {
         let c = self.cursor_pos();
@@ -80,21 +86,14 @@ impl TextBuffer {
         if self.huge.is_some() {
             let (start, mut end) = self.selection_or_cursor();
             if start == end {
-                let first_len = normalize_newlines(text)
-                    .split('\n')
-                    .next()
-                    .map_or(0, |s| s.chars().count());
-                end.1 = (end.1 + first_len).min(self.line_char_len(end.0));
+                end.1 = (end.1 + first_line_chars(text)).min(self.line_char_len(end.0));
             }
             self.huge_replace(start, end, text, false);
             return;
         }
         self.push_undo_snapshot();
         if !self.delete_selection_internal() {
-            let first_len = normalize_newlines(text)
-                .split('\n')
-                .next()
-                .map_or(0, |s| s.chars().count());
+            let first_len = first_line_chars(text);
             let line = &mut self.lines[self.cursor_line];
             let start = char_to_byte_idx(line, self.cursor_col);
             let end = char_to_byte_idx(line, self.cursor_col + first_len);
@@ -122,8 +121,7 @@ impl TextBuffer {
                 self.cursor_col += part.chars().count();
             }
         }
-        self.dirty = true;
-        self.revision = self.revision.wrapping_add(1);
+        self.mark_edited();
     }
 
     pub fn insert_newline(&mut self) {
@@ -136,8 +134,7 @@ impl TextBuffer {
         self.delete_selection_internal();
         self.preferred_visual_col = None;
         self.insert_newline_internal();
-        self.dirty = true;
-        self.revision = self.revision.wrapping_add(1);
+        self.mark_edited();
     }
 
     /// 改行して、現在行の行頭の空白（タブ・半角スペース）を新しい行の先頭に写す（自動インデント）。
@@ -166,8 +163,7 @@ impl TextBuffer {
             self.lines[self.cursor_line].insert_str(0, &indent);
             self.cursor_col = indent.chars().count();
         }
-        self.dirty = true;
-        self.revision = self.revision.wrapping_add(1);
+        self.mark_edited();
     }
 
     fn insert_newline_internal(&mut self) {
@@ -203,8 +199,7 @@ impl TextBuffer {
             let end = char_to_byte_idx(line, self.cursor_col);
             line.replace_range(start..end, "");
             self.cursor_col -= 1;
-            self.dirty = true;
-            self.revision = self.revision.wrapping_add(1);
+            self.mark_edited();
         } else if self.cursor_line > 0 {
             self.push_undo_snapshot();
             let current = self.lines.remove(self.cursor_line);
@@ -212,8 +207,7 @@ impl TextBuffer {
             let prev_len = self.line_char_len(self.cursor_line);
             self.lines[self.cursor_line].push_str(&current);
             self.cursor_col = prev_len;
-            self.dirty = true;
-            self.revision = self.revision.wrapping_add(1);
+            self.mark_edited();
         }
     }
 
@@ -243,14 +237,12 @@ impl TextBuffer {
             let start = char_to_byte_idx(line, self.cursor_col);
             let end = char_to_byte_idx(line, self.cursor_col + 1);
             line.replace_range(start..end, "");
-            self.dirty = true;
-            self.revision = self.revision.wrapping_add(1);
+            self.mark_edited();
         } else if self.cursor_line + 1 < self.lines.len() {
             self.push_undo_snapshot();
             let next = self.lines.remove(self.cursor_line + 1);
             self.lines[self.cursor_line].push_str(&next);
-            self.dirty = true;
-            self.revision = self.revision.wrapping_add(1);
+            self.mark_edited();
         }
     }
 
@@ -281,8 +273,7 @@ impl TextBuffer {
                 self.push_undo_snapshot();
                 self.lines[0].clear();
                 self.cursor_col = 0;
-                self.dirty = true;
-                self.revision = self.revision.wrapping_add(1);
+                self.mark_edited();
             }
             return;
         }
@@ -294,8 +285,7 @@ impl TextBuffer {
         }
         let max_col = self.line_char_len(self.cursor_line);
         self.cursor_col = self.cursor_col.min(max_col);
-        self.dirty = true;
-        self.revision = self.revision.wrapping_add(1);
+        self.mark_edited();
     }
 
     // --- 範囲選択（サクラ互換） ---
@@ -446,8 +436,7 @@ impl TextBuffer {
             for (i, s) in changed {
                 self.lines[i] = s;
             }
-            self.dirty = true;
-            self.revision = self.revision.wrapping_add(1);
+            self.mark_edited();
         }
         let new_end = keep_end.unwrap_or((last, self.line_char_len(last)));
         self.select_range((first, 0), new_end);
@@ -509,8 +498,7 @@ impl TextBuffer {
         self.cursor_line = start.0;
         self.cursor_col = start.1;
         self.preferred_visual_col = None;
-        self.dirty = true;
-        self.revision = self.revision.wrapping_add(1);
+        self.mark_edited();
     }
 
     /// 選択範囲を削除する（アンドゥ記録なし）。選択が無ければ起点だけ消す。
@@ -573,8 +561,7 @@ impl TextBuffer {
         self.lines.insert(self.cursor_line + 1, line);
         self.cursor_line += 1;
         self.cursor_col = self.cursor_col.min(self.line_char_len(self.cursor_line));
-        self.dirty = true;
-        self.revision = self.revision.wrapping_add(1);
+        self.mark_edited();
     }
 
     /// 指定行の選択部分（開始文字位置, 終了文字位置, 行末の改行も選択されているか）。
@@ -591,4 +578,12 @@ impl TextBuffer {
         };
         Some((from, to, line < end.0))
     }
+}
+
+/// 1 行目（最初の改行まで）の文字数。
+fn first_line_chars(text: &str) -> usize {
+    normalize_newlines(text)
+        .split('\n')
+        .next()
+        .map_or(0, |s| s.chars().count())
 }

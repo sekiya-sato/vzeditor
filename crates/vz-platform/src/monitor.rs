@@ -10,25 +10,31 @@ fn title_bar_fits(bar: [i32; 4], work: [i32; 4]) -> bool {
     w >= need_w && h >= (bar[3] - bar[1]).min(10)
 }
 
+/// Windows: `rect`（物理ピクセルの left, top, right, bottom）が一番重なるモニター。無ければ None。
+#[cfg(windows)]
+fn monitor_from_rect(rect: [i32; 4]) -> Option<windows_sys::Win32::Graphics::Gdi::HMONITOR> {
+    use windows_sys::Win32::Foundation::RECT;
+    use windows_sys::Win32::Graphics::Gdi::{MonitorFromRect, MONITOR_DEFAULTTONULL};
+    let rect = RECT {
+        left: rect[0],
+        top: rect[1],
+        right: rect[2],
+        bottom: rect[3],
+    };
+    // SAFETY: RECT は呼び出しの間だけ有効なローカル変数を渡す
+    let monitor = unsafe { MonitorFromRect(&rect, MONITOR_DEFAULTTONULL) };
+    (!monitor.is_null()).then_some(monitor)
+}
+
 /// Windows: `bar` が重なるモニターの作業領域に十分見えるか。
 #[cfg(windows)]
 pub fn title_bar_visible(bar: [i32; 4]) -> bool {
-    use windows_sys::Win32::Foundation::RECT;
-    use windows_sys::Win32::Graphics::Gdi::{
-        GetMonitorInfoW, MonitorFromRect, MONITORINFO, MONITOR_DEFAULTTONULL,
+    use windows_sys::Win32::Graphics::Gdi::{GetMonitorInfoW, MONITORINFO};
+    let Some(monitor) = monitor_from_rect(bar) else {
+        return false;
     };
-    let rect = RECT {
-        left: bar[0],
-        top: bar[1],
-        right: bar[2],
-        bottom: bar[3],
-    };
-    // SAFETY: RECT と MONITORINFO は呼び出しの間だけ有効なローカル変数を渡す
+    // SAFETY: MONITORINFO は呼び出しの間だけ有効なローカル変数を渡す
     unsafe {
-        let monitor = MonitorFromRect(&rect, MONITOR_DEFAULTTONULL);
-        if monitor.is_null() {
-            return false;
-        }
         let mut info: MONITORINFO = std::mem::zeroed();
         info.cbSize = std::mem::size_of::<MONITORINFO>() as u32;
         if GetMonitorInfoW(monitor, &mut info) == 0 {
@@ -49,23 +55,11 @@ pub fn title_bar_visible(_bar: [i32; 4]) -> bool {
 /// 状態の記録に残すだけで、位置の補正には使わない（番号は抜き差しで変わる）。
 #[cfg(windows)]
 pub fn monitor_name(rect: [i32; 4]) -> Option<String> {
-    use windows_sys::Win32::Foundation::RECT;
-    use windows_sys::Win32::Graphics::Gdi::{
-        GetMonitorInfoW, MonitorFromRect, MONITORINFO, MONITORINFOEXW, MONITOR_DEFAULTTONULL,
-    };
-    let rect = RECT {
-        left: rect[0],
-        top: rect[1],
-        right: rect[2],
-        bottom: rect[3],
-    };
-    // SAFETY: RECT と MONITORINFOEXW は呼び出しの間だけ有効なローカル変数を渡す。
+    use windows_sys::Win32::Graphics::Gdi::{GetMonitorInfoW, MONITORINFO, MONITORINFOEXW};
+    let monitor = monitor_from_rect(rect)?;
+    // SAFETY: MONITORINFOEXW は呼び出しの間だけ有効なローカル変数を渡す。
     // MONITORINFOEXW は先頭が MONITORINFO で、cbSize で拡張版と伝える
     unsafe {
-        let monitor = MonitorFromRect(&rect, MONITOR_DEFAULTTONULL);
-        if monitor.is_null() {
-            return None;
-        }
         let mut info: MONITORINFOEXW = std::mem::zeroed();
         info.monitorInfo.cbSize = std::mem::size_of::<MONITORINFOEXW>() as u32;
         if GetMonitorInfoW(

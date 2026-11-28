@@ -150,11 +150,7 @@ impl FilerPane {
                 self.cursor = idx;
             }
         }
-        if self.entries.is_empty() {
-            self.cursor = 0;
-        } else {
-            self.cursor = self.cursor.min(self.entries.len() - 1);
-        }
+        self.cursor = self.cursor.min(self.entries.len().saturating_sub(1));
         Ok(())
     }
 
@@ -258,14 +254,12 @@ impl FilerPane {
                 .filter(|e| !e.is_parent && self.marked.contains(&e.path))
                 .cloned()
                 .collect()
-        } else if let Some(entry) = self.selected_entry() {
-            if !entry.is_parent {
-                vec![entry.clone()]
-            } else {
-                Vec::new()
-            }
         } else {
-            Vec::new()
+            self.selected_entry()
+                .filter(|e| !e.is_parent)
+                .cloned()
+                .into_iter()
+                .collect()
         }
     }
 }

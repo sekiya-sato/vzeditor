@@ -22,17 +22,14 @@ fn main() -> eframe::Result<()> {
         }
     };
     // 複数ファイル・フォルダを引数で受け取る（エクスプローラーで exe へ複数ドロップした場合も同じ）
+    let tab_transfer = match args.as_slice() {
+        [flag, id] if flag == "--tab-transfer" => Some(id.to_string_lossy().into_owned()),
+        _ => None,
+    };
     let (restore, initial_paths) = if let Some(state) = release_state {
         (StartupRestore::Release(state), Vec::new())
-    } else if let [flag, id] = args.as_slice() {
-        if flag == "--tab-transfer" {
-            (
-                StartupRestore::TabTransfer(id.to_string_lossy().into_owned()),
-                Vec::new(),
-            )
-        } else {
-            regular_startup(args)
-        }
+    } else if let Some(id) = tab_transfer {
+        (StartupRestore::TabTransfer(id), Vec::new())
     } else {
         regular_startup(args)
     };

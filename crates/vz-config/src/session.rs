@@ -3,6 +3,7 @@
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::settings::WindowGeometry;
 
@@ -285,6 +286,14 @@ pub fn parse_window(text: &str) -> SessionWindow {
         }
     }
     SessionWindow::default()
+}
+
+/// 現在時刻（UNIX 時刻からのナノ秒。取れなければ 0）。記録の名前や照合用の値に使う。
+fn unix_nanos() -> u128 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos()
 }
 
 /// 一時保存ファイルのパス（プロセス ID と連番で重複させない）。

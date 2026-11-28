@@ -92,6 +92,21 @@ impl VzEditorApp {
         self.browsers.get_mut(self.active_browser)
     }
 
+    /// 選択中のタブを、次に表示したときにページへキー入力を渡すようにする。
+    fn focus_active_browser_page(&mut self) {
+        if let Some(tab) = self.active_browser_tab_mut() {
+            tab.focus_page = true;
+        }
+    }
+
+    /// タブが無ければ案内ページのタブを作り、選択中のタブの位置を範囲内に収める。
+    fn ensure_browser_tab(&mut self) {
+        if self.browsers.is_empty() {
+            self.browsers.push(BrowserTab::new(None));
+        }
+        self.active_browser = self.active_browser.min(self.browsers.len() - 1);
+    }
+
     /// Alt+B: ブラウザを表示する。表示中なら元の画面へ戻る。
     /// エディターで HTML・SVG を編集中なら、そのファイルを表示する（表示中のタブがあれば再読み込み、
     /// 無ければ新しいタブ。選択中のタブが案内ページならそこで開く）。
@@ -107,10 +122,7 @@ impl VzEditorApp {
         self.prefix = PrefixKey::None;
         self.ime_preedit.clear();
         self.mode = AppMode::Browser;
-        if self.browsers.is_empty() {
-            self.browsers.push(BrowserTab::new(None));
-        }
-        self.active_browser = self.active_browser.min(self.browsers.len() - 1);
+        self.ensure_browser_tab();
 
         self.status_message = if !vz_browser::is_supported() {
             "この OS では埋め込みブラウザを使えません。「外部ブラウザ」で開いてください".to_string()
@@ -142,9 +154,7 @@ impl VzEditorApp {
                 self.new_browser_tab(Some(url));
             }
         }
-        if let Some(tab) = self.active_browser_tab_mut() {
-            tab.focus_page = true;
-        }
+        self.focus_active_browser_page();
     }
 
     /// 選択中のタブで URL を開く。
@@ -177,9 +187,7 @@ impl VzEditorApp {
         if idx < self.active_browser || self.active_browser >= self.browsers.len() {
             self.active_browser = self.active_browser.saturating_sub(1);
         }
-        if let Some(tab) = self.active_browser_tab_mut() {
-            tab.focus_page = true;
-        }
+        self.focus_active_browser_page();
     }
 
     /// 選択中のタブを `step` 個先（負なら前）のタブへ切り替える（端から反対の端へ回る）。
@@ -189,9 +197,7 @@ impl VzEditorApp {
             return;
         }
         self.active_browser = (self.active_browser as isize + step).rem_euclid(n as isize) as usize;
-        if let Some(tab) = self.active_browser_tab_mut() {
-            tab.focus_page = true;
-        }
+        self.focus_active_browser_page();
     }
 
     /// タブを選んでブラウザを表示する（バッファ帯のクリック）。
@@ -273,10 +279,7 @@ impl VzEditorApp {
 
     pub(super) fn render_browser_canvas(&mut self, ctx: &egui::Context) {
         ctx.output_mut(|o| o.ime = None);
-        if self.browsers.is_empty() {
-            self.browsers.push(BrowserTab::new(None));
-        }
-        self.active_browser = self.active_browser.min(self.browsers.len() - 1);
+        self.ensure_browser_tab();
         let idx = self.active_browser;
         let mut go = false;
         let mut open_external = false;

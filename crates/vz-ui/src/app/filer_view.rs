@@ -431,8 +431,6 @@ impl VzEditorApp {
 
         double_clicked
     }
-
-    // --- Overlays & Modals ---
 }
 
 fn filer_dir_label(path: &Path) -> Cow<'_, str> {

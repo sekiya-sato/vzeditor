@@ -278,16 +278,6 @@ fn plain_job(text: &str, font_id: FontId, color: Color32) -> LayoutJob {
     job
 }
 
-fn style(size: f32, color: Color32) -> InlineStyle {
-    InlineStyle {
-        size,
-        color,
-        bold: false,
-        italic: false,
-        strike: false,
-    }
-}
-
 /// Markdown のブロックを印刷のページに割り付ける。基準の文字サイズは印刷設定の文字サイズ。
 /// 目安（`PAGE_LIMIT` ページ）を超えたら途中でやめる（ページ数で `TooLarge` と判断する）。
 pub fn layout_markdown_print(
@@ -312,6 +302,7 @@ fn layout_with_fonts(fonts: &Fonts, blocks: &[MdBlock], setup: &PageSetup) -> Ve
         y: setup.body_top_pt(),
     };
     let block_gap = fs * 0.65;
+    let body = InlineStyle::plain(fs, MD_TEXT_BODY);
     let inline = |inlines: &[MdInline], st: InlineStyle, w: f32| {
         let st = InlineStyle {
             size: st.size * s,
@@ -327,21 +318,12 @@ fn layout_with_fonts(fonts: &Fonts, blocks: &[MdBlock], setup: &PageSetup) -> Ve
         match block {
             MdBlock::Heading { level, inlines } => {
                 if idx > 0 {
-                    p.space(match level {
-                        1 => fs * 0.9,
-                        2 => fs * 0.75,
-                        _ => fs * 0.5,
-                    });
+                    p.space(heading_gap(*level, fs));
                 }
-                let (size, color) = match level {
-                    1 => (fs * 1.65, MD_H1_COLOR),
-                    2 => (fs * 1.38, MD_H2_COLOR),
-                    3 => (fs * 1.18, MD_H3_COLOR),
-                    _ => (fs * 1.06, MD_H4_COLOR),
-                };
+                let (size, color) = heading_style(*level, fs);
                 let st = InlineStyle {
                     bold: true,
-                    ..style(size, color)
+                    ..InlineStyle::plain(size, color)
                 };
                 let galley = p.layout(inline(inlines, st, width), width);
                 // 見出しだけがページ末に残らないよう、続く 2 行分も確保する
@@ -358,7 +340,7 @@ fn layout_with_fonts(fonts: &Fonts, blocks: &[MdBlock], setup: &PageSetup) -> Ve
                 p.space(block_gap * 0.7);
             }
             MdBlock::Paragraph(inlines) => {
-                let galley = p.layout(inline(inlines, style(fs, MD_TEXT_BODY), width), width);
+                let galley = p.layout(inline(inlines, body, width), width);
                 p.emit_galley(&galley, left, None);
                 p.space(block_gap);
             }
@@ -416,17 +398,9 @@ fn layout_with_fonts(fonts: &Fonts, blocks: &[MdBlock], setup: &PageSetup) -> Ve
                 let indent_x = *indent as f32 * fs * 1.35;
                 let marker_w = fs * 1.35;
                 let text_w = (width - indent_x - marker_w).max(fs * 5.0);
-                let (marker, color) = match task {
-                    Some(true) => ("☑", MD_CHECK_DONE),
-                    Some(false) => ("☐", MD_CHECK_TODO),
-                    None => match indent % 3 {
-                        0 => ("•", MD_BULLET_COLOR),
-                        1 => ("◦", MD_BULLET_COLOR),
-                        _ => ("▪", MD_BULLET_COLOR),
-                    },
-                };
+                let (marker, color) = bullet_marker(*task, *indent);
                 let marker = p.layout(plain_job(marker, FontId::monospace(fs * s), color), width);
-                let galley = p.layout(inline(inlines, style(fs, MD_TEXT_BODY), text_w), text_w);
+                let galley = p.layout(inline(inlines, body, text_w), text_w);
                 let x = left + indent_x;
                 p.emit_galley(&galley, x + marker_w, Some((&marker, x)));
                 p.space(fs * 0.28);
@@ -437,13 +411,13 @@ fn layout_with_fonts(fonts: &Fonts, blocks: &[MdBlock], setup: &PageSetup) -> Ve
                 inlines,
             } => {
                 let indent_x = *indent as f32 * fs * 1.35;
-                let marker_w = ((number.len() as f32 + 0.8) * fs * 0.65).max(fs * 1.8);
+                let marker_w = ordered_marker_width(number, fs);
                 let text_w = (width - indent_x - marker_w).max(fs * 5.0);
                 let marker = p.layout(
                     plain_job(number, FontId::monospace(fs * 0.95 * s), MD_ORDERED_COLOR),
                     width,
                 );
-                let galley = p.layout(inline(inlines, style(fs, MD_TEXT_BODY), text_w), text_w);
+                let galley = p.layout(inline(inlines, body, text_w), text_w);
                 let x = left + indent_x;
                 p.emit_galley(&galley, x + marker_w, Some((&marker, x)));
                 p.space(fs * 0.28);
@@ -455,7 +429,7 @@ fn layout_with_fonts(fonts: &Fonts, blocks: &[MdBlock], setup: &PageSetup) -> Ve
                 let quote_w = (width - extra - bar_w - pad_x * 2.0).max(fs * 5.0);
                 let st = InlineStyle {
                     italic: true,
-                    ..style(fs, MD_QUOTE_TEXT)
+                    ..InlineStyle::plain(fs, MD_QUOTE_TEXT)
                 };
                 let galley = p.layout(inline(inlines, st, quote_w), quote_w);
                 let boxed = BoxStyle {
@@ -505,7 +479,7 @@ fn layout_table(
                 let st = InlineStyle {
                     size: cell_size * LAYOUT_SCALE,
                     bold: is_header,
-                    ..style(0.0, color)
+                    ..InlineStyle::plain(0.0, color)
                 };
                 p.layout(
                     build_inline_job(inlines, st, inner_w * LAYOUT_SCALE).0,

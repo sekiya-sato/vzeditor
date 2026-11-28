@@ -131,8 +131,7 @@ impl VzEditorApp {
         self.ime_preedit.clear();
         let view = &mut self.cur_slot_mut().markdown;
         view.visible = !view.visible;
-        let now_view = view.visible;
-        if now_view {
+        if view.visible {
             view.scroll_dirty = true;
             self.status_message = "Markdown ビューモード [VIEW] (Alt+P で編集へ戻る)".to_string();
         } else {
@@ -254,11 +253,7 @@ impl VzEditorApp {
                 opened += 1;
                 first_opened.get_or_insert(self.active_buf);
             } else {
-                failed.push(
-                    path.file_name()
-                        .map(|n| n.to_string_lossy().into_owned())
-                        .unwrap_or_else(|| path.display().to_string()),
-                );
+                failed.push(file_name_or_path(&path));
             }
         }
 
@@ -461,53 +456,48 @@ impl VzEditorApp {
     // --- Native Dialogs (Editor) ---
 
     pub(super) fn poll_dialog(&mut self) {
-        let result = match &self.pending_dialog {
-            Some(rx) => match rx.try_recv() {
-                Ok(res) => Some(res),
-                Err(std::sync::mpsc::TryRecvError::Empty) => None,
-                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                    self.pending_dialog = None;
-                    None
-                }
-            },
-            None => None,
+        let Some(rx) = &self.pending_dialog else {
+            return;
         };
-
-        if let Some(res) = result {
-            self.pending_dialog = None;
-            match res {
-                DialogResult::SavePath(Some(path)) => self.perform_save(path),
-                DialogResult::SavePath(None) => {
-                    self.status_message = if self.quit_after_save {
-                        "保存をキャンセルしたため終了を中止しました".to_string()
-                    } else {
-                        "保存をキャンセルしました".to_string()
-                    };
-                    self.quit_after_save = false;
-                }
-                DialogResult::OpenPaths(paths) if !paths.is_empty() => {
-                    self.open_paths(paths, false)
-                }
-                DialogResult::OpenPaths(_) => {
-                    self.status_message = "ファイルを開くのをキャンセルしました".to_string();
-                }
-                DialogResult::Unavailable { is_save } => {
-                    let initial = self
-                        .cur_buf()
-                        .file_path
-                        .as_ref()
-                        .map(|p| p.display().to_string())
-                        .unwrap_or_else(|| {
-                            std::env::current_dir()
-                                .map(|d| d.join("untitled.txt").display().to_string())
-                                .unwrap_or_else(|_| "untitled.txt".to_string())
-                        });
-                    self.inline_prompt = Some(InlinePathPrompt {
-                        is_save,
-                        path_input: initial,
-                        just_opened: true,
+        let result = rx.try_recv();
+        if matches!(result, Err(std::sync::mpsc::TryRecvError::Empty)) {
+            return;
+        }
+        // 届いた、または送り手が無くなった
+        self.pending_dialog = None;
+        let Ok(res) = result else {
+            return;
+        };
+        match res {
+            DialogResult::SavePath(Some(path)) => self.perform_save(path),
+            DialogResult::SavePath(None) => {
+                self.status_message = if self.quit_after_save {
+                    "保存をキャンセルしたため終了を中止しました".to_string()
+                } else {
+                    "保存をキャンセルしました".to_string()
+                };
+                self.quit_after_save = false;
+            }
+            DialogResult::OpenPaths(paths) if !paths.is_empty() => self.open_paths(paths, false),
+            DialogResult::OpenPaths(_) => {
+                self.status_message = "ファイルを開くのをキャンセルしました".to_string();
+            }
+            DialogResult::Unavailable { is_save } => {
+                let initial = self
+                    .cur_buf()
+                    .file_path
+                    .as_ref()
+                    .map(|p| p.display().to_string())
+                    .unwrap_or_else(|| {
+                        std::env::current_dir()
+                            .map(|d| d.join("untitled.txt").display().to_string())
+                            .unwrap_or_else(|_| "untitled.txt".to_string())
                     });
-                }
+                self.inline_prompt = Some(InlinePathPrompt {
+                    is_save,
+                    path_input: initial,
+                    just_opened: true,
+                });
             }
         }
     }
@@ -770,6 +760,4 @@ impl VzEditorApp {
             QuitSaveStep::WaitingForHugeSave => {}
         }
     }
-
-    // --- 折り返し表示（Alt+W） ---
 }

@@ -5,7 +5,7 @@
 use krilla::color::rgb;
 use krilla::geom::{PathBuilder, Point, Rect, Transform};
 use krilla::page::PageSettings;
-use krilla::paint::{Fill, Stroke};
+use krilla::paint::{Fill, Paint, Stroke};
 use krilla::surface::{Location, Surface};
 use krilla::text::{Font, Glyph, GlyphId};
 use krilla::Document;
@@ -20,7 +20,6 @@ pub struct PdfFont {
 }
 
 /// 画面と同じ優先順で、PDF に使える日本語フォントを読む。
-#[cfg_attr(windows, allow(dead_code))]
 pub fn load_font() -> Option<PdfFont> {
     crate::fonts::japanese_font_candidates()
         .into_iter()
@@ -63,6 +62,11 @@ impl Glyph for CellGlyph {
     }
 }
 
+/// 文字のグリフ番号（フォントに無ければ 0 = .notdef）。
+fn glyph_id(charmap: &skrifa::charmap::Charmap, c: char) -> GlyphId {
+    GlyphId::new(charmap.map(c).map_or(0, |g| g.to_u32()))
+}
+
 pub fn render(doc: &PrintDoc, font: PdfFont) -> Result<Vec<u8>, String> {
     let face = skrifa::FontRef::from_index(&font.data, font.index)
         .map_err(|_| "フォントを読めません".to_string())?;
@@ -71,7 +75,7 @@ pub fn render(doc: &PrintDoc, font: PdfFont) -> Result<Vec<u8>, String> {
     let glyphs_for = |text: &str| -> Vec<CellGlyph> {
         text.char_indices()
             .map(|(i, c)| CellGlyph {
-                id: GlyphId::new(charmap.map(c).map_or(0, |g| g.to_u32())),
+                id: glyph_id(&charmap, c),
                 range: i..i + c.len_utf8(),
                 advance: char_cells(c) as f32 * 0.5,
             })
@@ -128,9 +132,13 @@ pub fn render(doc: &PrintDoc, font: PdfFont) -> Result<Vec<u8>, String> {
         .map_err(|e| format!("PDF を作れません: {e:?}"))
 }
 
+fn paint([r, g, b]: Rgb) -> Paint {
+    rgb::Color::new(r, g, b).into()
+}
+
 fn fill(color: Rgb) -> Fill {
     Fill {
-        paint: rgb::Color::new(color[0], color[1], color[2]).into(),
+        paint: paint(color),
         ..Fill::default()
     }
 }
@@ -163,7 +171,7 @@ fn draw_items(
                     .char_indices()
                     .zip(advances)
                     .map(|((i, c), adv)| CellGlyph {
-                        id: GlyphId::new(charmap.map(c).map_or(0, |g| g.to_u32())),
+                        id: glyph_id(charmap, c),
                         range: i..i + c.len_utf8(),
                         advance: adv / size,
                     })
@@ -206,7 +214,7 @@ fn draw_items(
                 };
                 surface.set_fill(rect_fill.map(fill));
                 surface.set_stroke(stroke.map(|(width, color)| Stroke {
-                    paint: rgb::Color::new(color[0], color[1], color[2]).into(),
+                    paint: paint(color),
                     width,
                     ..Stroke::default()
                 }));
@@ -228,7 +236,7 @@ fn draw_items(
                 };
                 surface.set_fill(None);
                 surface.set_stroke(Some(Stroke {
-                    paint: rgb::Color::new(color[0], color[1], color[2]).into(),
+                    paint: paint(*color),
                     width: *width,
                     ..Stroke::default()
                 }));
