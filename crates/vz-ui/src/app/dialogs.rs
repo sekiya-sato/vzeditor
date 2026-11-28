@@ -23,16 +23,22 @@ impl VzEditorApp {
                         ("Ctrl+F4", "ファイル（現在のバッファ）を閉じる"),
                         ("Ins", "挿入 / 上書きの切替 (上書き時はカーソルが下半分)"),
                         ("Enter / Shift+Enter", "改行 (行頭の空白を引き継ぐ) / インデントなしで改行"),
+                        ("Backspace / Delete", "カーソルの左 / 右の文字を削除（選択中は選択範囲を削除）"),
                         ("Ctrl+Z / Ctrl+Y", "元に戻す / やり直し"),
                         ("Ctrl+X / Ctrl+C / Ctrl+V", "切り取り / コピー / 貼り付け (F7 / F8 / F9)"),
+                        ("Shift+Del / Ctrl+Ins・Shift+F8 / Shift+Ins", "切り取り / コピー / 貼り付け"),
                         ("Shift+移動キー / F6", "範囲選択 / 範囲選択開始"),
                         ("Ctrl+A / Ctrl+W", "すべて選択 / 単語選択 (ダブル・トリプルクリック)"),
-                        ("Tab / Shift+Tab (選択中)", "選択行のインデント / 逆インデント"),
+                        ("Tab / Shift+Tab（選択中）", "タブを入力（選択中はインデント） / 逆インデント"),
+                        ("矢印 / Home・End / PageUp・PageDown", "カーソル移動 / 行頭・行末 / 1 ページ移動"),
                         ("Ctrl+← → / Ctrl+Home End", "単語移動 / ファイル先頭・末尾"),
+                        ("Ctrl+↑・↓ / Ctrl+PageUp・PageDown", "画面を上下にスクロール / 半ページ移動"),
                         ("Ctrl+E / Ctrl+Shift+E", "行切り取り / 行削除"),
                         ("Ctrl+K / Ctrl+U / Ctrl+D", "行末まで / 行頭まで / 単語を切り取り (Shift で削除)"),
-                        ("Ctrl+BkSp / Ctrl+Del / Ctrl+I", "単語の左・右を削除 / 行の二重化"),
-                        ("Ctrl+F / R / G / J", "検索 / 置換 / Grep / 行ジャンプ"),
+                        ("Ctrl+BkSp / Ctrl+Del", "カーソルから単語の左端 / 右端まで削除"),
+                        ("Ctrl+I / Shift+F10", "行の複製"),
+                        ("Ctrl+Shift+F1", "About を開く"),
+                        ("Ctrl+F・R・G・J / Alt+F・R・G・J", "検索 / 置換 / Grep / 行ジャンプ"),
                         ("F3 / Shift+F3", "次を検索 / 前を検索 (Alt+N / Alt+Shift+N も可)"),
                         ("Ctrl+F3", "検索ハイライトのオン / オフ"),
                         ("Ctrl+Tab / Ctrl+Shift+Tab", "バッファ切替"),
@@ -54,12 +60,17 @@ impl VzEditorApp {
                         ("ツール→キー割り当て", "VZ 互換へ切替"),
                     ],
                     AppMode::Editor => &[
+                        ("F2", "新規作成"),
                         ("Ctrl+E / S / D / X", "ダイヤモンドカーソル移動 (ビュー時は上下スクロール)"),
+                        ("Shift+Del", "Ctrl+X と同じく下へ移動"),
                         ("Ctrl+A / Ctrl+F", "単語単位の左・右移動"),
-                        ("Ctrl+Q+S / Ctrl+Q+D", "行頭・行末移動 (Home / End も可)"),
-                        ("Ctrl+Q+R / Ctrl+Q+C", "ファイル先頭・末尾移動"),
+                        ("矢印 / PageUp・PageDown / Ctrl+R", "カーソル移動 / 1 ページ移動 / 1 ページ上へ"),
+                        ("Ctrl+Q → S / D", "行頭・行末へ移動 (Home / End も可)"),
+                        ("Ctrl+Q → R / C", "ファイル先頭・末尾へ移動 (Ctrl+Q → Ctrl+C も末尾へ)"),
+                        ("F5 / F6 / F7・F8", "行末へ移動 / 行削除 / 単語単位で左・右へ移動"),
+                        ("Markdown ビューの F5 / F7・F8", "末尾へ移動 / 半ページ上・下へスクロール"),
                         ("ダブル / トリプルクリック", "単語 / 1行を選択"),
-                        ("Tab / Shift+Tab (選択中)", "選択行のインデント / 逆インデント"),
+                        ("Tab / Shift+Tab", "タブを入力。選択中はインデント / 逆インデント"),
                         ("Ctrl+Y", "現在行の削除"),
                         ("Ctrl+G / Delete", "カーソル位置の1文字削除"),
                         ("BackSpace / Ctrl+H", "前1文字削除"),
@@ -72,9 +83,9 @@ impl VzEditorApp {
                         ("Alt+P / Ctrl+K+V", "Markdown 編集 / ビュー（プレビュー）切替"),
                         ("Ctrl+P", "印刷（A4 縦 / 横。確認ダイアログでプリンター・ページを選ぶ）"),
                         ("Ctrl++ / Ctrl+- / Ctrl+0", "フォントサイズ拡大 / 縮小 / リセット"),
-                        ("Ctrl+K+D / F10", "上書き保存 / 保存ダイアログ"),
+                        ("Ctrl+K → D / F10", "上書き保存（無題の場合は保存ダイアログ）"),
                         ("Ctrl+F4", "ファイル（現在のバッファ）を閉じる"),
-                        ("ESC / Ctrl+K+Q / F9", "2画面ファイラーへ切替"),
+                        ("Esc / Ctrl+K → Q / F9", "2画面ファイラーへ切替（Esc は入力中のキー列を取り消す）"),
                         ("Alt+T", "最前面固定の切替"),
                         ("Alt+W", "長い行の折り返し表示の切替"),
                         ("ファイルをドロップ", "複数ファイルをまとめてバッファで開く"),
@@ -91,8 +102,11 @@ impl VzEditorApp {
                     ],
                     AppMode::Filer => &[
                         ("Ctrl+E / X (↑ / ↓)", "ファイルカーソル移動"),
+                        ("PageUp・PageDown / Ctrl+R", "1 ページ移動 / 1 ページ上へ"),
+                        ("Home / End", "一覧の先頭 / 末尾へ移動"),
+                        ("Shift+Del", "Ctrl+X と同じく下へ移動"),
                         ("Tab / Ctrl+S / D (← / →)", "左右ペイン（アクティブ窓）切替"),
-                        ("Enter / ダブルクリック", "フォルダ移動・ファイルを開く (マーク時はまとめて開く)"),
+                        ("Enter / Ctrl+M / ダブルクリック", "フォルダ移動・ファイルを開く (マーク時はまとめて開く)"),
                         ("Shift+Enter", "カーソル位置のファイルを OS の関連付けで実行 (フォルダは OS で開く)"),
                         ("BackSpace / Ctrl+H", "親ディレクトリへ移動"),
                         ("Space", "ファイルマーク（複数選択・反転表示）"),
@@ -102,7 +116,7 @@ impl VzEditorApp {
                         ("F8", "ソート順切替（名前/更新/サイズ/拡張子）"),
                         ("ESC / F9", "エディタ画面へ戻る"),
                         ("F10", "アプリケーション終了"),
-                        ("Alt+T / Alt+↑ / Alt+↓", "最前面固定 / 背景の濃さ変更"),
+                        ("Alt+T / Alt+↑・↓・0", "最前面固定 / 背景の濃さ変更・透過解除"),
                         ("Alt+Shift+「+」「-」「0」", "文字の濃さ変更 / 透過解除"),
                         ("Alt+Shift+F4", "状態を記録して終了 (Shift を押して起動で復元)"),
                         ("Alt+K / Alt+B", "ターミナル / ブラウザの切替"),
@@ -110,13 +124,14 @@ impl VzEditorApp {
                     AppMode::Terminal => &[
                         ("Alt+K", "元の画面 (エディター / ファイラー) へ戻る"),
                         ("Alt+B", "ブラウザへ切替"),
-                        ("その他のキー", "シェルへ送る (Ctrl+C は中断、F キーも送る)"),
+                        ("F1～F12・その他のキー", "シェルへ送る (Ctrl+C は中断)。ヘルプはメニューから開く"),
                         ("Ctrl+V / Shift+Ins", "貼り付け"),
                         ("マウスでドラッグ", "離した時点で選択範囲をコピー"),
                         ("Ctrl+Shift+C", "選択範囲（無ければ画面）の文字をコピー"),
                         ("ホイール", "履歴 (スクロールバック) を表示。キー入力で最新へ"),
                         ("exit", "シェルを終了するとターミナルを閉じる (Alt+K で新しく起動)"),
                         ("Alt+T / Alt+↑↓0 / Alt+W", "透過・最前面などは共通 (シェルへは送らない)"),
+                        ("Alt+Shift+「+」「-」「0」 / Alt+Shift+F4", "文字の濃さ / 状態を記録して終了"),
                     ],
                     AppMode::Browser => &[
                         ("Alt+B", "元の画面へ戻る (エディターで HTML 編集中なら Alt+B で表示・再読込、無ければ新しいタブ)"),
@@ -125,8 +140,28 @@ impl VzEditorApp {
                         ("Ctrl+Tab / Ctrl+Shift+Tab", "次 / 前のタブ (バッファ帯のタブのクリックでも切替)"),
                         ("URL 欄 + Enter", "URL・ファイルのパス・localhost:ポートを開く"),
                         ("F5 / Alt+← / Alt+→", "再読み込み / 戻る / 進む"),
+                        ("Alt+T / Alt+↑・↓・0", "最前面固定 / 背景の濃さ変更・透過解除"),
+                        ("Alt+Shift+「+」「-」「0」 / Alt+Shift+F4", "文字の濃さ / 状態を記録して終了"),
                         ("外部ブラウザ", "表示中のページを既定のブラウザで開く"),
                     ],
+                };
+                let menu_rows = [
+                    ("↑・↓ / ←・→ / Enter / Esc", "メニュー移動 / メニュー切替・サブメニュー開閉 / 確定 / 閉じる"),
+                    ("最近使ったファイル・フォルダー", "Enter・0～9・A～Z で開いて履歴の先頭へ移動。Delete で選択中の履歴を削除"),
+                ];
+                let editor_rows = [
+                    ("Markdown ビューの ↑・↓ / PageUp・PageDown / Space", "上下にスクロール / 1 ページ分スクロール / 1 ページ下へ"),
+                    ("Markdown ビューの Home / End", "先頭 / 末尾へスクロール"),
+                    ("検索・置換ダイアログの Enter / Shift+Enter", "次 / 前を検索（F3 / Shift+F3 も可）"),
+                    ("Grep・行ジャンプの Enter", "Grep を開始 / 指定行へ移動"),
+                    ("印刷設定の ←・→ / ↑・↓", "用紙の向きを切替 / 文字サイズを変更"),
+                    ("印刷設定の Space / A / PageUp・PageDown", "ページ番号の表示を切替 / 全ページ・指定範囲の切替 / プリンターの切替"),
+                    ("印刷設定の Enter・Y / Esc・N", "印刷 / キャンセル"),
+                ];
+                let editor_rows = if self.mode == AppMode::Editor {
+                    editor_rows.as_slice()
+                } else {
+                    &[]
                 };
                 egui::ScrollArea::vertical()
                     .id_salt("vz_help_scroll")
@@ -136,7 +171,7 @@ impl VzEditorApp {
                             .num_columns(2)
                             .spacing([18.0, 6.0])
                             .show(ui, |ui| {
-                                for &(k, desc) in rows {
+                                for &(k, desc) in rows.iter().chain(editor_rows).chain(&menu_rows) {
                                     ui.label(
                                         egui::RichText::new(k)
                                             .font(FontId::monospace(13.5))

@@ -2808,22 +2808,82 @@ fn test_recent_menus_open_history_entries() {
 
     // 無いファイルは開かずに知らせる
     let buffers = app.buffers.len();
+    let missing = app.history.files[1].clone();
     app.execute_menu_action(&ctx, MenuAction::OpenRecentFile(1));
     assert_eq!(app.buffers.len(), buffers);
     assert!(app.status_message.starts_with("ファイルが見つかりません"));
+    assert_eq!(app.history.files[0], missing);
 
     // フォルダーはファイラーで開く
-    let (_, items) = submenu(&app, "最近使ったフォルダー");
+    app.history.apply(Visit::Folder(&dir.join("missing")));
+    let (folder_idx, items) = submenu(&app, "最近使ったフォルダー");
     assert!(
-        matches!(&items[0], MenuEntry::Recent { label, checked: false, .. } if label == &format!("0 {}", dir.display()))
+        matches!(&items[1], MenuEntry::Recent { label, checked: false, .. } if label == &format!("1 {}", dir.display()))
     );
-    app.execute_menu_action(&ctx, MenuAction::OpenRecentFolder(0));
+    app.open_top_menu(TopMenu::File);
+    app.open_submenu = Some(folder_idx);
+    app.submenu_selected_idx = 1;
+    press(&mut app, Key::Enter);
     assert_eq!(app.mode, AppMode::Filer);
+    assert_eq!(app.history.folders[0], dir);
     // 一時フォルダがジャンクションやシンボリックリンクを経由していても、実体のパスで比較する。
     assert_eq!(
         app.filer.active_pane().current_dir,
         dir.canonicalize().unwrap()
     );
 
+    fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn test_delete_removes_selected_recent_entries_and_saves_history() {
+    let dir = std::env::temp_dir().join(format!("vz_history_delete_{}", std::process::id()));
+    fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("history.ini");
+    let recent_file = dir.join("a.txt");
+    fs::write(&recent_file, "a").unwrap();
+    let newer_file = dir.join("b.txt");
+    let newer_folder = dir.join("newer");
+    let ctx = egui::Context::default();
+    for scheme in [KeyScheme::Vz, KeyScheme::Sakura] {
+        let mut app = make_test_app();
+        app.key_scheme = scheme;
+        app.history_file = Some(file.clone());
+        app.record_history(&[
+            Visit::File(&recent_file, "UTF-8"),
+            Visit::File(&newer_file, "UTF-8"),
+            Visit::Folder(&dir),
+            Visit::Folder(&newer_folder),
+        ]);
+        app.open_top_menu(TopMenu::File);
+        let entries = app.build_menu_entries(TopMenu::File);
+        for name in ["最近使ったファイル", "最近使ったフォルダー"] {
+            app.open_submenu = entries.iter().position(
+                |entry| matches!(entry, MenuEntry::Submenu { label, .. } if *label == name),
+            );
+            assert!(app.open_submenu.is_some());
+            app.submenu_selected_idx = 1;
+            let mut release = key_with(Key::Delete, egui::Modifiers::NONE);
+            if let Event::Key { pressed, .. } = &mut release {
+                *pressed = false;
+            }
+            let _ = ctx.run(
+                egui::RawInput {
+                    events: vec![key_with(Key::Delete, egui::Modifiers::NONE), release],
+                    ..Default::default()
+                },
+                |ctx| app.handle_events(ctx),
+            );
+            assert_eq!(app.open_menu, Some(TopMenu::File));
+            assert!(app.open_submenu.is_some());
+            assert_eq!(app.submenu_selected_idx, 0);
+        }
+        assert_eq!(app.history.files.len(), 1);
+        assert_eq!(app.history.files[0].path, newer_file);
+        assert_eq!(app.history.folders, vec![newer_folder.clone()]);
+        assert_eq!(History::load_from(&file), app.history);
+        assert!(recent_file.is_file());
+        assert!(dir.is_dir());
+    }
     fs::remove_dir_all(&dir).unwrap();
 }

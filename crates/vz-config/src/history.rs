@@ -10,7 +10,7 @@
 //! C:\work
 //! ```
 
-use std::fs;
+use std::fs::{self, OpenOptions};
 use std::io;
 use std::path::{Path, PathBuf};
 
@@ -31,13 +31,15 @@ pub struct FileRecord {
     pub encoding: String,
 }
 
-/// 記録する出来事。
+/// 履歴に反映する操作。
 #[derive(Debug, Clone, Copy)]
 pub enum Visit<'a> {
     /// ファイルを開いた・保存した（パス、文字コードの表示名）
     File(&'a Path, &'a str),
     /// フォルダを開いた
     Folder(&'a Path),
+    RemoveFile(&'a Path),
+    RemoveFolder(&'a Path),
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -99,7 +101,7 @@ impl History {
         text
     }
 
-    /// 先頭に加える。同じパスがあれば先頭へ移し、上限を超えた古いものを消す。
+    /// 先頭に加えるか、指定された履歴を削除する。
     pub fn apply(&mut self, visit: Visit) {
         match visit {
             Visit::File(path, encoding) => {
@@ -124,6 +126,8 @@ impl History {
                 self.folders.insert(0, path);
                 self.folders.truncate(MAX_ENTRIES);
             }
+            Visit::RemoveFile(path) => self.files.retain(|f| !same_path(&f.path, path)),
+            Visit::RemoveFolder(path) => self.folders.retain(|d| !same_path(d, path)),
         }
     }
 
@@ -136,12 +140,23 @@ impl History {
 
     /// `file` を読み直して `visits` を順に当て、書き戻す。書き戻した後の履歴を返す。
     pub fn record(file: &Path, visits: &[Visit]) -> io::Result<Self> {
-        let mut history = Self::load_from(file);
-        for &visit in visits {
-            history.apply(visit);
-        }
         if let Some(dir) = file.parent() {
             fs::create_dir_all(dir)?;
+        }
+        // 置き換える履歴ファイルとは別のファイルで、読み込みから書き戻しまでを排他する。
+        let lock = OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(file.with_extension("lock"))?;
+        lock.lock()?;
+        let mut history = match fs::read_to_string(file) {
+            Ok(text) => Self::parse(&text),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => Self::default(),
+            Err(e) => return Err(e),
+        };
+        for &visit in visits {
+            history.apply(visit);
         }
         // 書きかけを他のプロセスに読ませないよう、一時ファイルに書いてから置き換える
         let temp = file.with_extension(format!("ini.{}.tmp", std::process::id()));
@@ -271,7 +286,7 @@ mod tests {
         assert_eq!(mine.folders.len(), 1);
         assert_eq!(History::load_from(&file), mine);
         // 一時ファイルは残らない
-        assert_eq!(fs::read_dir(&dir).unwrap().count(), 1);
+        assert_eq!(fs::read_dir(&dir).unwrap().count(), 2);
         fs::remove_dir_all(&dir).unwrap();
     }
 }

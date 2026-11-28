@@ -86,9 +86,11 @@ impl VzEditorApp {
 
     /// ファイル→最近使ったファイル。
     pub(super) fn open_recent_file(&mut self, idx: usize) {
-        let Some(path) = self.history.files.get(idx).map(|f| f.path.clone()) else {
+        let Some(file) = self.history.files.get(idx).cloned() else {
             return;
         };
+        let path = file.path;
+        self.record_history(&[Visit::File(&path, &file.encoding)]);
         if !path.is_file() {
             self.status_message = format!("ファイルが見つかりません: {}", path.display());
             return;
@@ -101,11 +103,17 @@ impl VzEditorApp {
         let Some(dir) = self.history.folders.get(idx).cloned() else {
             return;
         };
-        self.open_folder_in_filer(dir);
+        self.record_history(&[Visit::Folder(&dir)]);
+        self.open_folder_in_filer(dir, false);
     }
 
-    fn open_folder_in_filer(&mut self, dir: PathBuf) {
-        match self.filer_enter_dir(dir.clone()) {
+    fn open_folder_in_filer(&mut self, dir: PathBuf, record_history: bool) {
+        let result = if record_history {
+            self.filer_enter_dir(dir.clone())
+        } else {
+            self.filer.active_pane_mut().enter_dir(dir.clone())
+        };
+        match result {
             Ok(()) => {
                 self.enter_filer();
                 self.status_message = format!("フォルダを開きました: {}", dir.display());
@@ -270,7 +278,7 @@ impl VzEditorApp {
                 self.status_message = msg;
             }
         } else if let Some(dir) = first_dir {
-            self.open_folder_in_filer(dir);
+            self.open_folder_in_filer(dir, true);
         } else if !failed.is_empty() {
             self.status_message = format!("開けなかったファイル: {}", failed.join(", "));
         }

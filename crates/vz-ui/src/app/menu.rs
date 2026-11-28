@@ -745,6 +745,7 @@ impl VzEditorApp {
             if let Event::Key {
                 key,
                 pressed: true,
+                repeat,
                 modifiers,
                 ..
             } = event
@@ -779,6 +780,13 @@ impl VzEditorApp {
                             {
                                 self.execute_menu_action(ctx, *action);
                                 return;
+                            }
+                        }
+                        Key::Delete if !modifiers.shift && !repeat => {
+                            if let Some(MenuEntry::Recent { action, .. }) =
+                                items.get(self.submenu_selected_idx)
+                            {
+                                self.remove_recent_menu_item(*action);
                             }
                         }
                         _ => {
@@ -834,6 +842,23 @@ impl VzEditorApp {
                 }
             }
         }
+    }
+
+    fn remove_recent_menu_item(&mut self, action: MenuAction) {
+        let remaining = match action {
+            MenuAction::OpenRecentFile(idx) => {
+                let path = self.history.files[idx].path.clone();
+                self.record_history(&[Visit::RemoveFile(&path)]);
+                self.history.files.len()
+            }
+            MenuAction::OpenRecentFolder(idx) => {
+                let path = self.history.folders[idx].clone();
+                self.record_history(&[Visit::RemoveFolder(&path)]);
+                self.history.folders.len()
+            }
+            _ => return,
+        };
+        self.submenu_selected_idx = self.submenu_selected_idx.min(remaining.saturating_sub(1));
     }
 
     // --- Editor Actions ---
@@ -1073,6 +1098,8 @@ impl VzEditorApp {
                         x = (popup_rect.min.x - sub_w - frame_pad * 2.0 + 2.0).max(screen.min.x);
                     }
                     let sub_selected = self.submenu_selected_idx;
+                    let has_recent_items = matches!(items.first(), Some(MenuEntry::Recent { .. }));
+                    let pointer_moved = ctx.input(|input| input.pointer.delta() != Vec2::ZERO);
                     let sub_resp = egui::Area::new(egui::Id::new("lz_menu_submenu"))
                         .order(egui::Order::Foreground)
                         .fixed_pos(Pos2::new(x, anchor.min.y - frame_pad))
@@ -1080,6 +1107,9 @@ impl VzEditorApp {
                             Self::menu_popup_frame().show(ui, |ui| {
                                 ui.set_width(sub_w);
                                 ui.spacing_mut().item_spacing.y = 1.0;
+                                if has_recent_items {
+                                    ui.label("Delete  履歴から削除");
+                                }
                                 for (idx, entry) in items.iter().enumerate() {
                                     match entry {
                                         MenuEntry::Item {
@@ -1117,10 +1147,10 @@ impl VzEditorApp {
                                                 Vec2::new(sub_w, row_h),
                                                 Sense::click(),
                                             );
-                                            if resp.hovered() {
+                                            if resp.hovered() && pointer_moved {
                                                 self.submenu_selected_idx = idx;
                                             }
-                                            let is_selected = idx == sub_selected || resp.hovered();
+                                            let is_selected = idx == self.submenu_selected_idx;
                                             Self::paint_menu_row(
                                                 ui,
                                                 rect,
