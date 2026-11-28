@@ -94,7 +94,8 @@ impl VzEditorApp {
                     return;
                 };
                 let min_h = self.line_height * 2.0 + 12.0;
-                let (top, sep, bottom) = split::split_rects(avail_rect, ratio, min_h);
+                let sep_h = split::ruler_height(self.font_size);
+                let (top, sep, bottom) = split::split_rects(avail_rect, ratio, sep_h, min_h);
 
                 // 分割境界: ドラッグで上下のペインの高さを変える
                 let sep_resp = ui.interact(sep, ui.id().with("split_sep"), Sense::drag());
@@ -103,29 +104,14 @@ impl VzEditorApp {
                 }
                 if sep_resp.dragged() {
                     if let Some(pos) = sep_resp.interact_pointer_pos() {
-                        let usable = (avail_rect.height() - split::SPLIT_SEP_H).max(1.0);
-                        let ratio = ((pos.y - avail_rect.min.y - split::SPLIT_SEP_H * 0.5)
-                            / usable)
-                            .clamp(0.0, 1.0);
+                        let usable = (avail_rect.height() - sep_h).max(1.0);
+                        let ratio =
+                            ((pos.y - avail_rect.min.y - sep_h * 0.5) / usable).clamp(0.0, 1.0);
                         if let Some(s) = self.cur_slot_mut().split.as_mut() {
                             s.ratio = ratio;
                         }
                     }
                 }
-                let painter = ui.painter_at(sep);
-                window_style::bg_painter(&painter).rect_filled(
-                    sep,
-                    CornerRadius::ZERO,
-                    bg(BG_GUTTER),
-                );
-                painter.line_segment(
-                    [
-                        Pos2::new(sep.min.x, sep.center().y),
-                        Pos2::new(sep.max.x, sep.center().y),
-                    ],
-                    Stroke::new(1.0_f32, GUTTER_SEP),
-                );
-
                 // 操作していないペイン: 状態を入れ替えて描き、戻す。
                 // ページ移動の行数とカーソルへのスクロールは操作中のペインのものを残す
                 let (active_rect, other_rect) = if active_top {
@@ -141,12 +127,16 @@ impl VzEditorApp {
                 let need_scroll = std::mem::take(&mut self.need_scroll_to_cursor);
                 let visible_lines = self.last_visible_lines;
                 self.cur_slot_mut().swap_split_pane();
-                let pressed = self.paint_editor_pane(ui, ctx, other_rect, other_id, false);
+                let pressed = self
+                    .paint_editor_pane(ui, ctx, other_rect, other_id, false)
+                    .pressed;
                 self.cur_slot_mut().swap_split_pane();
                 self.last_visible_lines = visible_lines;
                 self.need_scroll_to_cursor = need_scroll;
 
-                self.paint_editor_pane(ui, ctx, active_rect, active_id, true);
+                // 境界はルーラー（操作中のペインの桁に合わせ、カーソル桁に印を付ける）
+                let layout = self.paint_editor_pane(ui, ctx, active_rect, active_id, true);
+                split::paint_ruler(ui, sep, &layout);
                 if pressed {
                     self.switch_split_pane();
                 }
@@ -154,7 +144,7 @@ impl VzEditorApp {
     }
 
     /// エディターの 1 ペインを `avail_rect` に描き、マウス操作を処理する。
-    /// `active` でないペインはキャレットと IME 位置を出さない。ボタンが押されたら true を返す。
+    /// `active` でないペインはキャレットと IME 位置を出さない。桁の位置とボタンが押されたかを返す。
     fn paint_editor_pane(
         &mut self,
         ui: &mut egui::Ui,
@@ -162,7 +152,7 @@ impl VzEditorApp {
         avail_rect: Rect,
         id_salt: &str,
         active: bool,
-    ) -> bool {
+    ) -> split::PaneLayout {
         let response = ui.interact(avail_rect, ui.id().with(id_salt), Sense::click_and_drag());
 
         let font_id = FontId::monospace(self.font_size);
@@ -1025,6 +1015,14 @@ impl VzEditorApp {
         if wrap.is_some() {
             slot.wrap = wrap;
         }
-        response.is_pointer_button_down_on()
+        split::PaneLayout {
+            pressed: response.is_pointer_button_down_on(),
+            text_x: editor_rect.min.x + left_pad - scroll_x,
+            cell_w,
+            caret_x,
+            caret_w: cursor_w,
+            min_x: editor_rect.min.x,
+            max_x: editor_rect.max.x,
+        }
     }
 }

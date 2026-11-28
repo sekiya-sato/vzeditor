@@ -2904,13 +2904,7 @@ fn test_delete_removes_selected_recent_entries_and_saves_history() {
 
 #[test]
 fn test_split_keeps_cursor_and_scroll_per_pane() {
-    let mut app = make_sakura_app(
-        "a
-bb
-ccc
-dddd
-",
-    );
+    let mut app = make_sakura_app("a\nbb\nccc\ndddd\n");
     app.cur_buf_mut().set_cursor(3, 2);
     app.cur_slot_mut().scroll_y = 40.0;
     app.toggle_split();
@@ -2942,29 +2936,22 @@ dddd
 #[test]
 fn test_split_rects_keep_min_height() {
     let area = Rect::from_min_max(Pos2::new(0.0, 0.0), Pos2::new(100.0, 406.0));
-    let (top, sep, bottom) = split::split_rects(area, 0.5, 50.0);
+    let (top, sep, bottom) = split::split_rects(area, 0.5, 6.0, 50.0);
     assert_eq!(top.height(), 200.0);
-    assert_eq!(sep.height(), split::SPLIT_SEP_H);
+    assert_eq!(sep.height(), 6.0);
     assert_eq!(bottom.max.y, 406.0);
     // 端まで動かしても最低の高さを残す
-    let (top, _, bottom) = split::split_rects(area, 0.0, 50.0);
+    let (top, _, bottom) = split::split_rects(area, 0.0, 6.0, 50.0);
     assert_eq!(top.height(), 50.0);
     assert_eq!(bottom.height(), 350.0);
-    let (top, _, bottom) = split::split_rects(area, 1.0, 50.0);
+    let (top, _, bottom) = split::split_rects(area, 1.0, 6.0, 50.0);
     assert_eq!(top.height(), 350.0);
     assert_eq!(bottom.height(), 50.0);
 }
 
 #[test]
 fn test_split_render_uses_active_pane_height() {
-    let text: String = (0..200)
-        .map(|i| {
-            format!(
-                "line {i}
-"
-            )
-        })
-        .collect();
+    let text: String = (0..200).map(|i| format!("line {i}\n")).collect();
     let mut app = make_sakura_app(&text);
     let ctx = egui::Context::default();
     let input = || egui::RawInput {
@@ -2985,4 +2972,17 @@ fn test_split_render_uses_active_pane_height() {
         app.cur_slot().split.as_ref().map(|s| s.other.scroll_y),
         Some(0.0)
     );
+}
+
+#[test]
+fn test_split_ruler_ticks_and_visible_cols() {
+    assert_eq!(split::ruler_tick_level(0), 2);
+    assert_eq!(split::ruler_tick_level(5), 1);
+    assert_eq!(split::ruler_tick_level(7), 0);
+    assert_eq!(split::ruler_tick_level(120), 2);
+    // 0 桁目が表示域の左端なら 0 桁目から、横スクロールで 2.5 桁ずれたら 3 桁目から
+    assert_eq!(split::ruler_cols(100.0, 10.0, 100.0, 195.0), 0..10);
+    assert_eq!(split::ruler_cols(75.0, 10.0, 100.0, 195.0), 3..13);
+    // 表示域がない
+    assert_eq!(split::ruler_cols(100.0, 10.0, 100.0, 90.0).len(), 0);
 }

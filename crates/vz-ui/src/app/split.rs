@@ -5,8 +5,26 @@
 
 use super::*;
 
-/// 分割境界の太さ（ピクセル）
-pub(super) const SPLIT_SEP_H: f32 = 6.0;
+/// 分割境界（ルーラー）の高さ。目盛りの数字が読めるようフォントサイズに合わせる
+pub(super) fn ruler_height(font_size: f32) -> f32 {
+    (font_size * 0.7 + 6.0).max(16.0)
+}
+
+/// ペインの本文の桁の位置（ルーラーを合わせるため）。
+pub(super) struct PaneLayout {
+    /// ボタンがこのペインで押されている
+    pub(super) pressed: bool,
+    /// 0 桁目の左端（横スクロール済み）
+    pub(super) text_x: f32,
+    /// 半角 1 文字の幅
+    pub(super) cell_w: f32,
+    /// カーソルの左端と幅（全角・タブなら広い。画面外なら左端は大きな負の値）
+    pub(super) caret_x: f32,
+    pub(super) caret_w: f32,
+    /// 本文の表示域の左右（行番号欄とスクロールバーを除く）
+    pub(super) min_x: f32,
+    pub(super) max_x: f32,
+}
 
 /// 操作していないペインの表示状態。
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -50,19 +68,95 @@ impl BufferSlot {
     }
 }
 
-/// 分割境界の位置から (上のペイン, 境界, 下のペイン) を求める。各ペインは最低 `min_h` を残す。
-pub(super) fn split_rects(area: Rect, ratio: f32, min_h: f32) -> (Rect, Rect, Rect) {
-    let usable = (area.height() - SPLIT_SEP_H).max(0.0);
+/// 分割境界の位置から (上のペイン, 境界, 下のペイン) を求める。境界の高さは `sep_h`、
+/// 各ペインは最低 `min_h` を残す。
+pub(super) fn split_rects(area: Rect, ratio: f32, sep_h: f32, min_h: f32) -> (Rect, Rect, Rect) {
+    let usable = (area.height() - sep_h).max(0.0);
     let min_h = min_h.min(usable / 2.0);
     let top_h = (usable * ratio).clamp(min_h, usable - min_h);
     let sep_y = area.min.y + top_h;
     let top = Rect::from_min_max(area.min, Pos2::new(area.max.x, sep_y));
     let sep = Rect::from_min_max(
         Pos2::new(area.min.x, sep_y),
-        Pos2::new(area.max.x, sep_y + SPLIT_SEP_H),
+        Pos2::new(area.max.x, sep_y + sep_h),
     );
-    let bottom = Rect::from_min_max(Pos2::new(area.min.x, sep_y + SPLIT_SEP_H), area.max);
+    let bottom = Rect::from_min_max(Pos2::new(area.min.x, sep_y + sep_h), area.max);
     (top, sep, bottom)
+}
+
+/// ルーラーの目盛りの高さの段階（0: 1 桁、1: 5 桁、2: 10 桁で数字付き）。
+pub(super) fn ruler_tick_level(col: usize) -> u8 {
+    if col.is_multiple_of(10) {
+        2
+    } else if col.is_multiple_of(5) {
+        1
+    } else {
+        0
+    }
+}
+
+/// 表示域 `min_x..=max_x` に入る桁の範囲（0 桁目の左端 `text_x`、1 桁の幅 `cell_w`）。
+pub(super) fn ruler_cols(
+    text_x: f32,
+    cell_w: f32,
+    min_x: f32,
+    max_x: f32,
+) -> std::ops::Range<usize> {
+    let cell_w = cell_w.max(1.0);
+    let first = ((min_x - text_x) / cell_w).ceil().max(0.0) as usize;
+    let last = ((max_x - text_x) / cell_w).floor().max(-1.0) + 1.0;
+    first..(last as usize).max(first)
+}
+
+/// 分割境界をルーラーとして描く。1 桁ごとの目盛り、10 桁ごとに 10 の位の数字、カーソル桁の印。
+pub(super) fn paint_ruler(ui: &egui::Ui, rect: Rect, layout: &PaneLayout) {
+    let painter = ui.painter_at(rect);
+    window_style::bg_painter(&painter).rect_filled(rect, CornerRadius::ZERO, bg(BG_GUTTER));
+    let base_y = rect.max.y - 0.5;
+    painter.line_segment(
+        [Pos2::new(rect.min.x, base_y), Pos2::new(rect.max.x, base_y)],
+        Stroke::new(1.0_f32, GUTTER_SEP),
+    );
+
+    let body = Rect::from_min_max(
+        Pos2::new(layout.min_x, rect.min.y),
+        Pos2::new(layout.max_x, rect.max.y),
+    );
+    let painter = ui.painter_at(body);
+    // カーソル桁の印（目盛りの下に敷く）
+    let mark = Rect::from_min_size(
+        Pos2::new(layout.caret_x, rect.min.y + 1.0),
+        Vec2::new(layout.caret_w.max(2.0), rect.height() - 2.0),
+    );
+    if body.intersects(mark) {
+        painter.rect_filled(mark, CornerRadius::ZERO, CURSOR_FILL);
+    }
+
+    let h = rect.height();
+    let num_font = FontId::monospace((h * 0.6).max(9.0));
+    let stroke = Stroke::new(1.0_f32, TEXT_DIM_CYAN);
+    for col in ruler_cols(layout.text_x, layout.cell_w, layout.min_x, layout.max_x) {
+        let x = (layout.text_x + col as f32 * layout.cell_w).round() + 0.5;
+        let level = ruler_tick_level(col);
+        let tick_h = match level {
+            2 => h * 0.8,
+            1 => h * 0.45,
+            _ => h * 0.22,
+        };
+        painter.line_segment(
+            [Pos2::new(x, base_y), Pos2::new(x, base_y - tick_h)],
+            stroke,
+        );
+        if level == 2 {
+            painter.text(
+                Pos2::new(x + 2.0, rect.min.y + 1.0),
+                Align2::LEFT_TOP,
+                (col / 10).to_string(),
+                num_font.clone(),
+                TEXT_DIM_CYAN,
+            );
+        }
+    }
 }
 
 impl VzEditorApp {
