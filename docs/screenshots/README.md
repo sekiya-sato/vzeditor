@@ -7,12 +7,12 @@
 
 ## 撮影手順（おすすめ：GNOME 標準スクリーンショット）
 
-1. サンプルファイル付きで LZ Editor を起動します:
+1. サンプルファイル付きで VZ Editor を起動します:
    ```bash
-   ./lz examples/welcome_ja.txt
+   cargo run --locked --bin vz -- examples/welcome_ja.txt
    ```
 2. （任意）`ESC` でファイラーを開き、`Cargo.toml` などを `Enter` で開くと、上部に複数バッファ切り替えバー（`^W バッファ:`）が表示されて見栄えが良くなります。
-3. キーボードの `Print`（PrtSc）キーを押し、「ウィンドウ」モードで LZ Editor ウィンドウを撮影します。
+3. キーボードの `Print`（PrtSc）キーを押し、「ウィンドウ」モードで VZ Editor ウィンドウを撮影します。
 4. 撮影した画像を以下に保存・配置します:
    - エディタ画面 → `docs/screenshots/editor.png`
    - ファイラー画面（`ESC` 押下後）→ `docs/screenshots/filer.png`

@@ -17,11 +17,11 @@
   <rect x="18" y="15" width="22" height="9" rx="2" fill="#40D2FF"/>
   <rect x="82" y="17" width="28" height="5" rx="2" fill="#70E8FF" opacity="0.85"/>
   <!-- Vector letter V -->
-  <path d="M22 44 H31 L35 72 L39 44 H48 L40 83 H30 Z" fill="#EAF4FF"/>
+  <path d="M16 40 H25 L36 72 L47 40 H56 L41 88 H31 Z" fill="#EAF4FF"/>
   <!-- Vector letter Z -->
-  <path d="M54 44 H84 V52 L65 74 H84 V83 H54 V75 L73 53 H54 Z" fill="#EAF4FF"/>
+  <path d="M60 40 H92 V49 L73 79 H92 V88 H60 V79 L79 49 H60 Z" fill="#EAF4FF"/>
   <!-- Glowing PC-98 cursor block -->
-  <rect x="92" y="44" width="16" height="39" rx="2" fill="url(#accent)"/>
+  <rect x="100" y="40" width="12" height="48" rx="2" fill="url(#accent)"/>
   <!-- Bottom F-key guide strip -->
   <line x1="10" y1="98" x2="118" y2="98" stroke="#2A62A8" stroke-width="2"/>
   <g fill="#2E8CD0">

@@ -87,41 +87,41 @@ fn sample_svg(x: f32, y: f32) -> [u8; 4] {
         color = blend_rgba(color, [0x70, 0xE8, 0xFF, 217]);
     }
 
-    // Vector letter V: M22 44 H31 L35 72 L39 44 H48 L40 83 H30 Z
+    // Wide diagonal arms keep the V visible in the 16 px Windows icon.
     const V_VERTS: [(f32, f32); 7] = [
-        (22.0, 44.0),
-        (31.0, 44.0),
-        (35.0, 72.0),
-        (39.0, 44.0),
-        (48.0, 44.0),
-        (40.0, 83.0),
-        (30.0, 83.0),
+        (16.0, 40.0),
+        (25.0, 40.0),
+        (36.0, 72.0),
+        (47.0, 40.0),
+        (56.0, 40.0),
+        (41.0, 88.0),
+        (31.0, 88.0),
     ];
     if point_in_polygon(x, y, &V_VERTS) {
         color = [0xEA, 0xF4, 0xFF, 255];
     }
 
-    // Vector letter Z: M54 44 H84 V52 L65 74 H84 V83 H54 V75 L73 53 H54 Z
+    // Vector letter Z, spaced apart from the V and the cursor.
     const Z_VERTS: [(f32, f32); 10] = [
-        (54.0, 44.0),
-        (84.0, 44.0),
-        (84.0, 52.0),
-        (65.0, 74.0),
-        (84.0, 74.0),
-        (84.0, 83.0),
-        (54.0, 83.0),
-        (54.0, 75.0),
-        (73.0, 53.0),
-        (54.0, 53.0),
+        (60.0, 40.0),
+        (92.0, 40.0),
+        (92.0, 49.0),
+        (73.0, 79.0),
+        (92.0, 79.0),
+        (92.0, 88.0),
+        (60.0, 88.0),
+        (60.0, 79.0),
+        (79.0, 49.0),
+        (60.0, 49.0),
     ];
     if point_in_polygon(x, y, &Z_VERTS) {
         color = [0xEA, 0xF4, 0xFF, 255];
     }
 
-    // Glowing PC-98 cursor block: rect x=92 y=44 w=16 h=39 rx=2 (#70E8FF -> #2E8CD0)
-    if in_rounded_rect(x, y, 92.0, 44.0, 16.0, 39.0, 2.0) {
-        let tx = (x - 92.0) / 16.0;
-        let ty = (y - 44.0) / 39.0;
+    // Glowing PC-98 cursor block (#70E8FF -> #2E8CD0).
+    if in_rounded_rect(x, y, 100.0, 40.0, 12.0, 48.0, 2.0) {
+        let tx = (x - 100.0) / 12.0;
+        let ty = (y - 40.0) / 48.0;
         let t = ((tx + ty) * 0.5).clamp(0.0, 1.0);
         color = [
             lerp_u8(0x70, 0x2E, t),
@@ -282,21 +282,32 @@ mod tests {
         assert_eq!(border[3], 255);
         assert!(border[2] > 230 && border[1] > 180);
 
-        // White 'V' left arm (svg x=28, y=60 -> pixel 14, 30)
-        let letter_v = pixel(14, 30);
+        // White 'V' left arm (svg x=26, y=60 -> pixel 13, 30)
+        let letter_v = pixel(13, 30);
         assert_eq!(letter_v, [0xEA, 0xF4, 0xFF, 255]);
 
         // 'V' notch between the arms stays background (svg x=35, y=50 -> pixel 17, 25)
         assert_ne!(pixel(17, 25), [0xEA, 0xF4, 0xFF, 255]);
 
-        // White 'Z' top bar (svg x=70, y=48 -> pixel 35, 24)
-        let letter_z = pixel(35, 24);
+        // White 'Z' top bar (svg x=70, y=44 -> pixel 35, 22)
+        let letter_z = pixel(35, 22);
         assert_eq!(letter_z, [0xEA, 0xF4, 0xFF, 255]);
 
-        // Glowing cyan cursor block (svg x=100, y=64 -> pixel 50, 32)
-        let cursor = pixel(50, 32);
+        // Glowing cyan cursor block (svg x=106, y=64 -> pixel 53, 32)
+        let cursor = pixel(53, 32);
         assert_eq!(cursor[3], 255);
         assert!(cursor[2] > 210 && cursor[1] > 160);
+    }
+
+    #[test]
+    fn test_small_icon_keeps_both_v_arms_and_the_centered_tip() {
+        let rgba = render_icon_rgba(16, 8);
+        let red = |x: usize, y: usize| rgba[(16 * y + x) * 4];
+
+        assert!(red(2, 5) > 150 && red(6, 5) > 150);
+        assert!(red(4, 5) < 50);
+        assert!(red(4, 10) > 150);
+        assert!(red(2, 10) < 50 && red(6, 10) < 50);
     }
 
     /// `assets/vzeditor.ico` が現在の描画と一致すること。

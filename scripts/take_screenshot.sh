@@ -13,7 +13,7 @@ mkdir -p "${OUT_DIR}"
 OUT_FILE="${OUT_DIR}/${TARGET}.png"
 
 echo "3秒後にアクティブウィンドウを撮影します -> ${OUT_FILE}"
-echo "LZ Editor のウィンドウを前面にしてお待ちください..."
+echo "VZ Editor のウィンドウを前面にしてお待ちください..."
 sleep 3
 
 # 1. GNOME Shell D-Bus screenshot (works cleanly on GNOME Wayland & X11)
